@@ -69,9 +69,11 @@ func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
 	switch {
 	case len(rootsOverride) > 0:
 		env.Roots, err = explicitDirs(env, rootsOverride)
+		env.ExplicitRoots = true
 		s.rootsSource = "arguments"
 	case len(c.f.roots) > 0:
 		env.Roots, err = explicitDirs(env, c.f.roots)
+		env.ExplicitRoots = true
 		s.rootsSource = "--root"
 	case len(cfg.Roots) > 0:
 		env.Roots = existingDirs(env, cfg.Roots, false)

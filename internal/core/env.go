@@ -17,6 +17,10 @@ type Env struct {
 
 	// Roots are directories scanned for project artifacts (node_modules, Pods, builds...).
 	Roots []string
+	// ExplicitRoots is true when the user passed roots on the command line
+	// (lu-cleaner artifacts <root>, --root): scanners must then stay inside
+	// Roots and not add worktree roots or built-in extra folders.
+	ExplicitRoots bool
 	// WorktreeRoots are extra directories that contain git worktrees (AI tools).
 	WorktreeRoots []string
 	// Exclude are absolute paths that are never scanned nor cleaned (prefix match).

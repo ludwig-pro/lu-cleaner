@@ -241,6 +241,9 @@ type Item struct {
 
 	// Recommended marks items preselected by "smart select" (safe, stale, big).
 	Recommended bool `json:"recommended,omitempty"`
+	// NoRecommend is a provider veto: never preselect this item, whatever its
+	// risk and age (e.g. emptying the Trash, data whose owner is uncertain).
+	NoRecommend bool `json:"-"`
 }
 
 // SetReclaim records how many bytes deleting the item really frees when that

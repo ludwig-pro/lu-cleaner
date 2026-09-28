@@ -70,7 +70,7 @@ func (f *Filter) Match(it *Item, now time.Time) bool {
 //   - safe items: yes, if not tiny
 //   - moderate items: when unused for longer than staleAfter
 func Recommend(it *Item, now time.Time, staleAfter time.Duration) bool {
-	if !it.CanClean() || it.Sizing || it.Warn != "" || it.Risk > RiskModerate {
+	if !it.CanClean() || it.Sizing || it.NoRecommend || it.Warn != "" || it.Risk > RiskModerate {
 		return false
 	}
 	if it.Category == CatArtifacts && !it.LastUsed.IsZero() && now.Sub(it.LastUsed) < 24*time.Hour {

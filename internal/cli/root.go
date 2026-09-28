@@ -111,6 +111,7 @@ func (c *cli) rootCmd() *cobra.Command {
 	add("clean", c.cleanCmd(), c.artifactsCmd(), c.worktreesCmd(), c.devicesCmd())
 	add("inspect", c.scanCmd(), c.analyzeCmd(), c.doctorCmd(), c.historyCmd(), c.catalogCmd())
 	add("setup", c.configCmd(), c.versionCmd())
+	root.AddCommand(c.genDocsCmd(root))
 	root.SetHelpCommandGroupID("setup")
 	return root
 }
