@@ -220,6 +220,30 @@ func excludedName(base string, globs []string) bool {
 }
 
 func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit core.Emit) {
+	// Paths inside other apps' containers would block on a macOS permission
+	// prompt without Full Disk Access: report them instead of touching them.
+	var allowed, blocked []string
+	for _, pat := range e.Paths {
+		if fsx.GlobPrefixProtected(env.Expand(pat)) {
+			blocked = append(blocked, pat)
+		} else {
+			allowed = append(allowed, pat)
+		}
+	}
+	if len(blocked) > 0 {
+		it := p.baseItem(env, e)
+		it.ID = "catalog:" + e.ID + ":needs-fda"
+		it.Location = env.Expand(blocked[0])
+		it.Method = core.MethodReport
+		it.Command = nil
+		it.Selectable = false
+		it.Warn = "inside another app's container: " + fsx.ErrNeedsFullDiskAccess.Error()
+		emit(it)
+		e.Paths = allowed
+		if len(allowed) == 0 {
+			return
+		}
+	}
 	all := e.Expand(env)
 	var ms []match
 	for _, m := range all {

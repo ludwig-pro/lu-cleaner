@@ -209,6 +209,10 @@ func (m *analyzeModel) cur() *anDir { return m.dirs[m.cwd] }
 
 // listDir reads a directory (in a background command).
 func listDir(path string) tea.Msg {
+	if fsx.AppDataProtected(path) {
+		// another app's container: opening it would block on a macOS permission prompt
+		return dirListedMsg{path: path, err: fsx.ErrNeedsFullDiskAccess}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return dirListedMsg{path: path, err: err}
@@ -222,6 +226,12 @@ func listDir(path string) tea.Msg {
 	msg.err = nil
 	for _, name := range names {
 		p := filepath.Join(path, name)
+		if fsx.AppDataProtected(p) {
+			// never stat another app's container without Full Disk Access
+			e := &anEntry{name: name, path: p, isDir: true, sized: true, errs: 1, tag: "🔒 app container — needs Full Disk Access"}
+			msg.entries = append(msg.entries, e)
+			continue
+		}
 		fi, err := os.Lstat(p)
 		if err != nil {
 			continue

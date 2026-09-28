@@ -155,6 +155,11 @@ func Size(ctx context.Context, path string, opt *Options) (Stats, error) {
 }
 
 func size(ctx context.Context, path string, opt *Options) (Stats, error) {
+	if AppDataProtected(path) {
+		// never touch another app's container without Full Disk Access:
+		// the access would block on a system permission prompt.
+		return Stats{Errors: 1}, &os.PathError{Op: "size", Path: path, Err: ErrNeedsFullDiskAccess}
+	}
 	var st unix.Stat_t
 	if err := unix.Lstat(path, &st); err != nil {
 		if errors.Is(err, unix.ENOENT) {
@@ -332,6 +337,10 @@ func (w *walker) recurse(subdirs []string) {
 
 func (w *walker) walk(dir string) {
 	if w.ctx.Err() != nil {
+		return
+	}
+	if AppDataProtected(dir) {
+		w.errs.Add(1) // counted as unreadable, never opened (see appdata.go)
 		return
 	}
 	if useBulk && w.walkBulk(dir) {

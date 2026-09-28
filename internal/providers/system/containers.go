@@ -438,6 +438,9 @@ func nonEmpty(a, b string) string {
 // dockerDesktop reports Docker Desktop's VM disk (sparse Docker.raw).
 func (s *scan) dockerDesktop() {
 	raw := s.home("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw")
+	if fsx.AppDataProtected(raw) {
+		return // would block on the macOS app-data permission prompt (no Full Disk Access)
+	}
 	if _, err := os.Lstat(raw); err != nil {
 		return
 	}
@@ -458,7 +461,11 @@ func (s *scan) dockerDesktop() {
 
 // orbstack reports OrbStack's data image.
 func (s *scan) orbstack() {
-	imgs, _ := filepath.Glob(s.home("Library/Group Containers/*.dev.orbstack/data/data.img"))
+	pattern := s.home("Library/Group Containers/*.dev.orbstack/data/data.img")
+	if fsx.GlobPrefixProtected(pattern) {
+		return // would block on the macOS app-data permission prompt (no Full Disk Access)
+	}
+	imgs, _ := filepath.Glob(pattern)
 	for _, img := range imgs {
 		it := s.newItem("orbstack-data", core.CatContainers, "OrbStack data image", core.RiskCaution)
 		it.Path = img
