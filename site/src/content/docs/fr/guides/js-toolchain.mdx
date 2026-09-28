@@ -1,0 +1,291 @@
+---
+title: Caches de la chaîne d'outils JavaScript et versions de Node
+description: Nettoyez les caches de npm, Yarn, pnpm et Bun, les versions de Node inutilisées, les caches temporaires de Metro et Jest, et les téléchargements d'Expo et des navigateurs de test, tout en conservant les versions de Node fixées par vos projets.
+sidebar:
+  order: 5
+---
+
+import { Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+La [catégorie](/lu-cleaner/fr/concepts/categories/) `js` (alias : `node`, `npm`) couvre tout ce que la chaîne d'outils JavaScript et React Native conserve en dehors de vos projets : les caches et stores des gestionnaires de paquets, les versions de Node installées par les gestionnaires de versions, les caches de Metro et Jest dans le dossier temporaire, les téléchargements d'Expo et d'EAS, et les navigateurs téléchargés pour les tests de bout en bout.
+
+Presque tout ici peut être régénéré. Après le nettoyage, vous payez un nouveau téléchargement ou une première exécution plus lente. Le `node_modules` de chaque projet est un artefact de projet, traité dans [Projets React Native](/lu-cleaner/fr/guides/react-native-projects/).
+
+## Démarrage rapide
+
+```bash
+lu-cleaner scan -c js                        # ce qui prend de la place ; rien n'est modifié
+lu-cleaner clean -c js                       # sélecteur, éléments recommandés présélectionnés
+lu-cleaner clean --yes --smart -c js --dry-run   # le plan recommandé, pour les scripts
+```
+
+Un scan typique (tailles données à titre d'exemple) :
+
+<div class="terminal">
+<span class="acc">JS toolchain</span>  20.7 GB · 11 items · <span class="acc">★ 16.5 GB</span> recommended
+<span class="dim">NAME                                   SIZE   AGE  RISK      RECO</span>
+Yarn Berry global cache             6.10 GB    4d  <span class="ok">safe</span>      <span class="acc">★</span>
+pnpm store v10                      3.80 GB    2d  <span class="warn">moderate</span>
+pnpm store prune                    3.80 GB    2d  <span class="ok">safe</span>      <span class="acc">★</span>
+pnpm store v3                       2.90 GB   7mo  <span class="warn">moderate</span>  <span class="acc">★</span>
+Jest cache                          2.20 GB   now  <span class="ok">safe</span>      <span class="acc">★</span>
+npm cache (_cacache)                1.30 GB   now  <span class="ok">safe</span>      <span class="acc">★</span>
+node v22.12.0 (fnm)                  190 MB    3w  <span class="warn">moderate</span>
+<span class="warn">! pinned by 1 project file(s): ~/dev/shop-app/.nvmrc</span>
+node v20.19.5 (nvm)                  180 MB    2d  <span class="bad">caution</span>
+<span class="warn">! default version: nvm default (20)</span>
+node v18.20.4 (nvm)                  172 MB   9mo  <span class="warn">moderate</span>  <span class="acc">★</span>
+npx cache · @playwright/mcp         48.0 MB    1d  <span class="warn">moderate</span>
+<span class="warn">! used by 1 running process(es) (MCP server?) — deleting it breaks them until restarted</span>
+fnm stale shell links (4210)        1.30 MB    2d  <span class="ok">safe</span>      <span class="acc">★</span>
+</div>
+
+`★` marque ce que choisit la [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) ; un élément qui porte un avertissement `!` n'est jamais présélectionné.
+
+:::note[Vos projets continuent de fonctionner]
+Nettoyer le cache d'un gestionnaire de paquets ne casse pas les `node_modules` déjà installés : npm et Yarn v1 y copient les fichiers, pnpm et Bun utilisent des clones APFS ou des liens physiques, qui survivent à la suppression du store. La prochaine installation retélécharge simplement ce dont elle a besoin. La seule exception est Yarn Plug'n'Play, décrit [plus bas](#yarn).
+:::
+
+## Gestionnaires de paquets
+
+### npm
+
+| Élément | Emplacement | Type (`-k`) | Risque |
+|---|---|---|---|
+| Cache npm | `~/.npm/_cacache` | `js-npm-cache` | <span class="risk safe">safe</span> |
+| Journaux de débogage npm | `~/.npm/_logs` | `js-npm-logs` | <span class="risk safe">safe</span> |
+| Installations npx, un élément par paquet | `~/.npm/_npx/<hash>` | `npx-package` | <span class="risk moderate">moderate</span> |
+| Binaires téléchargés par des scripts postinstall (`@sentry/cli`, libvips de sharp, prebuild-install) | `~/.npm/sentry-cli`, `~/.npm/_libvips`, `~/.npm/_prebuilds`… | `js-npm-binary-downloads` | <span class="risk safe">safe</span> |
+
+`npx` installe chaque paquet qu'il exécute dans son propre dossier `_npx/<hash>`. lu-cleaner nomme ces éléments d'après le paquet (`npx cache · @playwright/mcp`), car ce sont souvent des serveurs MCP lancés par des outils d'IA. Une installation utilisée par un processus en cours reçoit l'avertissement *used by N running process(es) (MCP server?) — deleting it breaks them until restarted* ; une installation inutilisée depuis 14 jours est présélectionnée. Le prochain appel à `npx` la réinstalle.
+
+Les installations npx placées dans un emplacement de cache personnalisé (`$npm_config_cache`) sont aussi trouvées.
+
+### Yarn
+
+| Élément | Emplacement | Type (`-k`) | Risque |
+|---|---|---|---|
+| Cache Yarn v1 | `~/Library/Caches/Yarn/v*` | `js-yarn-classic-cache` | <span class="risk safe">safe</span> |
+| Dossiers temporaires d'exécution de Yarn v1 (de plus d'un jour) | `$TMPDIR/yarn--*` | `js-yarn-tmp` | <span class="risk safe">safe</span> |
+| Cache global de Yarn Berry | `~/.yarn/berry/cache` | `yarn-berry-cache` | <span class="risk safe">safe</span>, ou <span class="risk moderate">moderate</span> avec des projets PnP |
+| Métadonnées du registre de Yarn Berry | `~/.yarn/berry/metadata` | `yarn-berry-metadata` | <span class="risk safe">safe</span> |
+| Store à liens physiques de Yarn Berry | `~/.yarn/berry/store` (et l'ancien `index`) | `yarn-berry-store` | <span class="risk moderate">moderate</span> |
+
+Le dossier global de Yarn Berry (v2+) est trouvé via `$YARN_GLOBAL_FOLDER`, puis `globalFolder` dans `~/.yarnrc.yml`, puis l'emplacement par défaut `~/.yarn/berry`.
+
+- **Les métadonnées** contiennent les documents du registre npm mis en cache par Yarn. `yarn cache clean` ne les supprime pas : elles ne font donc que grossir.
+- **Le store à liens physiques** est le store de contenu de `nmMode: hardlinks-global`. Les fichiers encore liés physiquement dans le `node_modules` d'un projet survivent à la suppression : l'espace libéré peut donc être bien inférieur à la taille affichée. Dans ce cas, la colonne de taille affiche un `*` et `--json` indique le gain réel dans `reclaim`.
+- **Mise en garde sur Plug'n'Play.** Les projets qui utilisent PnP (un fichier `.pnp.cjs` au lieu de `node_modules`) lisent leurs dépendances directement dans les fichiers zip du cache global à l'exécution. Quand lu-cleaner trouve un tel projet dans vos racines, le cache global passe en <span class="risk moderate">moderate</span> et sa note liste ces projets : après le nettoyage, ils ont besoin d'un `yarn install` avant de pouvoir s'exécuter de nouveau.
+
+:::tip[Cache Yarn v1 ou Berry ?]
+Quand Corepack exécute Yarn 3 ou 4, un simple `yarn cache clean` peut viser le cache Berry au lieu du cache Yarn v1. lu-cleaner liste les deux séparément, pour que vous voyiez ce que contient chacun.
+:::
+
+### pnpm
+
+pnpm conserve un store adressé par contenu pour chaque format de store : `v3` pour pnpm 7 à 9, `v10`, `v11`… dans `~/Library/pnpm/store` par défaut (et aussi `$PNPM_HOME/store`, `~/.local/share/pnpm/store`, `~/.pnpm-store`). lu-cleaner liste chaque store comme un élément <span class="risk moderate">moderate</span> et demande à `pnpm store path` lequel est le store actuel.
+
+Pour le store actuel, vous avez deux options distinctes :
+
+| Élément | Méthode | Risque | Effet |
+|---|---|---|---|
+| `pnpm store prune` | exécute `pnpm store prune` | <span class="risk safe">safe</span>, présélectionné | supprime uniquement les paquets qu'aucun projet ne référence plus |
+| `pnpm store v10` | supprime le dossier | <span class="risk moderate">moderate</span> | supprime tout le store ; le prochain `pnpm install` retélécharge tout ce dont il a besoin |
+
+Préférez le prune pour le store que vous utilisez. Supprimer un store entier a du sens pour un format que pnpm n'utilise plus, comme le store `v3` laissé après le passage à pnpm 10 : il est présélectionné une fois resté inutilisé plus longtemps que [`stale_after`](/lu-cleaner/fr/reference/configuration/). La taille affichée pour le prune est celle du store entier, une borne supérieure de ce qu'il libère. L'élément prune n'apparaît que si la commande `pnpm` fonctionne.
+
+Comme les `node_modules` installés partagent des fichiers avec le store (clones APFS ou liens physiques), supprimer un store peut libérer moins que sa taille.
+
+Le cache de métadonnées de pnpm (`~/Library/Caches/pnpm`, type `js-pnpm-metadata-cache`) est un élément <span class="risk safe">safe</span> distinct.
+
+### Bun et Corepack
+
+| Élément | Emplacement | Type (`-k`) | Risque |
+|---|---|---|---|
+| Cache d'installation de Bun | `~/.bun/install/cache` | `js-bun-install-cache` | <span class="risk moderate">moderate</span> |
+| Cache du transpileur de Bun | `~/Library/Caches/bun` | `js-bun-transpiler-cache` | <span class="risk safe">safe</span> |
+| Installations temporaires de `bunx` (de plus d'un jour) | `$TMPDIR/bunx-*` | `js-bunx-tmp` | <span class="risk safe">safe</span> |
+| Versions de Yarn et pnpm téléchargées par Corepack | `~/.cache/node/corepack/*` | `js-corepack-cache` | <span class="risk safe">safe</span> |
+
+Sur APFS, Bun clone les fichiers dans `node_modules` : le gain réel de la suppression de son cache d'installation peut donc être bien inférieur à la taille affichée. Le `lastKnownGood.json` de Corepack est conservé.
+
+## Versions de Node
+
+### Où elles sont trouvées
+
+| Gestionnaire | Dossier des versions |
+|---|---|
+| nvm | `~/.nvm/versions/node/` (ou `$NVM_DIR`) |
+| fnm | `~/.local/share/fnm/node-versions/`, `~/Library/Application Support/fnm/`, `~/.fnm/` (ou `$FNM_DIR`) |
+| mise | `~/.local/share/mise/installs/node/` (ou `$MISE_DATA_DIR`) |
+| asdf | `~/.asdf/installs/nodejs/` (ou `$ASDF_DATA_DIR`) |
+| Volta | `~/.volta/tools/image/node/` (ou `$VOLTA_HOME`) |
+
+Chaque version installée forme un élément, par exemple `node v18.20.4 (nvm)`. Une même version installée par deux gestionnaires apparaît deux fois, et les détails indiquent où elle est installée par ailleurs.
+
+### Ce qui est conservé
+
+Une version de Node ne vaut la peine d'être supprimée que si rien ne l'utilise. lu-cleaner vérifie toutes les raisons de la conserver, dans cet ordre :
+
+| Raison | Risque | Effet |
+|---|---|---|
+| Un processus en cours l'utilise (ligne de commande, ou binaire `node` qu'il exécute) | <span class="risk caution">caution</span> | ne peut pas être sélectionnée |
+| C'est le `node` de votre `PATH` | <span class="risk caution">caution</span> | avertissement *this is the `node` on your PATH* |
+| C'est une version par défaut : l'alias `default` de nvm, l'alias `default` de fnm, la configuration globale de mise, `~/.tool-versions` (mise et asdf), la version par défaut de Volta | <span class="risk caution">caution</span> | avertissement *default version: …* |
+| Un projet la fixe dans `.nvmrc`, `.node-version` ou `.tool-versions` | <span class="risk moderate">moderate</span> | avertissement *pinned by N project file(s): …* |
+| Un autre alias pointe vers elle (nvm ou fnm) | <span class="risk moderate">moderate</span> | avertissement *referenced by …* |
+| Des paquets npm globaux ne sont installés que dans cette version | <span class="risk moderate">moderate</span> | avertissement *global packages installed only here: …* |
+| Aucune des raisons ci-dessus | <span class="risk moderate">moderate</span> | présélectionnée |
+
+Pourquoi autant de rigueur : supprimer la version par défaut ou le `node` de votre `PATH` casse tous les nouveaux shells, et supprimer une version fixée casse `nvm use` dans le projet concerné. Les paquets globaux (`npm install -g`) vivent dans le dossier de la version et disparaissent avec lui : une version qui contient des CLI introuvables ailleurs est donc signalée même si rien d'autre ne la référence.
+
+L'âge ne compte pas ici : une version non référencée est présélectionnée même si vous l'avez utilisée la semaine dernière, puisqu'une réinstallation prend quelques secondes. Ajoutez `--older-than` (par exemple `--older-than 90d`) pour être plus prudent dans vos scripts. Si lu-cleaner ne peut pas lire la liste des processus (`ps`), il ne peut pas exclure qu'une version soit en cours d'exécution, et aucune version n'est présélectionnée.
+
+### Comment les versions fixées sont reconnues
+
+Les fichiers qui fixent une version sont lus dans vos racines de projets et de worktrees, sur trois niveaux de profondeur, ainsi que dans `~/.nvmrc` et `~/.node-version`. Une version fixée conserve la version que le gestionnaire choisirait pour elle :
+
+| Valeur fixée | Version conservée |
+|---|---|
+| `20.19.5` | cette version ; si elle n'est pas installée, la `20.x` installée la plus récente |
+| `20` ou `20.19` | la version installée la plus récente qui correspond à ce préfixe |
+| `^20.11.0`, `>=20`, `~20.11` | la `20.x` installée la plus récente (les plages sont réduites à leur version majeure) |
+| `lts/iron`, `lts/jod` | la version installée la plus récente de cette ligne LTS (20, 22…) |
+| `lts/*` | la version LTS (majeure paire) installée la plus récente |
+| `node`, `latest`, `stable` | la version installée la plus récente |
+| `system` | aucune |
+
+Les chaînes d'alias de nvm sont suivies (`default` → `lts/*` → `lts/jod` → `v22.12.0`) : c'est donc bien la version réellement utilisée par votre shell qui est conservée.
+
+### Ce que coûte la suppression d'une version
+
+La note de l'élément donne la commande de réinstallation, comme `nvm install 18.20.4`, `fnm install 18.20.4`, `mise install node@18.20.4`, `asdf install nodejs 18.20.4` ou `volta install node@18.20.4`. Le téléchargement fait environ 50 Mo, mais les paquets npm globaux installés sous cette version sont perdus. Les liens symboliques d'alias de mise qui pointent vers la version (`20`, `lts`…) sont supprimés avec elle.
+
+Pour fnm, la date de dernière utilisation (la colonne de l'âge, et la valeur à laquelle `--older-than` se compare) provient aussi des liens de shell décrits ci-dessous : une version vers laquelle vous basculez souvent ne paraît donc pas ancienne.
+
+### Liens de shell de fnm
+
+fnm crée un lien symbolique nommé `<pid>_<timestamp>` dans un dossier `fnm_multishells` (par exemple `~/.local/state/fnm_multishells` ou `~/Library/Caches/fnm_multishells`) chaque fois qu'un shell exécute `fnm env`, et ne les supprime jamais. Des milliers s'accumulent sur une machine où des outils d'IA ouvrent des shells toute la journée. Ils ne prennent presque pas de place ; le gain porte sur les inodes et sur la taille du dossier, bien plus réduite.
+
+Le `<pid>` est celui du processus `fnm env`, qui ne vit que brièvement, et non celui du shell : « ce pid est mort » ne prouve donc rien. Un terminal ouvert, ou une application qui a capturé un environnement de shell (Claude, Cursor, Codex…), pointe toujours vers son lien via le `PATH`. lu-cleaner ne considère un lien comme périmé que dans l'un de ces cas :
+
+- il a été créé avant le dernier démarrage de la machine, puisque tous les processus ont redémarré depuis ;
+- il a plus d'un jour, aucun processus en cours ne le référence (ligne de commande ou environnement), et aucun processus en cours n'a démarré vers le moment de sa création.
+
+Le lien de votre propre shell est toujours conservé. L'élément, `fnm stale shell links (N)`, est <span class="risk safe">safe</span> et présélectionné ; seuls les liens symboliques sont supprimés, jamais Node lui-même. Sa taille est une estimation, car les liens symboliques n'ont pas de blocs de données. Il est ignoré quand la liste des processus n'est pas disponible, et au moment du nettoyage, un lien à travers lequel un processus s'exécute encore est refusé avec *in use: process … runs a program or library from …*.
+
+### Restes d'un `npm install -g` interrompu
+
+Quand un `npm install -g` est interrompu, ce qui arrive souvent avec les CLI d'IA qui se mettent à jour toutes seules, npm laisse dans le `lib/node_modules` global un dossier temporaire comme `.some-cli-a1B2c3D4`, qui pèse parfois plusieurs centaines de Mo. npm ne s'en sert plus jamais.
+
+lu-cleaner les cherche dans chaque version de Node gérée et dans les préfixes npm de niveau utilisateur (`$npm_config_prefix`, `~/.local`, `~/.npm-global`, `~/.npm-packages`). Les restes de plus de 24 heures qu'aucun processus en cours n'utilise sont <span class="risk safe">safe</span> et présélectionnés (type `npm-global-leftover`).
+
+## Metro, Jest et autres caches temporaires
+
+Ces caches se trouvent dans votre dossier temporaire utilisateur (`$TMPDIR`, sous `/var/folders/…`). Plusieurs d'entre eux grossissent avec chaque worktree git, car ils sont indexés par chemin de projet.
+
+| Élément | Emplacement | Type (`-k`) | Remarques |
+|---|---|---|---|
+| Cache du bundler Metro | `$TMPDIR/metro-cache`, `metro-bundler-cache*`, `react-native-packager-cache-*` | `js-metro-cache` | partagé par tous les projets React Native / Expo ; comme avec `--reset-cache`, le bundle suivant est plus lent |
+| File maps de Metro / Haste | `$TMPDIR/metro-file-map-*`, `haste-map-*` | `js-metro-file-maps` | une par racine de projet : chaque worktree en ajoute une |
+| Cache de Jest | `$TMPDIR/jest_*` | `js-jest-cache` | un jeu par chemin de projet (environ 100 Mo par worktree) |
+| Dossiers du module runner de Vitest | dossiers de 21 caractères dans `$TMPDIR` qui ne contiennent que `client/` et `ssr/` | `vitest-tmp` | recréés à chaque exécution, jamais supprimés |
+| Dossiers de codegen React Native | `$TMPDIR/<lib>XXXXXX/out` avec une sortie de codegen | `rn-codegen-tmp` | créés à chaque `pod install` ou exécution de Gradle, jamais supprimés |
+| Cache de compilation des modules Node | `$TMPDIR/node-compile-cache`, `v8-compile-cache-*` | `js-node-compile-cache` | cache de code V8 des CLI (npm, CLI d'IA…), un par version de Node |
+| Cache de transformation de tsx | `$TMPDIR/tsx-*` | `js-tsx-cache` | reconstruit automatiquement |
+
+Tous sont <span class="risk safe">safe</span>. Les dossiers de Vitest et de codegen ont des noms génériques : lu-cleaner vérifie donc leur contenu avant de les proposer, et ignore ceux modifiés au cours des 2 dernières heures, au cas où une exécution serait en cours.
+
+## React Native, Expo et EAS
+
+| Élément | Emplacement | Type (`-k`) | Risque |
+|---|---|---|---|
+| Archives précompilées de React Native (core, deps, Hermes) | `~/Library/Caches/ReactNative` | `js-react-native-prebuilt` | <span class="risk safe">safe</span> : le prochain `pod install` les télécharge de nouveau |
+| Cache DotSlash (React Native DevTools) | `~/Library/Caches/dotslash` | `js-dotslash-cache` | <span class="risk safe">safe</span> |
+| Restes de Flipper | `~/.flipper` | `js-flipper-leftovers` | <span class="risk safe">safe</span>, toujours présélectionnés : Flipper a été retiré de React Native 0.74+ |
+| Caches de l'Expo CLI | `~/.expo/cache`, `native-modules-cache`, `schema-cache`, `versions-cache`, `template-cache` | `js-expo-cli-caches` | <span class="risk safe">safe</span> |
+| Builds Expo Go pour le simulateur iOS | `~/.expo/ios-simulator-app-cache/Expo-Go-*` | `expo-go-ios` | voir ci-dessous |
+| APK Expo Go pour Android | `~/.expo/android-apk-cache` | `js-expo-go-android` | <span class="risk safe">safe</span> |
+| Archives d'envoi de l'EAS CLI | `$TMPDIR/eas-cli-nodejs` | `js-eas-cli-tmp` | <span class="risk safe">safe</span> |
+| Cache de l'EAS CLI | `~/Library/Caches/eas-cli` | `js-eas-cli-cache` | <span class="risk safe">safe</span> |
+| Dossiers de travail de `eas build --local` (de plus de 2 heures) | `$TMPDIR/eas-build-local-nodejs` | `js-eas-local-build` | <span class="risk safe">safe</span> ; ne nettoyez pas pendant un build local |
+
+`expo start --ios` met en cache un build Expo Go (environ 250 Mo) par version. Les versions d'Expo Go suivent le numéro du SDK (`52.0.3` correspond au SDK 52) : lu-cleaner les regroupe donc par SDK. Un build remplacé par un build plus récent du même SDK est <span class="risk safe">safe</span> et présélectionné ; le build le plus récent de chaque SDK est <span class="risk moderate">moderate</span> et porte un avertissement quand un projet de vos racines utilise ce SDK Expo.
+
+Votre session Expo (`~/.expo/state.json`) figure sur la liste protégée du [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/) et n'est jamais touchée.
+
+## Navigateurs de test
+
+| Élément | Emplacement | Type (`-k`) | Risque |
+|---|---|---|---|
+| Navigateurs Playwright, un élément par révision | `~/Library/Caches/ms-playwright/<browser>-<revision>` | `playwright-browser` | <span class="risk moderate">moderate</span> |
+| Profils temporaires, traces et cache de transformation de Playwright (de plus d'un jour) | `$TMPDIR/playwright-*`, `$TMPDIR/playwright_*dev_profile-*` | `js-playwright-tmp` | <span class="risk safe">safe</span> |
+| Chrome, headless shell et Firefox de Puppeteer (le plus récent est conservé) | `~/.cache/puppeteer/…` | `js-puppeteer-chrome`, `js-puppeteer-headless-shell`, `js-puppeteer-firefox` | <span class="risk moderate">moderate</span> |
+| Versions de l'application Cypress (la plus récente est conservée) | `~/Library/Caches/Cypress/*` | `js-cypress-binaries` | <span class="risk moderate">moderate</span> |
+| Pilotes de Selenium Manager | `~/.cache/selenium` | `js-selenium-drivers` | <span class="risk safe">safe</span> |
+
+Playwright enregistre dans `ms-playwright/.links` quelles installations ont besoin de quelles révisions de navigateur. lu-cleaner lit ces liens et le `browsers.json` de chaque installation : une révision dont aucune installation de Playwright n'a plus besoin est présélectionnée, et une révision encore nécessaire porte *needed by N installed Playwright(s)*. Quand les liens ne sont pas disponibles, les révisions plus anciennes sont présélectionnées, et la révision la plus récente de chaque navigateur ne l'est qu'une fois périmée. Un navigateur en cours d'exécution n'est jamais présélectionné. `$PLAYWRIGHT_BROWSERS_PATH` est pris en compte.
+
+## Watchman
+
+Watchman continue de surveiller des dossiers après leur suppression, typiquement les worktrees des tâches d'agent terminées. Quand `watchman watch-list` montre des surveillances sur des dossiers qui n'existent plus, lu-cleaner propose `watchman watch-del-all`, présélectionné.
+
+Cela libère de la mémoire et du CPU, pas de l'espace disque. Toutes les surveillances sont supprimées ; Metro et Jest recréent celles dont ils ont besoin à leur prochain démarrage. lu-cleaner interroge Watchman avec `--no-spawn` : un scan ne démarre donc jamais le serveur Watchman.
+
+## Autres caches d'outils JS
+
+Le [catalogue](/lu-cleaner/reference/catalog/) couvre aussi les en-têtes de node-gyp, les caches de téléchargement de nvm, Volta, asdf et mise, les téléchargements d'Electron et d'electron-builder, le cache d'acquisition de types de TypeScript, Deno, Turborepo, esbuild, les binaires SWC de Next.js, les moteurs Prisma, les backends locaux de Convex et les templates giget. Tous sont <span class="risk safe">safe</span> : l'outil concerné les télécharge ou les reconstruit quand il en a besoin.
+
+## Marche à suivre recommandée
+
+<Steps>
+
+1. Arrêtez Metro, les watchers de Jest et les exécutions de tests, pour que leurs caches ne soient pas en cours d'utilisation.
+
+2. Vérifiez que vos racines de projets incluent tous vos dossiers de projets et de worktrees, pour que les versions de Node fixées et les projets Yarn PnP soient trouvés :
+
+   ```bash
+   lu-cleaner config show
+   ```
+
+3. Passez en revue ce qui est présent :
+
+   ```bash
+   lu-cleaner scan -c js --all
+   ```
+
+4. Ouvrez le sélecteur, vérifiez la présélection (en particulier les versions de Node et les stores pnpm), puis appuyez sur <kbd>d</kbd> :
+
+   ```bash
+   lu-cleaner clean -c js
+   ```
+
+</Steps>
+
+## Depuis un script
+
+```bash
+# Le plan que la sélection intelligente exécuterait ; rien n'est supprimé
+lu-cleaner clean --yes --smart -c js --dry-run
+
+# Uniquement les caches de Metro, Haste et Jest
+lu-cleaner clean --yes -k js-metro-cache,js-metro-file-maps,js-jest-cache
+
+# Uniquement les versions de Node non référencées
+lu-cleaner clean --yes --smart -k node-version --dry-run
+```
+
+:::caution[Restreignez toujours clean --yes]
+Sans `--smart`, `lu-cleaner clean --yes -c js` inclut tous les éléments sélectionnables jusqu'au risque <span class="risk moderate">moderate</span> : **les versions de Node fixées, les versions qui contiennent des paquets globaux introuvables ailleurs, les installations npx utilisées par des serveurs MCP en cours d'exécution** et les stores pnpm entiers. Leurs avertissements sont affichés dans le plan, mais ils n'arrêtent pas un nettoyage non interactif. Utilisez `--smart` ou `-k`, et lancez une première fois avec `--dry-run`. Les versions de Node par défaut ou présentes dans votre `PATH` (<span class="risk caution">caution</span>) ne sont incluses qu'avec `--risk caution`.
+:::
+
+L'identifiant de fournisseur `js` sélectionne tous les éléments du scanner des versions de Node (versions de Node, liens fnm, restes de `npm -g`, npx, pnpm, Yarn Berry, Expo Go, Playwright, dossiers temporaires de Vitest et de codegen, Watchman) ; les types `js-*` proviennent du catalogue. Les métadonnées des éléments, comme `kept_because`, `globals_only_here`, `pnp_projects` ou `used_by`, sont disponibles dans `lu-cleaner scan --json` ; voir [Sortie JSON](/lu-cleaner/fr/reference/json-output/).
+
+## Voir aussi
+
+<CardGrid>
+	<LinkCard title="Projets React Native" href="/lu-cleaner/fr/guides/react-native-projects/" description="node_modules, Pods, builds et .expo dans chaque projet." />
+	<LinkCard title="Worktrees des agents IA" href="/lu-cleaner/fr/guides/ai-worktrees/" description="Chaque worktree ajoute des caches Metro, Jest et Xcode : supprimez d'abord ceux qui sont terminés." />
+	<LinkCard title="Niveaux de risque et sélection intelligente" href="/lu-cleaner/fr/concepts/risk-and-smart-select/" description="Ce que signifient safe, moderate et caution, et ce qui est présélectionné." />
+	<LinkCard title="Automatisation" href="/lu-cleaner/fr/guides/automation/" description="Lancer un nettoyage recommandé à intervalles réguliers." />
+</CardGrid>

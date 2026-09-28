@@ -1,0 +1,138 @@
+---
+title: Fonctionnement
+description: Comment lu-cleaner analyse votre Mac avec des scanners qui tournent en parallèle, mesure ce qu'une suppression libère réellement et nettoie votre sélection au travers d'un pipeline qui revérifie chaque chemin.
+sidebar:
+  order: 1
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+lu-cleaner fait trois choses distinctes, et les garde strictement séparées :
+
+1. **Les scanners** examinent votre disque et décrivent ce qu'ils trouvent sous forme d'*éléments*. Ils ne suppriment jamais rien.
+2. **Vous** choisissez des éléments, dans le sélecteur interactif ou avec des filtres en ligne de commande.
+3. **Le pipeline de nettoyage** revérifie chaque élément choisi au dernier moment, puis le supprime, exécute une commande ou retire un worktree git, et écrit une ligne dans l'historique.
+
+```text
+scanners ──emit(item)──▶ engine ──stream──▶ picker · scan table · --json
+                                              │  votre sélection
+                                              ▼
+                        clean pipeline ── re-checks ──▶ delete · Trash · command · git worktree remove
+                                              └──▶ history.jsonl + free space before/after
+```
+
+Comme un seul composant peut supprimer des fichiers, toutes les règles de sécurité se trouvent au même endroit. Un bug dans un scanner peut au pire proposer quelque chose qu'il ne devrait pas. Il ne peut pas le supprimer : le pipeline revalide chaque chemin avant d'y toucher. Voir [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
+
+## Analyse
+
+### Les scanners tournent en parallèle et diffusent leurs éléments au fil de l'eau
+
+Une analyse démarre tous les scanners (appelés *providers* en interne) en parallèle. Chacun publie ses éléments dès qu'il les trouve : le sélecteur se remplit en quelques secondes pendant que les mesures lentes continuent en arrière-plan.
+
+Les éléments sont **mis à jour par identifiant** (upsert) : un scanner émet d'abord un élément dont la taille est encore inconnue (affichée `…`), puis l'émet à nouveau avec la taille mesurée. L'interface remplace l'ancienne version sur place. Un scanner qui plante est signalé par un avertissement (`warning: provider apple: …`) au lieu de faire tomber tout le programme.
+
+| Identifiant du scanner | Couvre | Catégories |
+|---|---|---|
+| `worktrees` | Worktrees git liés (Codex, Cursor, Conductor, Claude Code, créés à la main…) et métadonnées de worktrees périmées | worktrees |
+| `artifacts` | Sorties de build et dépendances dans les projets : `node_modules`, `ios/Pods`, `android/app/build`, `.expo`, `dist`… | artifacts |
+| `apple` | DerivedData, archives, DeviceSupport, simulateurs, runtimes, installations supplémentaires de Xcode | xcode, simulators |
+| `android` | AVD, snapshots, paquets du SDK, Gradle user home, Android Studio, JDK | android |
+| `ai` | Sessions de Claude Code, Codex, Cursor, Conductor… selon leur âge, données orphelines, anciens binaires, modèles locaux | ai, ide |
+| `js` | Versions de Node, npx, stores pnpm et Yarn Berry, builds Expo Go, navigateurs Playwright, dossiers temporaires | js |
+| `system` | Corbeille, Docker et VM, Homebrew, Go/Rust/Ruby, VS Code, JetBrains, Zed, `~/Downloads`, état de macOS | system, containers, langs, ide |
+| `catalog` | Environ 200 emplacements connus de caches, de journaux et de données d'outils | toutes les catégories sauf worktrees et artifacts |
+
+L'identifiant du scanner est aussi accepté par `--kind` : `lu-cleaner scan -k apple` ne liste que ce qu'a trouvé le scanner `apple`. Seuls les scanners capables de produire les catégories demandées sont démarrés : `lu-cleaner scan -c js` lance donc les scanners `js` et `catalog`, et rien d'autre. Il en va de même pour `disabled_categories` (voir [Configuration](/lu-cleaner/fr/reference/configuration/)) : les éléments de ces catégories ne sont jamais affichés, et les scanners qui ne produisent que des catégories désactivées ne sont pas démarrés.
+
+### Entrées du catalogue et scanners dynamiques
+
+lu-cleaner s'appuie sur deux types de connaissances :
+
+- **Le catalogue** est une donnée : une liste de chemins connus comme `~/.npm/_cacache`, `~/Library/Caches/CocoaPods` ou `$TMPDIR/metro-cache`, chacun avec une catégorie, un risque, une méthode de nettoyage et une note qui explique comment les données reviennent. Ajouter un cache situé à un chemin fixe tient en quelques lignes de données Go, sans logique. Parcourez-le dans la [référence du catalogue](/lu-cleaner/reference/catalog/) ou avec `lu-cleaner catalog`.
+- **Les scanners dynamiques** traitent tout ce qui demande du discernement : cette version de node est-elle la version par défaut ? Ce worktree contient-il des modifications non commitées ? Ce runtime de simulateur est-il encore utilisé par un appareil ? Ce dossier DerivedData appartient-il à un worktree qui n'existe plus ? La [référence des scanners](/lu-cleaner/fr/reference/scanners/) liste tous les types d'éléments qu'ils produisent.
+
+### Où lu-cleaner regarde
+
+- **Les racines de projets** contiennent vos checkouts. Elles viennent de `--root`, de la clé de configuration `roots`, ou sont détectées automatiquement (`~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/conductor/repos`…). Les scanners artifacts et worktrees les parcourent, jusqu'à `max_depth` niveaux (8 par défaut).
+- **Les racines de worktrees** sont les dossiers où les outils d'IA créent leurs worktrees : `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees`, `~/.worktrees`… ainsi que les `worktree_roots` que vous configurez.
+- **Les emplacements fixes** dans `~/Library`, les dossiers cachés de votre dossier personnel et votre dossier temporaire utilisateur (`$TMPDIR`), pour les caches, les SDK, les simulateurs et les données d'outils.
+
+Tout ce dont l'emplacement réel se trouve sur un autre volume (un SSD externe derrière un lien symbolique, par exemple) est affiché à titre d'information uniquement, avec l'avertissement `on external volume — no internal gain` : le supprimer ne libérerait pas d'espace sur votre disque interne.
+
+## Mesure des tailles
+
+Les tailles répondent à une seule question : *combien d'espace libre vais-je récupérer ?* Cette question guide plusieurs choix.
+
+- **La taille allouée, pas la taille apparente.** lu-cleaner compte les blocs qu'un fichier occupe réellement sur le disque (`st_blocks × 512`), comme `du`. Une image disque creuse (sparse) de 64 Go qui en utilise 3 compte pour 3 Go.
+- **Les liens physiques (hardlinks) sont comptés une seule fois.** Un fichier qui a plusieurs liens physiques dans la même arborescence est compté une fois. Quand certains de ses liens se trouvent *en dehors* de l'arborescence mesurée, supprimer l'arborescence ne libère rien pour ce fichier. lu-cleaner indique alors une taille **réellement libérée** plus petite (`reclaim` en JSON). Cas typique : un `node_modules` installé par pnpm est lié physiquement au store pnpm. Il peut mesurer 1,2 Go alors que sa suppression ne libère que 80 Mo.
+- **Les clones APFS ne sont pas détectés.** Les détecter coûterait trop cher : ils sont donc comptés comme récupérables. `lu-cleaner doctor` en explique les conséquences.
+- **Les liens symboliques ne sont jamais suivis**, et les autres systèmes de fichiers montés ne sont jamais parcourus pendant la mesure.
+- **Les unités sont décimales** (1 Go = 1 000 000 000 octets), comme dans le Finder et avec `df -H`.
+
+Deux techniques gardent une analyse complète rapide :
+
+- Sur macOS, les répertoires sont lus avec `getattrlistbulk(2)`, qui renvoie la taille, le type, l'inode, le nombre de liens et la date de modification de nombreuses entrées en un seul appel système, au lieu d'un `lstat` par fichier. Les parcours s'exécutent en parallèle sur plusieurs répertoires, avec une limite globale du nombre de lecteurs simultanés.
+- Un **cache partagé par analyse** évite le travail en double : quand deux scanners mesurent le même répertoire (le scanner worktrees et le scanner artifacts mesurent tous deux le `node_modules` d'un worktree), le répertoire est parcouru une seule fois et les deux obtiennent le résultat. Le cache ne vit que le temps d'une analyse : l'analyse suivante mesure toujours des données fraîches.
+
+:::note
+Deux variables d'environnement existent pour le dépannage : `LU_NO_BULK=1` force le parcours classique avec un `lstat` par entrée, et `LU_WALKERS=<n>` change le nombre de lecteurs de répertoires simultanés (par défaut : 3 × le nombre de cœurs, au moins 8).
+:::
+
+## Ce que vous dit un élément
+
+Chaque ligne du sélecteur, du tableau de `scan` et de la sortie JSON est un élément. Le panneau de détails du sélecteur (affiché ou masqué avec <kbd>enter</kbd> sur un élément) montre tous ses champs.
+
+| Affiché comme | Champ JSON | Signification |
+|---|---|---|
+| Nom | `name` | Libellé court, par exemple `my-app · feature/login` ou `node v18.20.4 (nvm)`. |
+| Chemin / emplacement | `path`, `paths`, `location` | Ce qui est supprimé. Un **élément groupé** supprime plusieurs chemins d'un coup (`Metro / Haste file maps (18)`) ; un **élément commande** indique où agit sa commande. |
+| Taille | `size` | Octets alloués sur le disque, liens physiques comptés une fois. |
+| Réellement libéré (« really freed ») | `reclaim`, `freed` | Ce que la suppression libère réellement, quand c'est moins que la taille. `scan` marque ces tailles d'un `*`. |
+| Âge / dernière utilisation | `last_used`, `age_days` | Meilleure estimation de la dernière activité réelle, et non la date de modification du dossier. |
+| Risque | `risk` | Ce que vous perdez : `safe`, `moderate`, `caution` ou `never`. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/). |
+| Méthode | `method` | La façon dont il est nettoyé : `delete`, `trash`, `command`, `worktree` ou `report`. |
+| ★ | `recommended` | Présélectionné par la sélection intelligente. |
+| Avertissement | `warn` | Un point qui mérite votre attention (worktree modifié, application en cours d'exécution, version la plus récente conservée…). |
+| Note | `note` | Ce qu'est l'élément et comment il revient après le nettoyage. |
+| Méta | `meta` | Détails propres au scanner : branche, nombre de fichiers modifiés, niveau d'API, projets qui l'utilisent… |
+
+**La dernière utilisation** mérite une explication. Les dates de modification des dossiers ne sont pas fiables (les outils les touchent en permanence) : chaque scanner utilise donc le meilleur signal dont il dispose.
+
+- Les artefacts de projet utilisent l'activité du *projet* (sources, lockfiles, index git), pas celle de `node_modules` lui-même.
+- Les worktrees utilisent l'activité git (commits, index, HEAD) et les sessions de l'agent qui les a créés.
+- DerivedData utilise la `LastAccessedDate` tenue par Xcode lui-même.
+- Les caches utilisent le fichier le plus récent écrit à l'intérieur.
+
+Cette date pilote `--older-than`, le marquage *stale* (âge en jaune dans le sélecteur) et la sélection intelligente des éléments moderate.
+
+**Les éléments en rapport seul** (méthode `report`, affichés `info` dans la colonne RISK de `scan`) ne peuvent pas être sélectionnés. Ils expliquent où part l'espace quand lu-cleaner ne le libère pas lui-même : snapshots locaux de Time Machine, installations supplémentaires de Xcode, SDK Android sur un disque externe, image disque de Docker. Leur note indique comment récupérer cet espace à la main.
+
+## Le pipeline de nettoyage
+
+<Steps>
+
+1. **Sélection.** Dans le sélecteur, vous sélectionnez des éléments (<kbd>space</kbd>, ou <kbd>a</kbd> pour la sélection intelligente) et appuyez sur <kbd>d</kbd>. Avec `clean --yes`, ce sont les filtres et `--smart` qui décident (voir [la commande `clean`](/lu-cleaner/reference/commands/clean/)). Les sélections imbriquées sont fusionnées : si vous sélectionnez un worktree *et* le `node_modules` qu'il contient, seul le worktree est traité et rien n'est compté deux fois.
+
+2. **Confirmation** (sélecteur uniquement). Une boîte de dialogue résume la sélection par risque, la méthode (suppression définitive, déplacement dans la Corbeille ou simulation), les commandes qui seront exécutées et les applications en cours d'exécution qui bloqueraient certains éléments. Si un élément sélectionné est `caution`, vous devez taper `yes`.
+
+3. **Revérifications.** Juste avant d'agir sur un élément, le pipeline le revalide : applications en cours d'exécution, revérification propre à l'élément (par exemple « ce simulateur est toujours éteint »), puis, pour chaque chemin, son identité d'inode, les bases SQLite ouvertes, le garde-fou de sécurité, les fichiers marqueurs et les processus qui travaillent à l'intérieur. Une vérification qui échoue fait **ignorer** l'élément, avec une raison ; elle n'en supprime jamais une partie. Les détails sont dans [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
+
+4. **Exécution.** Les suppressions de fichiers et les déplacements dans la Corbeille s'exécutent quatre à la fois. Les commandes (`xcrun simctl delete …`, `pnpm store prune`…) et les suppressions de worktrees git s'exécutent l'une après l'autre, chaque commande avec un délai maximal de 15 minutes. <kbd>Ctrl</kbd>+<kbd>C</kbd> annule : les éléments pas encore commencés sont signalés comme ignorés (`cancelled`).
+
+5. **Récapitulatif.** Chaque élément se termine en `done`, `skipped` ou `failed`. lu-cleaner donne deux chiffres : l'espace libéré **estimé** (somme des tailles réellement libérées des éléments) et l'espace libéré **mesuré** (l'espace libre de votre volume personnel avant et après, tel que le rapporte le système de fichiers). Quand le chiffre mesuré est bien plus bas, `lu-cleaner doctor` vous dit pourquoi : snapshots locaux, Corbeille, fichiers ouverts, clones. Voir [Pourquoi l'espace libéré n'apparaît pas](/lu-cleaner/fr/guides/disk-space-not-freed/).
+
+</Steps>
+
+Avec `--dry-run` (`-n`), les étapes 1 à 3 s'exécutent réellement, y compris toutes les revérifications, et l'étape 4 se contente d'afficher ce qui se passerait (`would delete …`, `would run: xcrun simctl delete …`). Une simulation est donc un aperçu fidèle : un élément qui serait ignoré pour une raison de sécurité est signalé comme ignoré. Seule exception : les vérifications git de la suppression d'un worktree (modifications non commitées, verrou, commits détachés), qui ne s'exécutent que lors d'un vrai nettoyage ; l'analyse signale déjà ces worktrees.
+
+## Historique
+
+Chaque vrai nettoyage ajoute une ligne JSON par élément traité à `~/.local/state/lu-cleaner/history.jsonl` (`$XDG_STATE_HOME/lu-cleaner/` quand cette variable est définie) : date, type, catégorie, nom, chemin ou commande, méthode, statut, taille et erreur. Les simulations ne sont pas enregistrées, pas plus que les éléments qui avaient déjà disparu.
+
+```bash
+lu-cleaner history              # les 30 dernières actions, les plus récentes d'abord, et le total libéré
+lu-cleaner history --limit 0    # tout
+lu-cleaner history --json       # pour les scripts
+```
+
+Le format est décrit dans [Sortie JSON](/lu-cleaner/fr/reference/json-output/#history---json).

@@ -1,0 +1,61 @@
+/* lu-cleaner palette: violet accent (like the TUI) with a cyan secondary. */
+:root {
+	--sl-color-accent-low: #1f1640;
+	--sl-color-accent: #7d56f4;
+	--sl-color-accent-high: #d9ccff;
+	--sl-font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	--lu-cyan: #22d3ee;
+}
+:root[data-theme='light'] {
+	--sl-color-accent-low: #ece6ff;
+	--sl-color-accent: #6a3fe8;
+	--sl-color-accent-high: #2a1670;
+	--lu-cyan: #0891b2;
+}
+
+/* Hero title gradient */
+.hero h1 {
+	background: linear-gradient(90deg, var(--sl-color-accent), var(--lu-cyan));
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* Risk badges usable in Markdown: <span class="risk safe">safe</span> */
+.risk {
+	display: inline-block;
+	padding: 0 0.45em;
+	border-radius: 0.35em;
+	font-size: 0.8em;
+	font-weight: 600;
+	line-height: 1.6;
+	white-space: nowrap;
+}
+.risk.safe { background: #16a34a26; color: #22c55e; }
+.risk.moderate { background: #ca8a0426; color: #eab308; }
+.risk.caution { background: #ea580c26; color: #f97316; }
+.risk.never { background: #6b728026; color: #9ca3af; }
+
+/* Terminal mockups */
+.terminal {
+	background: #0d1117;
+	color: #e6edf3;
+	border: 1px solid #30363d;
+	border-radius: 0.6rem;
+	padding: 1rem 1.2rem;
+	font-family: var(--sl-font-mono);
+	font-size: 0.8rem;
+	line-height: 1.5;
+	overflow-x: auto;
+	white-space: pre;
+}
+.terminal .dim { color: #7d8590; }
+.terminal .acc { color: #a78bfa; }
+.terminal .cy { color: #22d3ee; }
+.terminal .ok { color: #22c55e; }
+.terminal .warn { color: #eab308; }
+.terminal .bad { color: #f97316; }
+
+/* Wide reference tables scroll instead of squeezing */
+.sl-markdown-content table { display: block; overflow-x: auto; }

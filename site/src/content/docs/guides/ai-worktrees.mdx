@@ -1,0 +1,263 @@
+---
+title: Clean up AI agent worktrees
+description: Find the git worktrees left by Codex, Cursor, Conductor and Claude Code, see which ones are safe to remove, and free their space without losing work.
+sidebar:
+  order: 1
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex, Cursor, Conductor and Claude Code can run each task in its own **git worktree**. A worktree is a full checkout of your repository, and it gets its own `node_modules`, `ios/Pods`, `ios/build` and Android build. For a React Native app that means one to several gigabytes per task. The tools rarely delete these worktrees when the task is done.
+
+lu-cleaner finds these worktrees wherever they are. It shows which tool created each one and what state its git work is in. It removes finished worktrees with `git worktree remove`, and **the branch is always kept**.
+
+```bash
+lu-cleaner worktrees                  # interactive picker (alias: lu-cleaner wt)
+lu-cleaner worktrees --list           # the same list as a table
+lu-cleaner scan -c worktrees --all    # with risk, ★ recommendations and warnings
+```
+
+<div class="terminal">
+<span class="dim">$</span> lu-cleaner worktrees --list
+NAME                              TOOL       BRANCH               STATUS       SIZE  AGE  PATH
+my-app · feature/login            codex      feature/login        <span class="ok">merged</span>    2.40 GB   9d  <span class="dim">~/.codex/worktrees/a1b2/my-app</span>
+my-app · c3d4                     codex      (detached)           <span class="ok">clean</span>     1.90 GB   3w  <span class="dim">~/.codex/worktrees/c3d4/my-app</span>
+shop-app · fix-cart               conductor  fix-cart             <span class="bad">dirty</span>     1.20 GB   2d  <span class="dim">~/conductor/workspaces/shop-app/fix-cart</span>
+my-app · worktree-onboarding      claude     worktree-onboarding  <span class="bad">unpushed</span>   850 MB   5d  <span class="dim">~/dev/my-app/.claude/worktrees/onboarding</span>
+my-app · prune 1 stale worktree…                                                0 B    —  <span class="dim">~/dev/my-app</span>
+&nbsp;
+Total 6.35 GB in 5 items · <span class="acc">★ 4.30 GB</span> recommended (3 items)
+Disk: <span class="dim">38.2 GB free of 494 GB (92% used)</span>
+→ run: lu-cleaner clean --smart -c worktrees
+</div>
+
+The table has no warnings column. To see why a worktree is flagged, open it in the picker (`enter` shows its details) or run `lu-cleaner scan -c worktrees --all`, which prints each warning under its row.
+
+## Where each tool puts its worktrees
+
+| Tool | Where its worktrees live | Item kind |
+|---|---|---|
+| Codex | `~/.codex/worktrees/<id>/<repo>` | `codex-worktree` |
+| Cursor | `~/.cursor/worktrees/…` | `cursor-worktree` |
+| Conductor | `~/conductor/workspaces/<repo>/<workspace>` | `conductor-worktree` |
+| Claude Code (CLI) | `<repo>/.claude/worktrees/<name>` (created by `claude --worktree` and subagent isolation), `~/.claude/worktrees`, `~/.claude-worktrees` | `claude-worktree` |
+| Claude desktop | `~/Library/Application Support/Claude/worktrees`, and `<repo>/.claude/worktrees` entries on `claude/…` branches | `claude-desktop-worktree` |
+| Created by hand | Anywhere: every worktree that `git worktree list` reports for your repositories, plus `<repo>/.worktrees`, `<repo>/worktrees`, `<repo>-worktrees` and `~/.worktrees` | `manual-worktree` |
+
+lu-cleaner also labels worktrees from Superset (`~/.superset/worktrees`), Claude Squad, vibe-kanban and Multica. You can use the item kind with `--kind`, for example `-k codex-worktree`.
+
+### How worktrees are found
+
+lu-cleaner finds worktrees in four ways, so it also catches worktrees that are not in the usual folders:
+
+1. It walks the folders listed above, up to four levels deep, plus any folder in `worktree_roots` in your [configuration](/lu-cleaner/reference/configuration/).
+2. It walks your project roots to find repositories. These are the `roots` in your config, or folders detected automatically such as `~/dev`, `~/Projects` and `~/conductor/repos`.
+3. It runs `git worktree list` in every repository it found. This finds that repository's worktrees wherever they are.
+4. It looks inside the usual nested folders (`.claude/worktrees`, `.worktrees`, `worktrees`, `<repo>-worktrees`).
+
+If several of these methods reach the same worktree, it is counted only once: lu-cleaner compares the folder's device and inode.
+
+:::tip[Your agent uses another folder?]
+Add the folder to `worktree_roots`. This list is added to the built-in one:
+
+```toml
+worktree_roots = ["~/agents/worktrees"]
+```
+:::
+
+Some worktrees are listed but cannot be selected:
+
+- **On an external volume.** Removing it frees nothing on your internal disk.
+- **Main repository on a volume that is not mounted.** Its status is `unknown` until you plug the volume in.
+- **Outside your home folder**, for example in `/tmp`. The safety guard only deletes inside your home folder and your per-user temp folder. The item shows the exact `git -C … worktree remove …` command to run yourself.
+
+## Worktree statuses
+
+Each worktree gets one status. When several could apply, the one highest in this table wins:
+
+| Status | What it means | Risk | Removed without `--force`? |
+|---|---|---|---|
+| `orphan` | Git no longer tracks the folder. Its main repository was deleted, its entry was pruned, or the folder is a copy of another worktree. | <span class="risk caution">caution</span> | Yes, as a plain folder: git cannot inspect it |
+| `locked` | Locked with `git worktree lock`. Tools often do this while an agent runs. | <span class="risk caution">caution</span> | No |
+| `dirty` | Has uncommitted changes, including untracked files | <span class="risk caution">caution</span> | No |
+| `unpushed` | Has commits that no remote contains: ahead of its upstream, or no upstream at all | <span class="risk moderate">moderate</span> on a branch, <span class="risk caution">caution</span> on a detached HEAD | On a branch, yes: the branch keeps the commits. On a detached HEAD, only if another branch or a tag contains them. |
+| `merged` | Everything is already in the default branch (`origin/HEAD`, `origin/main`, `origin/master`, `main` or `master`), including commits that were rebased or cherry-picked onto it | <span class="risk moderate">moderate</span> | Yes |
+| `clean` | No local changes and everything is pushed, but not merged yet | <span class="risk moderate">moderate</span> | Yes |
+| `unknown` | `git status` failed or timed out, or the worktree or its main repository is on another volume | <span class="risk caution">caution</span> or report-only | Only if git can read it at clean time |
+
+Some notes on these statuses:
+
+- **Detached HEAD is normal for Codex.** Codex often checks out a detached HEAD. That is fine as long as the commit is also on a branch, a tag or a remote: the worktree is then `clean` or `merged`. It only becomes a problem when the agent made commits that exist nowhere else.
+- **Squash-merged pull requests usually show as `unpushed`.** Suppose a branch with several commits was squash-merged. Its commits don't match the default branch one by one, and once the PR branch is deleted on the remote, the warning says `upstream branch deleted`. Removal is still safe, because the local branch is kept. Check that the PR is merged, then select the worktree by hand.
+
+Some conditions make a worktree <span class="risk caution">caution</span> whatever its status. Others keep it out of smart select:
+
+| Warning | Effect |
+|---|---|
+| `in use by …`: a process has its current directory inside (shell, dev server, agent) | caution |
+| `open in Cursor` / `open in VS Code`: an editor window shows this folder | caution |
+| `N active Codex threads`, `active Claude desktop session`, `active Conductor workspace — archive it in Conductor instead` | caution |
+| `moved: git records it at …`: the folder was moved by hand | caution. Run the suggested `git worktree repair`. |
+| `ignored .env files would be lost: …` | Stays moderate but is never smart-selected. Git ignores these files, so `git worktree remove` deletes them. |
+| `N unpushed commits (branch … is kept)` | Stays moderate but is never smart-selected |
+| `current directory` | Cannot be selected at all |
+
+## Which worktrees are recommended
+
+Smart select picks a worktree only when all of these are true. Smart select is the `a` key in the picker and `--smart` on the command line.
+
+- Its status is `clean` or `merged`, so its risk is <span class="risk moderate">moderate</span>.
+- It has **no warning at all**: no unpushed commits, no ignored `.env` files, and no process, editor window or active agent session using it.
+- It has been idle for at least **7 days**, or **1 day** if it is merged into the default branch. If your `stale_after` setting is shorter than 7 days, it applies instead.
+
+"Idle" means the time since the worktree's last activity. lu-cleaner takes the most recent of these events: the worktree's creation, its last commit, changes to its index and HEAD, the modification times of its changed files, and the last activity of the Codex thread or Claude desktop session using it. It ignores the folder's own modification time, because Expo, Xcode and indexers update it even when nobody works there.
+
+Stale worktree entries (see [below](#stale-worktree-entries)) are always recommended.
+
+See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/) for the rules that apply to the other categories.
+
+## Remove the worktree, or only its artifacts?
+
+Removing a worktree frees everything, but the task's checkout is gone. Removing only its **artifacts** (`node_modules`, `ios/Pods`, native builds) usually frees most of the space and keeps the sources, uncommitted edits, `.env` files and the tool's link to the folder.
+
+To see which option frees what, check the worktree's details. In the picker, press `enter`. With `--json`, read `meta`. The size is split into `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `android/.cxx`, `.expo`, `.next`, `.turbo`, `dist`, their total `artifacts`, and the `checkout` itself.
+
+| Situation | What to do | Why |
+|---|---|---|
+| The task is finished: branch merged or pushed, nothing open in it | Remove the worktree | Frees the checkout and its artifacts. The branch stays in the repository. |
+| You will come back to the task, or its agent thread or workspace is still active | Remove only the artifacts | Keeps the sources and the tool's state. A reinstall brings the dependencies back. |
+| The worktree is `dirty` | Remove only the artifacts, or commit or stash first | Removing the worktree is refused anyway |
+| It holds git-ignored `.env` files you still need | Copy them out first, or remove only the artifacts | `git worktree remove` deletes ignored files |
+| Detached HEAD with commits that are on no branch | Run `git branch <name>` inside it, then remove it | Otherwise those commits become unreachable |
+| It is a Conductor workspace | Archive it in Conductor | Conductor keeps its archive commit and its own view stays consistent |
+| `orphan` | Look inside first. Delete it if nothing is worth recovering | Git cannot tell whether it contains unique work |
+
+### Remove only the artifacts
+
+The [artifacts scanner](/lu-cleaner/guides/react-native-projects/) also walks every worktree folder. Each artifact's name starts with the tool whose worktree contains it, for example `codex:my-app › node_modules`. To see only the artifacts inside one tool's worktrees, open the artifacts picker and filter by that prefix:
+
+```bash
+lu-cleaner artifacts
+```
+
+Then press `/` and type the prefix:
+
+| Filter | Shows the artifacts inside |
+|---|---|
+| `codex:` | Codex worktrees |
+| `cursor:` | Cursor worktrees |
+| `conductor:` | Conductor workspaces |
+| `claude:` | `.claude/worktrees` folders (Claude Code, and Claude desktop worktrees stored there) |
+| `claude-desktop:` | `~/Library/Application Support/Claude/worktrees` |
+| `worktree:` | Other linked worktrees: `.worktrees` folders and checkouts created by hand under your roots |
+
+Press `a` to smart-select them, or `space` to pick items one by one. Then press `d` to clean. Smart select never picks artifacts of a project that was active in the last 24 hours. See [Keyboard shortcuts](/lu-cleaner/reference/keyboard-shortcuts/) for all keys.
+
+:::note
+The command line has no filter by tool. To review artifacts by tool in a script, use `jq` on the JSON output. The `in_worktree` meta key holds the tool name:
+
+```bash
+lu-cleaner artifacts --json | jq -r '.items[] | select(.meta.in_worktree == "codex") | [.size, .name] | @tsv'
+```
+:::
+
+You can select a worktree and some artifacts inside it at the same time. The artifacts are then dropped from the plan and nothing is counted twice.
+
+## What happens when a worktree is removed
+
+<Steps>
+
+1. **Everything is checked again.** Your scan may be minutes old, so lu-cleaner checks the worktree again right before it acts:
+   - The folder must be the same folder as during the scan (same inode).
+   - It must pass the [safety guard](/lu-cleaner/concepts/safety/).
+   - It must not contain your current directory.
+   - No other process may have its current directory in it or run a program from it.
+
+   If any check fails, the item is skipped with the reason.
+
+2. **lu-cleaner's own git checks run.** Unless you pass `--force`, removal is refused in these cases:
+   - The worktree is locked.
+   - HEAD is detached and some of its commits are on no branch, tag or remote-tracking ref.
+   - `git status --porcelain` reports anything.
+   - lu-cleaner cannot tell whether commits would be lost, or cannot read the git status.
+
+3. **Git removes the checkout.** lu-cleaner runs `git worktree remove <path>` from the main repository, **without** `--force`. Git applies its own refusals as a second line of defense: modified or untracked files, locks, submodules. Ignored files such as `node_modules`, `Pods` and `.env` do not block the removal, and they are deleted with the checkout. Git also removes the worktree's entry in the main repository's `.git/worktrees/`.
+
+4. **The branch is kept.** Its commits stay in the main repository, pushed or not. That's why unpushed commits on a named branch are safe. When you no longer need the branch, delete it yourself, for example with `git branch -d feature/login`.
+
+5. **The empty task folder is removed.** Codex keeps each worktree in a per-task folder, such as `~/.codex/worktrees/a1b2/`. If only its marker files (`.codex-worktree-name`, `.DS_Store`) are left, lu-cleaner removes that folder too.
+
+6. **The removal is recorded.** Worktrees are removed one at a time, after the parallel file deletions. Each removal is added to the [history](/lu-cleaner/reference/commands/history/).
+
+</Steps>
+
+:::danger[`--force` bypasses the safety checks]
+With `--force`, lu-cleaner skips its own checks, including the check for processes working inside. It runs `git worktree remove --force --force`, which also removes dirty and locked worktrees. Uncommitted changes and commits made on a detached HEAD are then **lost**. Use it only on a worktree you have inspected yourself, never in a script.
+:::
+
+### Stale worktree entries
+
+A worktree folder is sometimes deleted with `rm`, by Cursor or Conductor, or by macOS cleaning up `/tmp`. Git still has an entry for it in the main repository, and until that entry is pruned, git refuses to check out or delete its branch elsewhere. lu-cleaner shows one item per repository with such entries, for example `my-app · prune 2 stale worktree entries`:
+
+- Risk is <span class="risk safe">safe</span>, and the item is always recommended.
+- Cleaning it runs `git -C ~/dev/my-app worktree prune`.
+- Some entries may still belong to a checkout on an unmounted volume, or to a checkout that was moved. `git worktree prune` would drop those too, so in that case lu-cleaner only deletes the other entries' metadata folders instead of running the command.
+
+### Orphaned worktrees
+
+An orphan is a folder that still has a `.git` file, but git no longer knows it. Git cannot remove it, and cannot tell whether it contains work that exists nowhere else. lu-cleaner marks orphans as <span class="risk caution">caution</span>. It deletes them as plain folders, after the safety guard. The item's note suggests how to recover the code: clone the remote again, or relink the folder with `git worktree repair` when only its entry was pruned. In the picker, you must type `yes` to confirm a selection that contains caution items.
+
+## What the tools see afterwards
+
+lu-cleaner reads each tool's state to warn you before you remove a worktree the tool still uses. It never modifies that state. This is what each tool sees after a removal:
+
+| Tool | After the worktree is removed | Better first step |
+|---|---|---|
+| Codex | lu-cleaner doesn't touch the thread's history, but the thread still points to the missing folder as its working directory, so a resumed thread has no checkout to work in. Worktrees with active threads are <span class="risk caution">caution</span>. When the Codex app has already queued a worktree for archival, the note says so: the app snapshots and removes it itself. | Archive the thread in Codex, which snapshots the worktree first |
+| Cursor | Agent changes that were not applied yet only existed in the worktree, so they are gone. Cursor creates new worktrees when it needs them. | Apply or discard the agent's changes first |
+| Conductor | Conductor shows the workspace as missing. Worktrees of non-archived workspaces are <span class="risk caution">caution</span>. When a workspace is already archived in Conductor, the note says so and removal is uneventful. | Archive the workspace in Conductor, which keeps its archive commit |
+| Claude desktop | The app keeps worktrees after a session is archived. Removing them is the cleanup it leaves to you. Worktrees of an active session are <span class="risk caution">caution</span>. | Archive the session first |
+| Claude Code (CLI) | Committed work stays on the branch (for example `worktree-onboarding`). Ignored files (`.env`, `node_modules`) are gone. | Commit what you want to keep |
+| Created by hand | The branch stays. Ignored files and native builds are gone. | None |
+
+## Clean worktrees from a script
+
+`lu-cleaner worktrees --yes` cleans without the picker, with the same rules as [`clean --yes`](/lu-cleaner/guides/automation/):
+
+```bash
+# Preview: recommended worktrees only, nothing is removed
+lu-cleaner worktrees --yes --smart --dry-run
+
+# Remove them
+lu-cleaner worktrees --yes --smart
+
+# Codex worktrees idle for a month (preview)
+lu-cleaner clean --yes -k codex-worktree --older-than 30d --dry-run
+```
+
+:::caution[Always add `--smart` or `--older-than`]
+Without them, `worktrees --yes` takes **every** worktree up to moderate risk. That includes clean worktrees you are using today, worktrees with unpushed commits on a branch, and worktrees whose ignored `.env` files would be lost. Run with `--dry-run` first and read the plan.
+:::
+
+Caution worktrees (dirty, locked, orphaned, in use, with an active session) are left out unless you pass `--risk caution`. Even then, dirty, locked and detached-commit worktrees are still refused at clean time unless you also pass `--force`.
+
+## When a removal is skipped
+
+A skipped item is not a failure: the command still exits with code 0. The summary lists each skipped item with its reason:
+
+| Message | What to do |
+|---|---|
+| `N uncommitted change(s) — commit them or use --force` | Commit, stash or discard the changes, or remove only the artifacts |
+| `detached HEAD with N commit(s) on no branch — they would be lost; …` | Run `git branch <name>` inside the worktree, then run the removal again |
+| `worktree is locked (git worktree lock) — use --force` | If the tool that locked it is done, run `git worktree unlock <path>` |
+| `in use: process 1234 is working inside …` | Quit the shell, dev server or agent running there |
+| `current directory is inside …` | Run lu-cleaner from another folder |
+| `… changed since the scan (different inode) — rescan` | Scan again: the folder was replaced |
+| `git refused to remove it (…)` | Read git's message; it has its own reasons |
+
+## Related
+
+- [React Native projects](/lu-cleaner/guides/react-native-projects/): the artifacts scanner in detail
+- [AI tools data](/lu-cleaner/guides/ai-tools-data/): sessions, logs and caches of Codex, Claude and Cursor
+- [Safety model](/lu-cleaner/concepts/safety/)
+- [`lu-cleaner worktrees` reference](/lu-cleaner/reference/commands/worktrees/)

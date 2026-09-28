@@ -1,0 +1,191 @@
+---
+title: Quick start
+description: A five-minute tour of lu-cleaner that scans your disk, opens the dashboard, rehearses a cleanup with a dry run, cleans the recommended items and checks the result.
+sidebar:
+  order: 2
+---
+
+import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This tour takes about five minutes. Nothing is deleted before step 4, and step 4 only removes what lu-cleaner considers a sensible default: safe caches and regenerable data you have not used for a while.
+
+It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/). The sizes below are illustrative.
+
+<Steps>
+
+1. **See where the space goes**
+
+   ```bash
+   lu-cleaner scan --summary
+   ```
+
+   `scan` is read-only. It runs every scanner and prints one line per category:
+
+   <div class="terminal">
+   <span class="dim">$ </span>lu-cleaner scan \-\-summary
+   <span class="dim">CATEGORY                 SIZE  ITEMS   RECOMMENDED</span>
+   <span class="acc">🌳 Worktrees        </span>  42.8 GB     31  <span class="cy"> 11.6 GB (9)</span>
+   <span class="acc">📦 Project artifacts</span>  36.4 GB    118  <span class="cy">9.20 GB (38)</span>
+   <span class="acc">📱 iOS Simulators   </span>  24.1 GB     14  <span class="cy"> 8.70 GB (6)</span>
+   <span class="acc">🔨 Xcode            </span>  18.6 GB     12  <span class="cy"> 15.2 GB (5)</span>
+   <span class="acc">🤖 Android          </span>  14.3 GB     19  <span class="cy"> 3.40 GB (7)</span>
+   <span class="acc">🧠 AI tools         </span>  12.9 GB     57  <span class="cy">4.10 GB (22)</span>
+   <span class="acc">🟨 JS toolchain     </span>  17.2 GB     48  <span class="cy">12.3 GB (27)</span>
+   <span class="acc">🧩 IDEs             </span>  3.10 GB     15  <span class="cy">2.60 GB (11)</span>
+   <span class="acc">💻 System           </span>  6.40 GB     25  <span class="cy"> 1.90 GB (6)</span>
+   &nbsp;
+   Total 176 GB in 331 items · <span class="cy">★ 69.0 GB</span> recommended (131 items)
+   <span class="dim">Disk: 43.0 GB free of 494 GB (91% used)</span>
+   → run: lu-cleaner clean \-\-smart
+   </div>
+
+   - **SIZE** is what cleaning every item of the category would free (report-only entries excluded).
+   - **RECOMMENDED** is what *smart select* would pick, with the number of items. The ★ marks the same items in the detailed report.
+
+   The first scan can take a minute or more on a busy machine: it measures thousands of directories. Drop `--summary` to list the 15 largest items of each category, add `--all` to list everything, or narrow with `-c`:
+
+   ```bash
+   lu-cleaner scan -c worktrees,artifacts
+   ```
+
+2. **Open the dashboard**
+
+   ```bash
+   lu-cleaner
+   ```
+
+   Without a command, lu-cleaner opens the interactive dashboard. Categories fill in as scanners finish, and when the scan is done the recommended items are preselected. Nothing happens until you press `d` and confirm.
+
+   | Key | Action |
+   | --- | --- |
+   | `↑` `↓` / `enter` | Move / open a category |
+   | `space` | Select or unselect the item under the cursor |
+   | `a` | Smart select the current view |
+   | `d` | Clean the selection (asks for confirmation) |
+   | `?` / `q` | Help / quit |
+
+   Press `q` to leave without touching anything. [Your first cleanup](/lu-cleaner/getting-started/first-cleanup/) walks through every screen, and [Keyboard shortcuts](/lu-cleaner/reference/keyboard-shortcuts/) lists every key.
+
+   :::tip
+   `lu-cleaner --dry-run` opens the same dashboard in dry-run mode: you can select and "clean" freely, and nothing is touched.
+   :::
+
+3. **Rehearse the recommended cleanup**
+
+   ```bash
+   lu-cleaner clean --yes --smart --dry-run
+   ```
+
+   `--yes` cleans without the picker, `--smart` keeps only the recommended items, and `--dry-run` (`-n`) deletes nothing. The output is the exact plan, followed by what would happen:
+
+   <div class="terminal">
+   <span class="dim">$ </span>lu-cleaner clean \-\-yes \-\-smart \-\-dry-run
+   <span class="acc">🌳 Worktrees</span>  11.6 GB · 9 items · <span class="cy">★ 11.6 GB</span> recommended
+   &nbsp; <span class="dim">NAME                             SIZE  AGE  RISK      RECO  PATH</span>
+   &nbsp; my-app · feature/login        2.40 GB   3w  <span class="warn">moderate</span>  <span class="cy">★   </span><span class="dim">  \~/.codex/worktrees/a1b2/my-app</span>
+   &nbsp; shop-app · fix/cart-badge     1.90 GB   2w  <span class="warn">moderate</span>  <span class="cy">★   </span><span class="dim">  \~/.cursor/worktrees/shop-app/k3m</span>
+   &nbsp; <span class="dim">…</span>
+   &nbsp;
+   <span class="acc">📦 Project artifacts</span>  9.20 GB · 38 items · <span class="cy">★ 9.20 GB</span> recommended
+   &nbsp; <span class="dim">NAME                             SIZE  AGE  RISK      RECO  PATH</span>
+   &nbsp; shop-app › node_modules       1.42 GB  3mo  <span class="warn">moderate</span>  <span class="cy">★   </span><span class="dim">  \~/dev/shop-app/node_modules</span>
+   &nbsp; shop-app › android/app/build  1.20 GB  3mo  <span class="ok">safe    </span>  <span class="cy">★   </span><span class="dim">  \~/dev/shop-app/android/app/build</span>
+   &nbsp; <span class="dim">…</span>
+   &nbsp;
+   Plan: 131 items · 69.0 GB (dry run)
+   &nbsp;
+   <span class="acc">Dry run:</span> nothing was deleted — 130 items would free 67.7 GB.
+   &nbsp; <span class="dim">Unavailable simulators (4): would run: xcrun simctl delete unavailable</span>
+   <span class="warn">Skipped:</span> 1
+   &nbsp; - codex:my-app › node_modules: in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules
+   </div>
+
+   A dry run re-runs the last-moment safety checks of a real run (safety guard, running apps, files in use) without deleting anything. That is why it can already report skipped items: here an agent is still running tests in a worktree, so its `node_modules` is in use. Only the final git checks of a worktree removal (uncommitted changes, lock) wait for the real run.
+
+   :::note[Guard rails]
+   Non-interactive cleaning is deliberately strict. It refuses to run without a narrowing filter (`--smart`, `--category`/`-c` or `--kind`/`-k`), so a bare `lu-cleaner clean --yes` exits with an error instead of cleaning everything. It never includes items of risk <span class="risk caution">caution</span> (dirty worktrees, sessions, user data) unless you pass `--risk caution`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/) for the reasoning.
+   :::
+
+4. **Clean**
+
+   ```bash
+   lu-cleaner clean --yes --smart
+   ```
+
+   lu-cleaner rescans, prints the plan again, then cleans. The summary ends with two numbers:
+
+   <div class="terminal">
+   <span class="dim">$ </span>lu-cleaner clean \-\-yes \-\-smart
+   &nbsp; <span class="dim">…</span>
+   <span class="ok">✓</span> 130 items cleaned · 67.7 GB freed (estimated)
+   &nbsp; Disk free: 43.0 GB → 110 GB (67.2 GB measured)
+   <span class="warn">Skipped:</span> 1
+   &nbsp; - codex:my-app › node_modules: in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules
+   </div>
+
+   *Estimated* is the sum of what the cleaned items were expected to free. *Measured* is the change in free space reported by the file system before and after. A small gap is normal (other apps write to disk meanwhile). A large one means something still holds the space: see the next step.
+
+   To clean only part of the recommendation, combine `--smart` with a category:
+
+   ```bash
+   lu-cleaner clean --yes --smart -c artifacts,js
+   ```
+
+5. **Check the result with `doctor`**
+
+   ```bash
+   lu-cleaner doctor
+   ```
+
+   `doctor` explains why freed space does not always show up: APFS local snapshots, files waiting in the Trash, apps that keep deleted files open. It also repeats the scan summary by category, and never deletes anything.
+
+   <div class="terminal">
+   <span class="dim">$ </span>lu-cleaner doctor
+   <span class="acc">Disk</span>
+   &nbsp; <span class="warn">██████████████████████</span><span class="dim">░░░░░░░░</span> <span class="warn">78%</span> used · 110 GB free of 494 GB
+   &nbsp;
+   <span class="acc">APFS local snapshots (1)</span>
+   &nbsp; <span class="dim">com.apple.TimeMachine.2026-09-29-093012.local</span>
+   &nbsp; They pin the blocks of deleted files: that space comes back only when they
+   &nbsp; expire (about 24h) or are thinned. To reclaim it now (lu-cleaner never runs these):
+   &nbsp;   tmutil thinlocalsnapshots / 999999999999 4
+   &nbsp;   sudo tmutil deletelocalsnapshots 2026-09-29-093012
+   &nbsp;
+   <span class="acc">Trash</span>
+   &nbsp; 4.20 GB in 312 files — empty it to free the space
+   &nbsp;
+   <span class="acc">Running apps that block cleaning</span>
+   &nbsp; <span class="warn">Xcode</span><span class="dim">  DerivedData, Archives and device support are in use</span>
+   <span class="dim">…</span>
+   </div>
+
+6. **Review what was done**
+
+   ```bash
+   lu-cleaner history
+   ```
+
+   Every real cleanup, from the dashboard or from `clean --yes`, is appended to `~/.local/state/lu-cleaner/history.jsonl`. Dry runs are not recorded. The newest 30 entries are shown; `--limit` changes that, and `--limit 0` shows everything.
+
+   <div class="terminal">
+   <span class="dim">$ </span>lu-cleaner history \-\-limit 4
+   <span class="dim">TIME              STATUS   METHOD       SIZE  NAME                         PATH/COMMAND</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  delete    1.42 GB  shop-app › node_modules      <span class="dim">\~/dev/shop-app/node_modules</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  worktree  2.40 GB  my-app · feature/login       <span class="dim">\~/.codex/worktrees/a1b2/my-app</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  command   1.10 GB  Unavailable simulators (4)   <span class="dim">$ xcrun simctl delete unavailable</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="warn">skipped</span>  delete    1.28 GB  codex:my-app › node_modules  <span class="dim">\~/.codex/worktrees/a1b2/my-app/node_modules</span>
+   &nbsp;
+   <span class="dim">Showing the last 4 of 131 entries (\-\-limit 0 for all).</span>
+   Total freed: 67.7 GB over 130 cleaned items (\~/.local/state/lu-cleaner/history.jsonl)
+   </div>
+
+</Steps>
+
+## Where to go next
+
+<CardGrid>
+	<LinkCard title="Your first cleanup" href="/lu-cleaner/getting-started/first-cleanup/" description="Every screen of the dashboard, from selection to summary." />
+	<LinkCard title="AI agent worktrees" href="/lu-cleaner/guides/ai-worktrees/" description="Remove finished Codex, Cursor, Conductor and Claude Code worktrees." />
+	<LinkCard title="React Native projects" href="/lu-cleaner/guides/react-native-projects/" description="node_modules, Pods and native builds across all your projects." />
+	<LinkCard title="Automation" href="/lu-cleaner/guides/automation/" description="Schedule clean --yes and read the JSON output." />
+</CardGrid>

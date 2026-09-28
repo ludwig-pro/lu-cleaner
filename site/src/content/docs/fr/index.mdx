@@ -1,0 +1,98 @@
+---
+title: lu-cleaner
+description: Libérez de l'espace disque sur un Mac de développeur — worktrees d'agents IA, node_modules, Pods, builds iOS/Android, simulateurs, émulateurs, caches des gestionnaires de paquets et données des outils IA.
+template: splash
+hero:
+  tagline: Le nettoyeur de disque des développeurs React Native, iOS et Android qui travaillent avec des agents de code IA. Il trouve les gigaoctets que CleanMyMac, mole et npkill ratent — et les supprime en toute sécurité.
+  image:
+    file: ../../../assets/logo.svg
+  actions:
+    - text: Commencer
+      link: /lu-cleaner/fr/getting-started/installation/
+      icon: right-arrow
+    - text: Pourquoi mon disque est-il plein ?
+      link: /lu-cleaner/fr/guides/disk-space-not-freed/
+      variant: minimal
+    - text: Voir sur GitHub
+      link: https://github.com/ludwig-pro/lu-cleaner
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<div class="terminal">
+<span class="acc">🧹 lu-cleaner</span>  <span class="dim">Macintosh HD</span> <span class="bad">███████████████████░ 97%</span> <span class="dim">· 16 GB free</span>   <span class="ok">✓</span><span class="dim"> scan done in 39s · 560 items ·</span> 238 GB <span class="dim">reclaimable</span>
+
+  <span class="dim">CATEGORY                      SIZE   ITEMS   SELECTED</span>
+<span class="acc">▸</span> 🌳 Worktrees                 45.3 GB      75     8.0 GB  <span class="dim">Codex · Cursor · Conductor · Claude</span>
+  📦 Project artifacts         63.2 GB     228    22.5 GB  <span class="dim">node_modules · Pods · builds</span>
+  📱 iOS Simulators            70.0 GB      23    29.1 GB  <span class="dim">dont 25 Go d'enregistrements XCTest</span>
+  🧠 AI tools                  42.2 GB     139    18.4 GB
+  🟨 JS toolchain              33.3 GB      76    18.0 GB  <span class="dim">Yarn Berry · jest · npm · pnpm</span>
+  🧩 IDEs                       6.7 GB      21     6.0 GB
+  🔨 Xcode · 🤖 Android · 🐳 Containers · 🧰 Toolchains · 💻 System …
+
+<span class="dim">Selected:</span> 381 items · <span class="ok">106.8 GB</span>  <span class="dim">·</span> <span class="cy">delete</span>   <span class="dim">space select · a smart · / filter · d clean · ? help</span>
+</div>
+
+## Pourquoi un nouveau nettoyeur ?
+
+Les agents de code IA ont changé ce qui remplit le disque d'un développeur. Chaque tâche Codex, Cursor, Conductor ou Claude Code peut créer une **worktree git** avec ses propres `node_modules`, `ios/Pods` et builds Android. Les simulateurs accumulent en silence des gigaoctets d'enregistrements de tests UI. Les gestionnaires de paquets gardent plusieurs caches globaux et versions de Node. Les nettoyeurs généralistes ne connaissent pas ces emplacements, ou les évitent volontairement.
+
+lu-cleaner les connaît — et sait lesquels peuvent être supprimés sans risque.
+
+<CardGrid>
+	<Card title="Worktrees d'agents IA" icon="seti:git">
+		Trouve chaque worktree liée (Codex, Cursor, Conductor, Claude Code, manuelle), affiche sa branche et son état — propre, modifiée, non poussée, mergée, orpheline — et retire celles qui sont terminées avec `git worktree remove`. Les branches sont toujours conservées.
+	</Card>
+	<Card title="Pensé pour React Native" icon="seti:react">
+		Analyse façon npkill des `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `.gradle`, `.cxx`, `.expo`… avec vérification des fichiers marqueurs et du `.gitignore` : un dossier `build` qui contient du code source n'est jamais touché.
+	</Card>
+	<Card title="Simulateurs et émulateurs" icon="laptop">
+		Simulateurs iOS, runtimes, dossiers d'appareils orphelins, enregistrements XCTest et logs unifiés ; AVD Android, images système inutilisées, NDK et distributions Gradle — y compris les SDK sur disque externe.
+	</Card>
+	<Card title="Sûr par conception" icon="approve-check">
+		Chaque chemin est revérifié juste avant la suppression : identifiants et configurations protégés, identité d'inode, applications ouvertes, bases de données ouvertes, processus qui travaillent dedans, travail non commité. Dry-run partout.
+	</Card>
+	<Card title="Rapide" icon="rocket">
+		Écrit en Go. Utilise l'appel macOS `getattrlistbulk` pour lire un dossier entier en un seul appel système — environ 3× plus rapide que `du` — et affiche les résultats au fil de l'eau.
+	</Card>
+	<Card title="Scriptable et compatible LLM" icon="document">
+		`--json` partout, règles strictes pour `--yes` en mode non interactif, et cette documentation est disponible en [llms.txt](/lu-cleaner/llms.txt) pour votre assistant de code.
+	</Card>
+</CardGrid>
+
+## Essayez en 30 secondes
+
+<Tabs>
+	<TabItem label="Interactif">
+		```bash
+		go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+		lu-cleaner            # tableau de bord, éléments recommandés présélectionnés
+		```
+	</TabItem>
+	<TabItem label="Tout choisir soi-même">
+		```bash
+		lu-cleaner clean --no-smart   # rien n'est présélectionné
+		lu-cleaner worktrees          # uniquement les worktrees git
+		lu-cleaner artifacts          # uniquement node_modules, Pods, builds…
+		```
+	</TabItem>
+	<TabItem label="Scripts">
+		```bash
+		lu-cleaner scan --json > report.json
+		lu-cleaner clean --yes --smart --dry-run   # le plan, rien n'est supprimé
+		lu-cleaner clean --yes --smart             # nettoie les éléments recommandés
+		```
+	</TabItem>
+</Tabs>
+
+## Pour aller plus loin
+
+<CardGrid>
+	<LinkCard title="Installation" href="/lu-cleaner/fr/getting-started/installation/" description="go install, depuis les sources, alias shell." />
+	<LinkCard title="Votre premier nettoyage" href="/lu-cleaner/fr/getting-started/first-cleanup/" description="Visite guidée du tableau de bord." />
+	<LinkCard title="Nettoyer les worktrees d'agents IA" href="/lu-cleaner/fr/guides/ai-worktrees/" description="Retirer les worktrees terminées, alléger les autres." />
+	<LinkCard title="Modèle de sécurité" href="/lu-cleaner/fr/concepts/safety/" description="Ce que lu-cleaner ne supprimera jamais, et pourquoi." />
+</CardGrid>

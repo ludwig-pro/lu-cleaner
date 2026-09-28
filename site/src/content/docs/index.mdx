@@ -1,0 +1,98 @@
+---
+title: lu-cleaner
+description: Free disk space on a macOS developer machine — AI agent worktrees, node_modules, Pods, iOS/Android builds, simulators, emulators, package-manager caches and AI tools data.
+template: splash
+hero:
+  tagline: The disk cleaner for React Native, iOS and Android developers who work with AI coding agents. Finds the gigabytes that CleanMyMac, mole and npkill miss — and removes them safely.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /lu-cleaner/getting-started/installation/
+      icon: right-arrow
+    - text: Why is my disk full?
+      link: /lu-cleaner/guides/disk-space-not-freed/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/ludwig-pro/lu-cleaner
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<div class="terminal">
+<span class="acc">🧹 lu-cleaner</span>  <span class="dim">Macintosh HD</span> <span class="bad">███████████████████░ 97%</span> <span class="dim">· 16 GB free</span>   <span class="ok">✓</span><span class="dim"> scan done in 39s · 560 items ·</span> 238 GB <span class="dim">reclaimable</span>
+
+  <span class="dim">CATEGORY                      SIZE   ITEMS   SELECTED</span>
+<span class="acc">▸</span> 🌳 Worktrees                 45.3 GB      75     8.0 GB  <span class="dim">Codex · Cursor · Conductor · Claude</span>
+  📦 Project artifacts         63.2 GB     228    22.5 GB  <span class="dim">node_modules · Pods · builds</span>
+  📱 iOS Simulators            70.0 GB      23    29.1 GB  <span class="dim">incl. 25 GB of XCTest recordings</span>
+  🧠 AI tools                  42.2 GB     139    18.4 GB
+  🟨 JS toolchain              33.3 GB      76    18.0 GB  <span class="dim">Yarn Berry · jest · npm · pnpm</span>
+  🧩 IDEs                       6.7 GB      21     6.0 GB
+  🔨 Xcode · 🤖 Android · 🐳 Containers · 🧰 Toolchains · 💻 System …
+
+<span class="dim">Selected:</span> 381 items · <span class="ok">106.8 GB</span>  <span class="dim">·</span> <span class="cy">delete</span>   <span class="dim">space select · a smart · / filter · d clean · ? help</span>
+</div>
+
+## Why another cleaner?
+
+AI coding agents changed what fills a developer's disk. Every Codex, Cursor, Conductor or Claude Code task can spawn a **git worktree** with its own `node_modules`, `ios/Pods` and Android build. Simulators silently collect gigabytes of UI-test recordings. Package managers keep several global caches and node versions. General-purpose cleaners either don't know these places, or deliberately stay away from them.
+
+lu-cleaner knows them — and knows which ones are safe to remove.
+
+<CardGrid>
+	<Card title="AI agent worktrees" icon="seti:git">
+		Finds every linked worktree (Codex, Cursor, Conductor, Claude Code, manual), shows its branch and status — clean, dirty, unpushed, merged, orphaned — and removes finished ones with `git worktree remove`. Branches are always kept.
+	</Card>
+	<Card title="React Native aware" icon="seti:react">
+		npkill-style scan of `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `.gradle`, `.cxx`, `.expo`… with marker files and git-ignore checks so a folder named `build` that is source code is never touched.
+	</Card>
+	<Card title="Simulators & emulators" icon="laptop">
+		iOS simulators, runtimes, orphan device folders, XCTest recordings and unified logs; Android AVDs, unused system images, NDKs and Gradle distributions — including SDKs on external drives.
+	</Card>
+	<Card title="Safe by design" icon="approve-check">
+		Every path is re-checked right before deletion: protected credentials and configs, inode identity, running apps, open databases, processes working inside, uncommitted work. Dry-run everywhere.
+	</Card>
+	<Card title="Fast" icon="rocket">
+		Written in Go. Uses macOS `getattrlistbulk` to read whole directories in one system call — about 3× faster than `du` — and streams results into the UI as they are found.
+	</Card>
+	<Card title="Scriptable & LLM-friendly" icon="document">
+		`--json` everywhere, strict rules for non-interactive `--yes`, and this documentation is available as [llms.txt](/lu-cleaner/llms.txt) for your coding assistant.
+	</Card>
+</CardGrid>
+
+## Try it in 30 seconds
+
+<Tabs>
+	<TabItem label="Interactive">
+		```bash
+		go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+		lu-cleaner            # dashboard, recommended items preselected
+		```
+	</TabItem>
+	<TabItem label="Pick everything yourself">
+		```bash
+		lu-cleaner clean --no-smart   # nothing preselected
+		lu-cleaner worktrees          # only git worktrees
+		lu-cleaner artifacts          # only node_modules, Pods, builds…
+		```
+	</TabItem>
+	<TabItem label="Scripted">
+		```bash
+		lu-cleaner scan --json > report.json
+		lu-cleaner clean --yes --smart --dry-run   # the plan, nothing deleted
+		lu-cleaner clean --yes --smart             # clean recommended items
+		```
+	</TabItem>
+</Tabs>
+
+## Where to go next
+
+<CardGrid>
+	<LinkCard title="Installation" href="/lu-cleaner/getting-started/installation/" description="Go install, from source, shell alias." />
+	<LinkCard title="Your first cleanup" href="/lu-cleaner/getting-started/first-cleanup/" description="A guided tour of the dashboard." />
+	<LinkCard title="Clean up AI agent worktrees" href="/lu-cleaner/guides/ai-worktrees/" description="Remove finished worktrees, strip the rest." />
+	<LinkCard title="Safety model" href="/lu-cleaner/concepts/safety/" description="What lu-cleaner will never delete, and why." />
+</CardGrid>

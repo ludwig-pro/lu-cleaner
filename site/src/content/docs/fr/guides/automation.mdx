@@ -1,0 +1,240 @@
+---
+title: Automatisation et scripts
+description: Utilisez lu-cleaner dans des scripts, des tâches planifiées et des agents de code IA, avec la sortie JSON, les règles de clean --yes, les codes de sortie et un rapport hebdomadaire.
+sidebar:
+  order: 8
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+lu-cleaner est interactif par défaut, mais chaque commande fonctionne aussi sans terminal. Les exécutions scriptées suivent **des règles plus strictes que le sélecteur**. Ainsi, une faute de frappe dans une tâche cron ne peut pas supprimer plus que prévu.
+
+## Sans terminal
+
+Quand l'entrée ou la sortie standard n'est pas un terminal (un pipe, une tâche planifiée, le shell d'un agent IA) :
+
+- `lu-cleaner` sans commande affiche le rapport de scan au lieu d'ouvrir le tableau de bord.
+- `worktrees`, `artifacts` et `devices` affichent leur liste au lieu d'ouvrir le sélecteur. `--list` fait de même dans un terminal.
+- `clean` refuse de s'exécuter sans `--yes` et se termine avec le code 2. Rien n'est jamais supprimé sans une sélection explicite ou `--yes`.
+- Les couleurs ne sont utilisées que si la sortie standard est un terminal. `--no-color` et la variable `NO_COLOR` les désactivent aussi.
+- L'indicateur de progression ne s'affiche que dans un terminal. Les avertissements, par exemple un scanner en échec, sont écrits sur la sortie d'erreur sous la forme `warning: provider …: …`.
+
+## Sortie JSON
+
+Ajoutez `--json` pour obtenir une sortie exploitable par une machine sur la sortie standard :
+
+| Commande | Contenu JSON |
+|---|---|
+| `lu-cleaner scan --json` | Occupation du disque, chaque élément correspondant, totaux par catégorie, erreurs des scanners et durées |
+| `lu-cleaner worktrees --json`, `artifacts --json`, `devices --json` | Le même rapport, limité à leurs catégories |
+| `lu-cleaner clean --yes … --json` | Un résultat par élément (`done`, `dry-run`, `skipped` ou `failed`), octets libérés estimés et mesurés, disque avant et après |
+| `lu-cleaner doctor --json` | Occupation du disque, instantanés APFS, Corbeille, applications en cours d'exécution qui bloquent un nettoyage, conseils |
+| `lu-cleaner history --json` | Nettoyages passés, avec le chemin du fichier d'historique |
+| `lu-cleaner catalog --json`, `config show --json`, `analyze <path> --json`, `version --json` | Chemins connus, configuration effective, tailles des dossiers, informations de build |
+
+Les tailles sont des entiers en octets. Dans `scan --json`, chaque élément possède `risk`, `method`, `recommended`, `cleanable`, `freed` et `age_days`, ainsi qu'un objet `meta` contenant des détails propres au scanner, comme le `status` et la `branch` d'un worktree ou le `package_manager` d'un `node_modules`. La [référence de la sortie JSON](/lu-cleaner/fr/reference/json-output/) documente chaque champ.
+
+Les filtres habituels (`-c`, `-k`, `--older-than`, `--risk`, `--smart`, `--min-size`) s'appliquent aussi à la sortie JSON. Contrairement au tableau texte, `scan --json` liste tous les éléments, sauf si vous passez `--top`.
+
+```bash
+# Espace libre, total récupérable et part recommandée, en octets
+lu-cleaner scan --json | jq '{free: .disk.free, reclaimable: .totals.size, recommended: .totals.recommended}'
+
+# Worktrees qui contiennent encore du travail : statut, outil, branche, chemin
+lu-cleaner worktrees --json | jq -r '.items[]
+  | select(.kind != "worktree-prune" and .meta.status != "clean" and .meta.status != "merged")
+  | [.meta.status, .meta.tool, .meta.branch, .path] | @tsv'
+
+# Nombre d'octets que libérerait le nettoyage recommandé
+lu-cleaner clean --yes --smart --dry-run --json | jq '[.results[] | select(.status == "dry-run") | .freed] | add'
+```
+
+## Règles de `clean --yes`
+
+`clean --yes` scanne, filtre, affiche le plan et nettoie, sans sélecteur ni confirmation. `worktrees --yes`, `artifacts --yes` et `devices --yes` suivent les mêmes règles, limitées à leurs catégories.
+
+1. **Un filtre restrictif est obligatoire.** Passez `--smart`, `--category`/`-c` ou `--kind`/`-k`. Sans l'un d'eux, lu-cleaner refuse de s'exécuter et se termine avec le code 2 : `clean --yes` seul signifierait « supprimer tout ce qui a été trouvé ». `worktrees`, `artifacts` et `devices` sont considérés comme déjà restreints par leur catégorie.
+2. **Les éléments caution sont écartés, sauf si vous les demandez.** Le risque maximal autorisé est <span class="risk moderate">moderate</span>, sauf si vous passez `--risk caution`. Les éléments caution peuvent contenir des données qui comptent pour vous : worktrees modifiés, sessions, dossiers ignorés par git inconnus, simulateurs avec des données. Les éléments <span class="risk never">never</span> sont en rapport seul et ne sont jamais nettoyés.
+3. **Pas de taille minimale.** `--min-size` vaut 0 par défaut, alors que les listes utilisent le réglage `min_size`, 1 Mo par défaut.
+4. **Le plan est affiché en premier.** Vous voyez chaque élément avant toute suppression, sauf avec `--json`.
+5. **`--dry-run` (`-n`) effectue les mêmes vérifications qu'un vrai nettoyage** : garde-fou de sécurité, fichiers marqueurs, identité d'inode, applications en cours d'exécution, processus qui travaillent à l'intérieur, bases de données ouvertes. Il indique ce qui serait ignoré, mais ne supprime rien. Une exception : les vérifications git d'un worktree (modifications non commitées, verrou, commits présents sur aucune branche) ne s'exécutent que lors de la suppression réelle.
+6. **Les éléments imbriqués ne sont nettoyés qu'une fois.** Si un dossier et un dossier qu'il contient correspondent tous les deux, seul le dossier extérieur est conservé dans le plan.
+
+Deux options changent le sens de « nettoyer ». Les scripts ne devraient presque jamais les utiliser :
+
+| Option | Effet |
+|---|---|
+| `--trash` | Déplace les éléments dans `~/.Trash` au lieu de les supprimer. **Aucun espace n'est libéré** tant que la Corbeille n'est pas vidée. |
+| `--force` | Ignore les protections liées aux applications en cours d'exécution, les processus qui travaillent à l'intérieur, et les vérifications des worktrees (modifiés, verrouillés, HEAD détachée). Du travail peut être perdu. |
+
+Combinaisons utiles :
+
+```bash
+lu-cleaner clean --yes --smart --dry-run                 # le plan recommandé, rien n'est supprimé
+lu-cleaner clean --yes --smart --risk safe               # uniquement les caches purs recommandés
+lu-cleaner clean --yes --smart -c js,xcode               # éléments JS et Xcode recommandés
+lu-cleaner clean --yes -k node_modules --older-than 60d  # node_modules des projets inactifs depuis 60 jours
+```
+
+:::caution
+Sans `--smart`, un filtre de catégorie prend **tous** les éléments de cette catégorie jusqu'au risque moderate. Cela inclut les `node_modules` du projet que vous avez ouvert ce matin. Ajoutez `--older-than` ou `--smart`, et lisez d'abord le plan de `--dry-run`.
+:::
+
+Chaque nettoyage réel est ajouté à `~/.local/state/lu-cleaner/history.jsonl`, ou à `$XDG_STATE_HOME/lu-cleaner/` si cette variable est définie. Consultez-le avec `lu-cleaner history`. Pour donner à une tâche ses propres réglages, faites pointer `LU_CLEANER_CONFIG` vers un autre fichier de configuration. Consultez [Configuration](/lu-cleaner/fr/reference/configuration/).
+
+## Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | Succès, y compris les simulations, « rien à nettoyer » et les exécutions où certains éléments ont été **ignorés** |
+| `1` | Erreur d'exécution, ou au moins un élément dont le nettoyage a **échoué** |
+| `2` | Erreur d'utilisation : commande ou option inconnue, valeur invalide, `clean --yes` sans filtre restrictif, `clean` sans terminal et sans `--yes`, `clean --json` sans `--yes` |
+| `130` | Interrompu par Ctrl-C ou SIGTERM |
+
+Un élément ignoré n'est pas une erreur. Il a été laissé de côté volontairement : une application tourne, un processus travaille à l'intérieur, le worktree contient des modifications non commitées. Si votre script doit connaître les éléments ignorés, lisez `.results[] | select(.status == "skipped")` dans la sortie JSON.
+
+## Un rapport hebdomadaire
+
+Cette tâche **ne fait que produire un rapport**. Chaque lundi, elle enregistre le scan en JSON ainsi qu'un récapitulatif d'une ligne par catégorie, et affiche une notification macOS quand le disque est rempli à plus de 90 %. Elle utilise `jq`, préinstallé sur les versions récentes de macOS ou disponible avec `brew install jq`.
+
+Enregistrez ce script sous `~/bin/lu-cleaner-weekly.sh` :
+
+```bash
+#!/bin/zsh
+# Rapport disque hebdomadaire avec lu-cleaner. Rien n'est supprimé.
+set -eu
+
+# Les tâches planifiées démarrent avec un PATH minimal : ajoutez les dossiers de lu-cleaner, git et jq.
+export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# cron ne définit pas TMPDIR. Sans lui, lu-cleaner ne trouve pas les caches
+# rangés dans votre dossier temporaire utilisateur (Metro, Jest...).
+export TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)"
+
+logs="$HOME/Library/Logs/lu-cleaner"
+mkdir -p "$logs"
+day="$(date +%Y-%m-%d)"
+
+lu-cleaner scan --json > "$logs/scan-$day.json"
+lu-cleaner scan --summary > "$logs/summary-$day.txt"
+
+used="$(lu-cleaner doctor --no-scan --json | jq '.used_pct | floor')"
+if [ "$used" -ge 90 ]; then
+  reco="$(jq '.totals.recommended / 1e9 | floor' "$logs/scan-$day.json")"
+  osascript -e "display notification \"Disk ${used}% full, ${reco} GB recommended\" with title \"lu-cleaner\""
+fi
+
+# Facultatif : nettoyer aussi les éléments SAFE recommandés (caches purs uniquement).
+# lu-cleaner clean --yes --smart --risk safe >> "$logs/clean-$day.log" 2>&1
+```
+
+Planifiez-le ensuite :
+
+<Tabs>
+<TabItem label="launchd (recommandé)">
+
+Créez `~/Library/LaunchAgents/dev.example.lu-cleaner-weekly.plist`. Remplacez `/Users/you` par votre dossier personnel, car launchd ne développe pas `~` :
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.example.lu-cleaner-weekly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/you/bin/lu-cleaner-weekly.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/lu-cleaner-weekly.err</string>
+</dict>
+</plist>
+```
+
+Chargez-le, puis lancez-le une fois pour vérifier :
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.example.lu-cleaner-weekly.plist
+launchctl kickstart gui/$(id -u)/dev.example.lu-cleaner-weekly
+```
+
+Pour le retirer : `launchctl bootout gui/$(id -u)/dev.example.lu-cleaner-weekly`. Si le Mac est en veille à l'heure prévue, launchd exécute la tâche à son réveil.
+
+</TabItem>
+<TabItem label="cron">
+
+Lancez `crontab -e` et ajoutez :
+
+```bash
+# Chaque lundi à 09:30
+30 9 * * 1 /bin/zsh "$HOME/bin/lu-cleaner-weekly.sh" >> "$HOME/Library/Logs/lu-cleaner-weekly.log" 2>&1
+```
+
+cron saute les tâches pendant que le Mac est en veille : c'est pourquoi launchd est le meilleur choix sur macOS.
+
+</TabItem>
+</Tabs>
+
+:::note[Les tâches en arrière-plan ont moins de permissions]
+Une tâche planifiée n'hérite pas de l'accès complet au disque (Full Disk Access) que vous avez peut-être accordé à votre application de terminal. Certaines tailles peuvent alors être inconnues, comme celle de la Corbeille, et le rapport peut légèrement différer d'une exécution dans votre terminal.
+:::
+
+### Pourquoi la tâche planifiée ne nettoie que les éléments safe
+
+Si vous décommentez la dernière ligne du script, gardez `--smart --risk safe` :
+
+- Les éléments <span class="risk safe">safe</span> sont des caches purs que leurs outils régénèrent automatiquement.
+- Les éléments <span class="risk moderate">moderate</span> vous coûtent du temps pour les récupérer : une réinstallation, un téléchargement, un rebuild. C'est à vous de décider quand payer ce coût.
+- Les éléments <span class="risk caution">caution</span> peuvent contenir des données : ils ne sont jamais nettoyés sans `--risk caution`.
+
+Si Xcode ou le Simulateur tourne à ce moment-là, les éléments qu'ils protègent sont ignorés et le code de sortie reste 0. Consultez [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
+
+## Utiliser lu-cleaner depuis un agent de code IA
+
+Les agents de code exécutent des commandes sans terminal, ce qui correspond bien aux règles ci-dessus. Une méthode sûre :
+
+1. **Inspecter.** Lancez `lu-cleaner scan --summary` pour une vue d'ensemble, ou `lu-cleaner scan -c artifacts --json` pour le détail.
+2. **Planifier.** Lancez `lu-cleaner clean --yes --dry-run` avec des **catégories explicites**, par exemple `-c js --smart` ou `-c artifacts --older-than 30d`, et montrez le plan à l'humain.
+3. **Nettoyer.** Lancez la même commande sans `--dry-run`, uniquement après accord de l'humain.
+
+Certaines garanties aident ici. Un agent ne peut pas supprimer le worktree dans lequel il s'exécute : lu-cleaner refuse toute cible qui contient son propre répertoire courant. Un worktree dans lequel un autre processus travaille est classé caution, et tout dossier dans lequel un processus travaille est ignoré au moment du nettoyage. Malgré tout, ne laissez jamais un agent ajouter `--force` ou `--risk caution` de sa propre initiative.
+
+Ajoutez une règle comme celle-ci à votre `AGENTS.md` ou `CLAUDE.md` :
+
+```markdown
+## Nettoyage du disque (lu-cleaner)
+- Inspecter d'abord : `lu-cleaner scan --summary`, ou `lu-cleaner scan --json` pour le détail.
+- Toujours prévisualiser avec `--dry-run` et des catégories explicites, par ex.
+  `lu-cleaner clean --yes --dry-run -c js --smart`, et me montrer le plan.
+- Lancer la même commande sans `--dry-run` uniquement après mon accord.
+- Ne jamais utiliser `--force`, `--risk caution` ni `--trash`.
+```
+
+### Documentation pour les LLM
+
+Cette documentation est aussi publiée dans des formats plus faciles à exploiter pour les modèles de langage :
+
+| Fichier | Contenu |
+|---|---|
+| [`/lu-cleaner/llms.txt`](/lu-cleaner/llms.txt) | Index court avec les faits essentiels et des liens vers les autres fichiers |
+| [`/lu-cleaner/llms-small.txt`](/lu-cleaner/llms-small.txt) | Documentation condensée, bien adaptée au contexte d'un agent |
+| [`/lu-cleaner/llms-full.txt`](/lu-cleaner/llms-full.txt) | La documentation complète en un seul fichier |
+
+Ces fichiers sont générés à partir de la documentation en anglais. Indiquez `https://ludwig-pro.github.io/lu-cleaner/llms-small.txt` à votre agent avant qu'il ne lance lu-cleaner.
+
+## Voir aussi
+
+- [Référence de `lu-cleaner clean`](/lu-cleaner/reference/commands/clean/)
+- [Sortie JSON](/lu-cleaner/fr/reference/json-output/)
+- [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/)
+- [Worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/)

@@ -1,0 +1,159 @@
+---
+title: Installation
+description: Install lu-cleaner on macOS with go install or from source, add a short alias, grant Full Disk Access, and update or uninstall it.
+sidebar:
+  order: 1
+---
+
+import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+lu-cleaner is a single Go binary. It installs no daemon, launch agent or background service, and it never asks for `sudo`. Its own files live in exactly two places, both created only when needed: the [configuration file](/lu-cleaner/reference/configuration/) (when you create one) and the cleaning history (after your first real cleanup).
+
+## Requirements
+
+| Requirement | Details |
+| --- | --- |
+| **macOS 12 Monterey or later** | Apple Silicon or Intel. lu-cleaner is macOS-only: it relies on APFS, `getattrlistbulk`, `xcrun simctl` and the macOS layout of `~/Library`. |
+| **Go 1.25 or later** | Only needed to build and install the binary. |
+| **git** | Used by the worktree scanner (`git worktree list`, `git worktree remove`). Without it, worktrees are simply not scanned. The Xcode Command Line Tools provide it. |
+
+Everything else is optional: Xcode, Android Studio, Docker, Node.js version managers and AI tools are only inspected when they are installed.
+
+## Install with `go install`
+
+This is the recommended way:
+
+```bash
+go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+```
+
+Go places the binary in `$(go env GOPATH)/bin`, which is usually `~/go/bin` (or in `$GOBIN` if you set it). If your shell cannot find `lu-cleaner` afterwards, add that folder to your `PATH`:
+
+```bash
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Check the installation:
+
+```bash
+lu-cleaner version
+```
+
+:::note
+A binary built by `go install` reports its version as `dev`, because the version string is injected at build time by the Makefile. Everything else behaves the same.
+:::
+
+## Build from source
+
+Use this to try an unreleased change or to contribute.
+
+<Steps>
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/ludwig-pro/lu-cleaner.git
+   cd lu-cleaner
+   ```
+
+2. Build `bin/lu-cleaner`. The version is taken from `git describe`:
+
+   ```bash
+   make build
+   ./bin/lu-cleaner scan --summary
+   ```
+
+3. Install it into `$(go env GOPATH)/bin`:
+
+   ```bash
+   make install
+   ```
+
+</Steps>
+
+`make run ARGS="scan --summary"` builds and runs in one step, and `make test` runs the unit tests. See [Contributing](/lu-cleaner/about/contributing/) for the development workflow.
+
+## Add a short alias
+
+`lu-cleaner` is long to type. `make install` suggests `luc`:
+
+```bash
+echo 'alias luc=lu-cleaner' >> ~/.zshrc
+source ~/.zshrc
+luc scan --summary
+```
+
+The rest of this documentation spells out `lu-cleaner` in full.
+
+## Grant Full Disk Access (optional)
+
+macOS privacy protection (TCC) prevents any app from reading a few folders unless you grant it **Full Disk Access**. lu-cleaner works without it, but two measurements are then unavailable:
+
+| Folder | Without Full Disk Access |
+| --- | --- |
+| `~/.Trash` | The Trash is listed as *Trash (size unknown — needs Full Disk Access)*. Cleaning it asks Finder to empty it instead of deleting the files directly (Finder may ask you for an Automation permission). `lu-cleaner doctor` reports the Trash size as unknown. |
+| `~/Library/Application Support/MobileSync/Backup` | iPhone and iPad backups made by Finder are listed as *iPhone/iPad backups (size unknown)*. They are report-only either way: lu-cleaner never deletes device backups. |
+
+`lu-cleaner analyze` also warns when some entries are unreadable and their sizes are partial.
+
+To grant it:
+
+<Steps>
+
+1. Open **System Settings → Privacy & Security → Full Disk Access**.
+2. Enable the app you run lu-cleaner from: Terminal, iTerm2, Ghostty, Warp, or the editor whose integrated terminal you use. Add it with **+** if it is not listed.
+3. Quit and reopen that app so the permission applies.
+
+</Steps>
+
+:::tip
+Full Disk Access is granted to the terminal app, not to lu-cleaner, so every command run from that terminal gets it. Grant it only to a terminal you trust.
+:::
+
+## Update
+
+Run the same command again to fetch the latest version:
+
+```bash
+go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+```
+
+From a clone, pull and reinstall:
+
+```bash
+git pull
+make install
+```
+
+Your configuration and history are kept.
+
+## Uninstall
+
+Before removing the binary, check where your files live. The configuration moves if you set `LU_CLEANER_CONFIG` or `XDG_CONFIG_HOME`, the history if you set `XDG_STATE_HOME`:
+
+```bash
+lu-cleaner config path    # the configuration file
+lu-cleaner config show    # also prints the history file
+```
+
+Then remove the binary, the configuration and the history:
+
+```bash
+rm "$(command -v lu-cleaner)"
+rm -rf ~/.config/lu-cleaner        # config.toml, if you created one
+rm -rf ~/.local/state/lu-cleaner   # history.jsonl
+```
+
+Finally, delete the `alias luc=lu-cleaner` line from `~/.zshrc` if you added it. lu-cleaner leaves nothing else behind.
+
+:::caution
+If you cleaned with `--trash` or `use_trash = true`, the items are still in `~/.Trash`. They keep using disk space until you empty the Trash.
+:::
+
+## Next steps
+
+<CardGrid>
+	<LinkCard title="Quick start" href="/lu-cleaner/getting-started/quick-start/" description="A five-minute tour: scan, dashboard, dry run, clean." />
+	<LinkCard title="Your first cleanup" href="/lu-cleaner/getting-started/first-cleanup/" description="A guided walkthrough of the interactive dashboard." />
+</CardGrid>

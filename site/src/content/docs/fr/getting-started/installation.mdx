@@ -1,0 +1,159 @@
+---
+title: Installation
+description: Installez lu-cleaner sur macOS avec go install ou depuis les sources, ajoutez un alias court, accordez l'accès complet au disque, puis mettez-le à jour ou désinstallez-le.
+sidebar:
+  order: 1
+---
+
+import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+lu-cleaner est un binaire Go unique. Il n'installe ni daemon, ni agent de lancement, ni service en arrière-plan, et ne demande jamais `sudo`. Ses propres fichiers se trouvent à deux endroits seulement, créés uniquement en cas de besoin : le [fichier de configuration](/lu-cleaner/fr/reference/configuration/) (si vous en créez un) et l'historique des nettoyages (après votre premier vrai nettoyage).
+
+## Prérequis
+
+| Prérequis | Détails |
+| --- | --- |
+| **macOS 12 Monterey ou plus récent** | Apple Silicon ou Intel. lu-cleaner ne fonctionne que sur macOS : il s'appuie sur APFS, `getattrlistbulk`, `xcrun simctl` et l'organisation de `~/Library` propre à macOS. |
+| **Go 1.25 ou plus récent** | Nécessaire uniquement pour compiler et installer le binaire. |
+| **git** | Utilisé par le scanner de worktrees (`git worktree list`, `git worktree remove`). Sans git, les worktrees ne sont tout simplement pas analysés. Les Command Line Tools de Xcode le fournissent. |
+
+Tout le reste est facultatif : Xcode, Android Studio, Docker, les gestionnaires de versions de Node.js et les outils d'IA ne sont inspectés que s'ils sont installés.
+
+## Installer avec `go install`
+
+C'est la méthode recommandée :
+
+```bash
+go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+```
+
+Go place le binaire dans `$(go env GOPATH)/bin`, en général `~/go/bin` (ou dans `$GOBIN` si vous l'avez défini). Si votre shell ne trouve pas `lu-cleaner` ensuite, ajoutez ce dossier à votre `PATH` :
+
+```bash
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Vérifiez l'installation :
+
+```bash
+lu-cleaner version
+```
+
+:::note
+Un binaire compilé par `go install` affiche la version `dev`, car la chaîne de version est injectée à la compilation par le Makefile. Tout le reste fonctionne de la même façon.
+:::
+
+## Compiler depuis les sources
+
+Utilisez cette méthode pour essayer une modification pas encore publiée ou pour contribuer.
+
+<Steps>
+
+1. Clonez le dépôt :
+
+   ```bash
+   git clone https://github.com/ludwig-pro/lu-cleaner.git
+   cd lu-cleaner
+   ```
+
+2. Compilez `bin/lu-cleaner`. La version est tirée de `git describe` :
+
+   ```bash
+   make build
+   ./bin/lu-cleaner scan --summary
+   ```
+
+3. Installez-le dans `$(go env GOPATH)/bin` :
+
+   ```bash
+   make install
+   ```
+
+</Steps>
+
+`make run ARGS="scan --summary"` compile et lance en une seule étape, et `make test` exécute les tests unitaires. Consultez [Contribuer](/lu-cleaner/fr/about/contributing/) pour le processus de développement.
+
+## Ajouter un alias court
+
+`lu-cleaner` est long à taper. `make install` suggère `luc` :
+
+```bash
+echo 'alias luc=lu-cleaner' >> ~/.zshrc
+source ~/.zshrc
+luc scan --summary
+```
+
+Le reste de cette documentation écrit `lu-cleaner` en entier.
+
+## Accorder l'accès complet au disque (facultatif)
+
+La protection de la vie privée de macOS (TCC) empêche toute application de lire certains dossiers, sauf si vous lui accordez l'**accès complet au disque**. lu-cleaner fonctionne sans, mais deux mesures sont alors indisponibles :
+
+| Dossier | Sans accès complet au disque |
+| --- | --- |
+| `~/.Trash` | La Corbeille est listée sous le nom *Trash (size unknown — needs Full Disk Access)*. La nettoyer demande au Finder de la vider au lieu de supprimer directement les fichiers (le Finder peut vous demander une autorisation d'automatisation). `lu-cleaner doctor` indique que la taille de la Corbeille est inconnue. |
+| `~/Library/Application Support/MobileSync/Backup` | Les sauvegardes d'iPhone et d'iPad faites par le Finder sont listées sous le nom *iPhone/iPad backups (size unknown)*. Elles sont de toute façon en rapport seul : lu-cleaner ne supprime jamais les sauvegardes d'appareils. |
+
+`lu-cleaner analyze` vous avertit aussi lorsque certaines entrées sont illisibles et que leurs tailles sont partielles.
+
+Pour l'accorder :
+
+<Steps>
+
+1. Ouvrez **Réglages Système → Confidentialité et sécurité → Accès complet au disque**.
+2. Activez l'application depuis laquelle vous lancez lu-cleaner : Terminal, iTerm2, Ghostty, Warp, ou l'éditeur dont vous utilisez le terminal intégré. Ajoutez-la avec **+** si elle n'est pas dans la liste.
+3. Quittez puis rouvrez cette application pour que l'autorisation s'applique.
+
+</Steps>
+
+:::tip
+L'accès complet au disque est accordé à l'application de terminal, pas à lu-cleaner : toutes les commandes lancées depuis ce terminal en bénéficient. Ne l'accordez qu'à un terminal de confiance.
+:::
+
+## Mettre à jour
+
+Relancez la même commande pour récupérer la dernière version :
+
+```bash
+go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
+```
+
+Depuis un clone, récupérez les changements et réinstallez :
+
+```bash
+git pull
+make install
+```
+
+Votre configuration et votre historique sont conservés.
+
+## Désinstaller
+
+Avant de supprimer le binaire, vérifiez où se trouvent vos fichiers. La configuration change d'emplacement si vous avez défini `LU_CLEANER_CONFIG` ou `XDG_CONFIG_HOME`, l'historique si vous avez défini `XDG_STATE_HOME` :
+
+```bash
+lu-cleaner config path    # le fichier de configuration
+lu-cleaner config show    # affiche aussi le fichier d'historique
+```
+
+Supprimez ensuite le binaire, la configuration et l'historique :
+
+```bash
+rm "$(command -v lu-cleaner)"
+rm -rf ~/.config/lu-cleaner        # config.toml, si vous en avez créé un
+rm -rf ~/.local/state/lu-cleaner   # history.jsonl
+```
+
+Enfin, supprimez la ligne `alias luc=lu-cleaner` de `~/.zshrc` si vous l'avez ajoutée. lu-cleaner ne laisse rien d'autre derrière lui.
+
+:::caution
+Si vous avez nettoyé avec `--trash` ou `use_trash = true`, les éléments sont toujours dans `~/.Trash`. Ils continuent d'occuper de l'espace disque tant que vous n'avez pas vidé la Corbeille.
+:::
+
+## Étapes suivantes
+
+<CardGrid>
+	<LinkCard title="Démarrage rapide" href="/lu-cleaner/fr/getting-started/quick-start/" description="Un tour en cinq minutes : analyse, tableau de bord, simulation, nettoyage." />
+	<LinkCard title="Votre premier nettoyage" href="/lu-cleaner/fr/getting-started/first-cleanup/" description="Une visite guidée du tableau de bord interactif." />
+</CardGrid>

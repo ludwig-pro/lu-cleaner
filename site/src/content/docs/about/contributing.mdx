@@ -1,0 +1,279 @@
+---
+title: Contributing
+description: Build and test lu-cleaner, find your way in the code, add a catalog entry or a scanner, regenerate the reference pages, run the documentation site, and what a safety review checks.
+sidebar:
+  order: 3
+---
+
+import { FileTree, Steps } from '@astrojs/starlight/components';
+
+Contributions are welcome, especially new cache locations, better detection of what is safe to remove, and bug reports with a (redacted) `lu-cleaner scan` output. lu-cleaner deletes files on people's machines, so every change that can lead to a deletion gets a [safety review](#safety-review).
+
+## Set up
+
+You need macOS, Go 1.25 or newer, and git. Node.js 22 is only needed for the documentation site.
+
+```bash
+git clone https://github.com/ludwig-pro/lu-cleaner
+cd lu-cleaner
+make build                       # bin/lu-cleaner
+./bin/lu-cleaner scan --summary  # read-only
+./bin/lu-cleaner clean --yes --smart --dry-run
+```
+
+Stick to `scan`, `--dry-run` and the picker's dry-run mode while you develop. `make run ARGS="scan -c js --summary"` builds and runs in one step.
+
+### Make targets
+
+| Target | What it does |
+|---|---|
+| `make build` | Compile `bin/lu-cleaner` (version from `git describe`) |
+| `make install` | Install into `$(go env GOPATH)/bin` |
+| `make test` | `go test ./...` |
+| `make vet` | `go vet ./...` |
+| `make fmt` | `gofmt -w .` |
+| `make lint` | `go vet` plus a `gofmt` check |
+| `make run ARGS="…"` | Build, then run with the given arguments |
+| `make clean` | Remove `bin/` |
+| `make docs` | Regenerate the reference pages of the site from the CLI |
+| `make site-dev` | `make docs`, then the site on `http://localhost:4321/lu-cleaner/` |
+| `make site-build` | `make docs`, then build the site into `site/dist` |
+
+## Architecture tour
+
+<FileTree>
+- cmd/lu-cleaner/main.go entry point, version set with `-ldflags`
+- internal/
+  - core/ data model: `Item`, `Risk`, `Method`, `Category`, `Provider`, `Env`, `Filter`, `Recommend`, `TopLevel`
+  - fsx/ concurrent directory sizing (allocated blocks, hardlink aware, `getattrlistbulk`), size and age parsing
+  - sysx/ free disk space, running processes, working directories of processes, APFS local snapshots
+  - safety/ the `Guard`: last line of defence before any removal
+  - config/ `~/.config/lu-cleaner/config.toml`
+  - engine/ runs the scanners concurrently and streams item upserts
+  - clean/ executor: re-checks, delete, Trash, commands, `git worktree remove`, history
+  - providers/
+    - registry.go the list of scanners
+    - catalog/ data-driven well-known paths, one `data_*.go` file per domain
+    - worktrees/ git worktrees of AI tools and humans
+    - artifacts/ project build and dependency outputs
+    - apple/ Xcode and iOS simulators
+    - android/ AVDs, SDK packages, Gradle, Android Studio, JDKs
+    - aitools/ AI coding tools data
+    - jsdev/ node versions, package-manager stores, JS tool leftovers
+    - system/ Trash, containers, Homebrew and toolchains, editors, Downloads, macOS facts
+  - tui/ Bubble Tea: the picker and the analyzer
+  - cli/ Cobra commands, output tables, JSON, `gen-docs`
+- docs/ARCHITECTURE.md
+- site/ this documentation (Astro Starlight)
+</FileTree>
+
+The flow is one-directional:
+
+```text
+providers ──emit(*Item) upsert──▶ engine.Run ──▶ TUI picker / CLI table / JSON
+                                                   │ user selection
+                                                   ▼
+                              clean.Run(items) ── Guard.Check each target ──▶ rm / Trash / command / git worktree remove
+                                                   └─▶ history.jsonl + statfs before/after
+```
+
+The contracts every change must keep:
+
+- **A provider never deletes anything.** It only emits `*core.Item` values. All removals go through `clean.Run`.
+- **Emitting the same `Item.ID` again replaces the previous value.** Use it to show an item with `Sizing: true` first, then its measured version. Never mutate an item after emitting it: emit `it.Clone()` if you keep working on it.
+- **`Size` is the allocated size** (`st_blocks × 512`, hardlinks counted once). Set `Reclaim` (through `SetReclaim`) when deleting frees less.
+- **`LastUsed` is the best signal of real activity**, not a folder's modification time. It drives ages, `--older-than` and smart select.
+- **Every target is re-validated by `safety.Guard`** right before removal, independently of the scanner that produced it.
+
+`internal/cli` receives all of its dependencies through `cli.App` (providers, config, cleaner, TUI, system queries), so its tests run the real commands against fakes. The [How it works](/lu-cleaner/concepts/how-it-works/) and [Safety model](/lu-cleaner/concepts/safety/) pages describe the behavior in more detail.
+
+## Add a catalog entry
+
+Most new cache locations are a few lines of data. Use the catalog when the location is fixed (a glob under `~/` or `$TMPDIR/`) and deciding whether to propose it needs no logic beyond age, size, a running app or "keep the newest N".
+
+<Steps>
+
+1. **Pick the data file of the domain** in `internal/providers/catalog/`: `data_apple.go`, `data_androiddev.go`, `data_jsdev.go`, `data_ai.go` or `data_system.go`. Check the comment at the top of the file: some locations are deliberately owned by a dynamic scanner and must not be added to the catalog.
+
+2. **Add an `Entry`** to the `add(...)` call:
+
+   ```go
+   Entry{
+   	ID: "js-example-tool-cache", Category: core.CatJS, Name: "Example tool cache",
+   	Paths: []string{"~/Library/Caches/example-tool"}, Risk: core.RiskSafe,
+   	Note: "Downloads cached by example-tool; fetched again on its next run.",
+   },
+   Entry{
+   	ID: "js-example-tool-versions", Category: core.CatJS, Name: "Example tool versions",
+   	Paths: []string{"~/.example-tool/versions/*"}, Risk: core.RiskModerate,
+   	Mode: Each, KeepLatest: 1,
+   	Note: "Old versions of example-tool; the newest is kept and `example-tool install` downloads others again.",
+   },
+   ```
+
+3. **Run the catalog tests**, then try the entry on your machine:
+
+   ```bash
+   go test ./internal/providers/catalog/
+   make build
+   ./bin/lu-cleaner catalog -k js-example-tool
+   ./bin/lu-cleaner scan -k js-example-tool-cache
+   ```
+
+4. **Regenerate the reference pages** with `make docs` and commit the updated `site/src/content/docs/reference/catalog.md`. CI fails when it is out of date.
+
+</Steps>
+
+### Entry fields
+
+| Field | Required | Meaning |
+|---|---|---|
+| `ID` | yes | Unique, kebab-case; becomes the item kind (`--kind`). Prefix it with the domain (`js-`, `ai-`, `xcode-`…) |
+| `Category` | yes | One of the `core.Cat*` categories |
+| `Name` | yes | Human label |
+| `Paths` | yes | Globs starting with `~/` or `$TMPDIR/`, `filepath.Glob` syntax (`*`, `?`, `[…]`), no `**` |
+| `Note` | yes | One sentence: what it is, and how it comes back after cleaning |
+| `Risk` | yes | `core.RiskSafe`, `RiskModerate`, `RiskCaution` or `RiskNever`. The zero value is `RiskSafe`: choose deliberately |
+| `Method` | no | Default `MethodDelete`. `MethodCommand` needs `Command`; `MethodReport` never cleans; `MethodWorktree` is not allowed here |
+| `Command`, `Requires` | no | Argv of the cleanup command; binary that must be on `PATH` for the entry to be evaluated at all |
+| `Exclude` | no | Base-name globs of matches to drop |
+| `Mode` | no | `Group` (default: all matches form one item) or `Each` (one item per match) |
+| `KeepLatest` | no | With `Mode: Each`, keep the N most recently modified matches out of the list |
+| `OlderThan` | no | Only matches whose modification time is older than this |
+| `ProcessGuard` | no | Processes that must not run while it is cleaned (exact executable name, or a path substring containing `/`) |
+| `MinBytes` | no | Below this size the item is not selectable (and hidden in `Each` mode) |
+| `Files` | no | Matches are files, not directories |
+| `AllowGitRepo` | no | Allow a match that is a git repository (rare: a cloned spec repository) |
+| `Recommended` | no | Force smart select for this entry, whatever its size or age (a warning still blocks it) |
+
+### What the tests check
+
+`TestEntriesAreValid` runs over every entry and fails on a non-kebab-case or duplicate ID, an unknown category, a missing name or note, missing paths, a command method without a command, a worktree method, a path that does not start with `~/` or `$TMPDIR/`, a `**` or an invalid glob, a plain (non-glob) path the safety guard protects, or `KeepLatest` without `Mode: Each`.
+
+`TestDataFilesAreCompiled` protects against a trap of Go's build system. A file name ending in `_<GOOS>.go` or `_<GOARCH>.go` is an implicit build constraint: `data_js.go` would only be compiled for `GOOS=js`, `data_android.go` only for Android, `data_ios.go` only for iOS. The file would be silently ignored on macOS, and its entries would vanish without any error. That is why the JS and Android files are named `data_jsdev.go` and `data_androiddev.go`. The test fails if any `data_*.go` file is excluded from darwin builds; if you create a new data file, give it a name that is not a GOOS or GOARCH value.
+
+## Add a scanner
+
+Write a scanner when deciding needs logic: which version is in use, whether a folder still belongs to something alive, what a tool's own state says. A fixed path belongs in the catalog.
+
+<Steps>
+
+1. **Create a package** in `internal/providers/<name>/` implementing `core.Provider`:
+
+   ```go
+   package example
+
+   import (
+   	"context"
+   	"path/filepath"
+
+   	"github.com/ludwig-pro/lu-cleaner/internal/core"
+   	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+   )
+
+   type Provider struct{}
+
+   func New() *Provider { return &Provider{} }
+
+   func (p *Provider) ID() string                  { return "example" }
+   func (p *Provider) Title() string               { return "Example tool" }
+   func (p *Provider) Categories() []core.Category { return []core.Category{core.CatJS} }
+
+   // Scan must honour ctx and never modify anything.
+   func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+   	dir := filepath.Join(env.Home, ".example-tool", "state")
+   	if !fsx.IsDir(dir) || env.Excluded(dir) || env.IsProtected(dir) {
+   		return nil
+   	}
+   	it := &core.Item{
+   		ID: "example:example-state:" + dir, Category: core.CatJS,
+   		Kind: "example-state", Name: "Example tool state", Path: dir,
+   		Risk: core.RiskModerate, Method: core.MethodDelete, Selectable: true,
+   		Note:   "State of example-tool; rebuilt on its next run (slower first start).",
+   		Sizing: true,
+   	}
+   	emit(it.Clone()) // placeholder, shown right away
+   	st, _ := fsx.Size(ctx, dir, nil)
+   	if ctx.Err() != nil {
+   		return ctx.Err()
+   	}
+   	it.Sizing = false
+   	it.Size, it.Files, it.LastUsed = st.Bytes, st.Files, st.Newest
+   	it.SetReclaim(st.Reclaim)
+   	emit(it) // same ID: replaces the placeholder
+   	return nil
+   }
+   ```
+
+2. **Register it** in `internal/providers/registry.go`. The order of `All()` is the display priority.
+
+3. **Test it** with fixtures built in `t.TempDir()` and a fake `core.Runner` for external commands (`git`, `xcrun`…), so tests never depend on the machine. Add a `real_test.go` gated behind `LU_REAL=1` that scans the real machine read-only and prints what it finds.
+
+4. **Document its kinds** in `site/src/content/docs/reference/scanners.md`: what each kind is, its risk, its method and when it is recommended.
+
+</Steps>
+
+Guidelines for scanners:
+
+- Run external commands through `env.Output` (the `Runner`), with a timeout, and only read-only ones: `brew cleanup -n`, `watchman --no-spawn`, `sqlite3 -readonly` on an immutable URI. `env.Runner` already disables git's optional locks.
+- Measure with `fsx.Size` without options: the engine gives every scan a shared cache, so a folder measured by two scanners is walked once.
+- Consult `env.IsProtected` and `env.Excluded` before proposing a path. Report items living on another volume with `MethodReport` instead of proposing them.
+- Set `Warn` for anything a human should look at first (an app running, a process inside, a version pinned by a project). A warning keeps the item out of smart select.
+- Use `ProcessGuard`, `RequireSibling` and `Recheck` to express conditions the executor must re-verify at clean time. `Recheck` must fail closed.
+- Prefer the owning tool's cleanup command (`MethodCommand`) when the tool keeps its own bookkeeping.
+- A panic inside `Scan` is caught and shown as a scanner error, but not in goroutines the scanner starts itself. Return errors instead of panicking, and stop quickly when `ctx` is cancelled.
+
+## Tests
+
+```bash
+make test                                    # everything
+go test ./internal/safety/                   # one package
+go test ./internal/cli/ -run TestCleanYes -v # tests matching a name
+make lint                                    # vet + gofmt check
+```
+
+Real-machine tests scan your own Mac, read-only, and print what they find. They are skipped unless you opt in:
+
+```bash
+LU_REAL=1 go test ./internal/providers/apple -run TestRealMachine -v
+LU_REAL=1 go test ./internal/providers/worktrees -run TestRealMachine -v
+```
+
+CI runs on macOS: `gofmt`, `go vet`, `go test ./...`, `make build`, and `make docs` followed by a check that the generated reference pages are committed.
+
+## Reference pages and the site
+
+The documentation lives in `site/` (Astro Starlight). English pages are in `site/src/content/docs/`, French ones in `site/src/content/docs/fr/`.
+
+Two kinds of pages are **generated** and must never be edited by hand:
+
+- `reference/commands/*.md`, one per command, from the Cobra definitions (`Short`, `Long`, `Example`, flags);
+- `reference/catalog.md`, from the catalog entries.
+
+To change them, edit the command's help text or the catalog entry, then run:
+
+```bash
+make docs    # go run ./cmd/lu-cleaner gen-docs --out site/src/content/docs/reference
+```
+
+To work on the site:
+
+```bash
+cd site && npm install && npm run dev   # http://localhost:4321/lu-cleaner/
+```
+
+`make site-dev` does the same after regenerating the reference pages. Internal links must be absolute, include the `/lu-cleaner/` base and end with a slash (`/lu-cleaner/concepts/safety/`); the build validates them. Every page needs a `title`, a one-sentence `description` (also used for `llms.txt`) and a `sidebar.order`.
+
+## Safety review
+
+Any pull request that adds or changes something that can be deleted is reviewed against these questions. Answer them in the description.
+
+- **What exactly is proposed, and how does it come back?** The note must say it. If it does not come back (user files, recordings, sessions), the risk is <span class="risk caution">caution</span> at least.
+- **Is the risk the lowest honest level?** <span class="risk safe">safe</span> means a pure cache: no user data, regenerated automatically. When in doubt, go one level up.
+- **What if it is in use?** Declare a `ProcessGuard`, a warning, or a `Recheck` for state that can change between scan and clean. Checks fail closed.
+- **Could the path be something else?** Generic names need markers, content signatures, or git-ignore checks. Glob patterns must not match more than intended.
+- **Is the scanner read-only?** No writes and no commands with side effects at scan time.
+- **Is smart select still conservative?** Forcing `Recommended` needs a reason stronger than size.
+- **Does the guard still hold?** Changes to `internal/safety/guard.go` need tests in `guard_test.go`. Adding a protected path is always welcome; removing one needs a very good reason.
+
+Test your change with `--dry-run` on your own machine, and paste the relevant part of `scan` or `clean --dry-run` output in the pull request, with your own paths and names redacted (`~/dev/my-app`, `feature/login`).

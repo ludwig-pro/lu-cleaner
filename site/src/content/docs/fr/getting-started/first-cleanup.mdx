@@ -1,0 +1,296 @@
+---
+title: Votre premier nettoyage
+description: Une visite guidée du tableau de bord interactif, de la vue d'ensemble des catégories et de la sélection des éléments jusqu'à la confirmation, l'écran de progression et le récapitulatif de l'espace libéré.
+sidebar:
+  order: 3
+---
+
+import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Le tableau de bord interactif est la façon la plus sûre de nettoyer : vous voyez chaque élément avant que quoi que ce soit ne soit supprimé, les éléments recommandés sont présélectionnés pour vous, et chaque suppression est revérifiée au dernier moment. Cette visite suit un nettoyage complet, écran par écran. Les projets, chemins et tailles sont donnés à titre d'illustration.
+
+## Lancer le tableau de bord
+
+```bash
+lu-cleaner
+```
+
+`lu-cleaner clean` ouvre le même sélecteur. Les deux nécessitent un terminal interactif (au moins 40 × 10 ; 32 lignes ou plus pour voir le panneau de détails).
+
+:::tip[Commencez par une répétition]
+Lancez d'abord `lu-cleaner --dry-run`. Tout ce qui est décrit ici fonctionne de la même façon, le pied de page affiche **○ dry-run**, et le récapitulatif final indique ce qui *aurait* été libéré. Rien n'est touché.
+:::
+
+Les filtres habituels préfiltrent le tableau de bord, par exemple `lu-cleaner -c artifacts,worktrees --older-than 30d`. Pour démarrer sans aucune présélection, utilisez `lu-cleaner clean --no-smart`.
+
+## 1. Lire la vue d'ensemble des catégories
+
+Les scanners tournent en parallèle et transmettent leurs résultats au fil de l'eau : les catégories apparaissent et grossissent pendant que l'en-tête affiche `scanning 5/8 providers`. Quand le dernier scanner a terminé, la *sélection intelligente* présélectionne les éléments recommandés et le signale dans la ligne d'état.
+
+<div class="terminal">
+<span class="acc">🧹 lu-cleaner</span> <span class="ok">✓</span><span class="dim"> scan done in 21.4s · 339 items · </span>176 GB<span class="dim"> reclaimable</span>
+💾 <span class="bad">██████████████████████</span><span class="dim">░░</span> <span class="bad">91% used</span><span class="dim"> · </span>43.0 GB<span class="dim"> free of 494 GB</span>
+<span class="acc">Categories</span><span class="dim"> · enter to open</span>
+&nbsp;        <span class="dim">CATEGORY                                          SIZE       ITEMS      SELECTED</span>
+<span class="acc">› </span><span class="warn">[\~] </span><span class="acc">🌳 Worktrees                                   </span>   42.8 GB<span class="dim">    31 items</span><span class="ok">     ✓ 11.6 GB</span>
+&nbsp; <span class="warn">[\~] </span>📦 Project artifacts                              36.4 GB<span class="dim">   118 items</span><span class="ok">     ✓ 9.20 GB</span>
+&nbsp; <span class="warn">[\~] </span>📱 iOS Simulators                                 24.1 GB<span class="dim">    14 items</span><span class="ok">     ✓ 8.70 GB</span>
+&nbsp; <span class="warn">[\~] </span>🔨 Xcode                                          18.6 GB<span class="dim">    12 items</span><span class="ok">     ✓ 15.2 GB</span>
+&nbsp; <span class="warn">[\~] </span>🤖 Android                                        14.3 GB<span class="dim">    19 items</span><span class="ok">     ✓ 3.40 GB</span>
+&nbsp; <span class="warn">[\~] </span>🧠 AI tools                                       12.9 GB<span class="dim">    57 items</span><span class="ok">     ✓ 4.10 GB</span>
+&nbsp; <span class="warn">[\~] </span>🟨 JS toolchain                                   17.2 GB<span class="dim">    48 items</span><span class="ok">     ✓ 12.3 GB</span>
+&nbsp; <span class="warn">[\~] </span>🧩 IDEs                                           3.10 GB<span class="dim">    15 items</span><span class="ok">     ✓ 2.60 GB</span>
+&nbsp; <span class="warn">[\~] </span>💻 System                                         6.40 GB<span class="dim">    25 items</span><span class="ok">     ✓ 1.90 GB</span>
+<span class="ok">Smart selection: 131 items preselected (69.0 GB) — review, then press d to clean</span>
+<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">enter</span><span class="dim"> open  </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">t</span><span class="dim"> trash  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+</div>
+
+| Zone | Signification |
+| --- | --- |
+| En-tête | État de l'analyse, nombre d'éléments listés et total récupérable. |
+| Ligne 💾 | Occupation du volume qui contient votre dossier personnel, actualisée après chaque nettoyage. |
+| SIZE | Ce que libérerait le nettoyage de tous les éléments de la catégorie. Les entrées en rapport seul ne sont pas comptées. |
+| SELECTED | Taille de la sélection actuelle dans cette catégorie. |
+| `[✓]` `[~]` `[ ]` `[·]` | Tout est sélectionné, une partie, rien, ou rien n'est nettoyable (entrées en rapport seul). |
+| Ligne d'état | Le dernier message, ou à défaut une description de la catégorie sous le curseur. |
+| Pied de page | Nombre et taille des éléments sélectionnés, mode de nettoyage et principales touches. |
+
+Le mode affiché dans le pied de page compte : **delete permanently** libère l'espace immédiatement, **🗑 Trash mode** (activé ou désactivé avec `t`) déplace les éléments dans `~/.Trash` et ne libère rien tant que vous ne l'avez pas vidée, et **○ dry-run** ne touche à rien.
+
+Appuyez sur `s` pour trier les catégories par taille, et sur `space` pour sélectionner une catégorie entière d'un coup (ou, si une partie est déjà sélectionnée, pour la vider). Cette sélection groupée ignore volontairement les éléments de risque <span class="risk caution">caution</span> : vous devez ouvrir la catégorie et les choisir un par un.
+
+## 2. Ouvrir une catégorie
+
+Placez-vous sur **Project artifacts** et appuyez sur `enter` (ou `→`) :
+
+<div class="terminal">
+<span class="acc">🧹 lu-cleaner</span> <span class="ok">✓</span><span class="dim"> scan done in 21.4s · 339 items · </span>176 GB<span class="dim"> reclaimable</span>
+💾 <span class="bad">██████████████████████</span><span class="dim">░░</span> <span class="bad">91% used</span><span class="dim"> · </span>43.0 GB<span class="dim"> free of 494 GB</span>
+<span class="acc">📦 Project artifacts</span><span class="dim"> (118)</span><span class="dim"> · sort: size ↓ · ← back · tab next</span>
+&nbsp;     <span class="dim">NAME                           LOCATION                                  SIZE   AGE RISK</span>
+&nbsp; [ ] my-app › ios/build             <span class="dim">\~/dev/my-app/ios/build              </span>   2.10 GB <span class="dim">   5h</span> <span class="ok">safe</span>
+<span class="acc">› </span><span class="ok">[✓] </span><span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › node_modules          <span class="dim">\~/dev/my-app/node_modules           </span>   1.31 GB <span class="dim">   2d</span> <span class="warn">moderate</span>
+&nbsp; <span class="ok">[✓] </span>codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › ios/Pods              <span class="dim">\~/dev/my-app/ios/Pods               </span>    910 MB <span class="dim">   2d</span> <span class="warn">moderate</span>
+<span class="dim">…</span>
+<span class="dim">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+shop-app › node_modules<span class="dim"> · </span><span class="warn">moderate</span><span class="dim"> · node_modules · artifacts · 48,210 files</span>
+<span class="dim">Path     </span>/Users/you/dev/shop-app/node_modules
+<span class="dim">Method   </span>delete
+<span class="dim">Age      </span>last used 3mo ago (2026-06-24) · stale
+<span class="dim">Note     </span><span class="dim">Installed JS dependencies; reinstall with \`yarn install\` when you need the project again (minutes, network).</span>
+<span class="dim">Project  </span><span class="dim">\~/dev/shop-app</span>
+<span class="dim">Meta     </span><span class="cy">package_manager=yarn · project_type=react-native</span>
+&nbsp;
+<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+</div>
+
+Chaque ligne est un élément : quelque chose que lu-cleaner peut supprimer d'un seul bloc (un dossier `node_modules`, un worktree, un cache, un simulateur…).
+
+| Colonne | Signification |
+| --- | --- |
+| NAME | `projet › chemin` pour les artefacts de projet ; le préfixe `codex:` signifie que le projet se trouve dans un worktree Codex. |
+| LOCATION | Emplacement sur le disque. |
+| SIZE | Espace alloué sur le disque. `…` signifie que l'élément est encore en cours de mesure. |
+| AGE | Temps écoulé depuis la dernière utilisation de l'élément. La valeur passe en jaune, avec l'étiquette `stale`, au bout de 14 jours (`stale_after`). |
+| RISK | <span class="risk safe">safe</span>, <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> ou <span class="risk never">never</span>. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/). |
+| Étiquettes | `stale`, `⚠` (un avertissement), et des indications comme `dirty`, `↑2` (commits non poussés), `locked`, `running`, l'outil et `⎇ branche` pour les worktrees. |
+
+Les lignes grisées marquées `[·]` sont listées à titre informatif et ne peuvent pas être sélectionnées. Appuyez sur `space` sur l'une d'elles pour savoir pourquoi.
+
+Remarquez ce que la sélection intelligente a laissé de côté :
+
+- `my-app › ios/build` a été utilisé il y a 5 heures. La sélection intelligente ne présélectionne jamais les artefacts d'un projet utilisé au cours des dernières 24 heures : vous êtes probablement en train de travailler dessus.
+- `my-app › node_modules` et `my-app › ios/Pods` sont <span class="risk moderate">moderate</span> : les reconstruire prend du temps, ils ne sont donc recommandés qu'après 14 jours sans utilisation.
+
+Utilisez `tab` / `shift+tab` pour passer à la catégorie suivante ou précédente, `←` pour revenir à la vue d'ensemble, `/` pour filtrer par texte et `s` pour trier par taille, âge ou nom.
+
+## 3. Sélectionner ce qu'il faut nettoyer
+
+| Touche | Effet |
+| --- | --- |
+| `space` | Sélectionne ou désélectionne l'élément sous le curseur. |
+| `a` | Sélection intelligente sur la vue actuelle : les éléments recommandés sont sélectionnés, tous les autres désélectionnés. |
+| `A` | Sélectionne tous les éléments nettoyables de la vue, éléments <span class="risk caution">caution</span> compris. |
+| `n` | Ne sélectionne rien dans la vue. |
+| `i` | Inverse la sélection dans la vue. |
+
+Dans une catégorie, « la vue » est la liste affichée, après un éventuel filtre `/`. Sur la vue d'ensemble des catégories, ce sont tous les éléments visibles. La sélection est conservée quand vous passez d'une catégorie à l'autre.
+
+Quand vous sélectionnez un élément <span class="risk caution">caution</span>, la ligne d'état vous indique ce qui est en jeu, par exemple `⚠ caution: my-app · spike/old-ui — 3 uncommitted changes`.
+
+## 4. Lire les détails
+
+Sur un terminal de 32 lignes ou plus, un panneau de détails présente l'élément sous le curseur (en bas de l'écran ci-dessus). `enter` l'affiche ou le masque : appuyez dessus pour afficher le panneau sur un terminal plus petit, ou pour le masquer sur un grand.
+
+| Ligne | Ce qu'elle vous apprend |
+| --- | --- |
+| Première ligne | Nom, risque, type, scanner et nombre de fichiers. |
+| Path / Paths / Location | Exactement ce qui sera supprimé. Les éléments groupés (par exemple « Metro / Haste file maps (18) ») listent leurs premiers chemins. |
+| Method | `delete`, `trash (Trash mode)`, `command: …` (le nettoyage propre à l'outil, comme `xcrun simctl delete unavailable`), `worktree` (`git worktree remove`) ou `report`. |
+| Reclaim | Affichée quand une partie de la taille est partagée par des liens physiques (hardlinks) ailleurs et que la suppression libère moins. |
+| Age | Date de dernière utilisation, et si l'élément est inactif (stale). |
+| Warning | Pourquoi un élément est risqué ou n'a pas été recommandé. |
+| Note | Ce qu'est l'élément et comment il revient si vous en avez de nouveau besoin. |
+| Project, Meta | Le projet auquel il appartient et des détails fournis par le scanner (branche, gestionnaire de paquets, niveau d'API…). |
+
+Appuyez sur `o` pour afficher l'élément dans le Finder.
+
+## 5. Nettoyer et confirmer
+
+Appuyez sur `d` (ou `x`). Une fenêtre de confirmation montre ce qui va se passer :
+
+<div class="terminal">
+<span class="acc">╭──────────────────────────────────────────────────────────────────────────╮</span>
+<span class="acc">│</span>  Clean 131 items — 69.0 GB?                                              <span class="acc">│</span>
+<span class="acc">│</span>                                                                          <span class="acc">│</span>
+<span class="acc">│</span>    <span class="ok">safe     </span>   74 items    31.2 GB                                       <span class="acc">│</span>
+<span class="acc">│</span>    <span class="warn">moderate </span>   57 items    37.8 GB                                       <span class="acc">│</span>
+<span class="acc">│</span>                                                                          <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Method    </span><span class="bad">delete permanently</span><span class="dim"> — frees space now</span>                          <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Commands  </span><span class="cy">xcrun simctl delete unavailable</span>                               <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">          </span><span class="cy">git worktree remove …</span>                                         <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Running   </span><span class="bad">Xcode — items guarded by them will be skipped</span>                 <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Largest   </span><span class="dim">my-app · feature/login (2.40 GB), shop-app (2.30 GB), …</span>       <span class="acc">│</span>
+<span class="acc">│</span>                                                                          <span class="acc">│</span>
+<span class="acc">│</span>  <span class="cy">y/enter</span><span class="dim"> confirm  </span><span class="cy">n/esc</span><span class="dim"> cancel</span>                                           <span class="acc">│</span>
+<span class="acc">╰──────────────────────────────────────────────────────────────────────────╯</span>
+</div>
+
+- **Répartition par risque** : combien d'éléments de chaque niveau de risque, et leur taille.
+- **Method** : suppression définitive, déplacement vers la Corbeille, ou simulation.
+- **Commands** : les commandes externes qui seront lancées, comme `xcrun simctl delete unavailable` ou `git worktree remove`.
+- **Running** : certains éléments refusent d'être nettoyés tant qu'une application les utilise (Xcode pour DerivedData, Simulator pour les simulateurs…). lu-cleaner vérifie ces applications à ce moment-là ; les éléments protégés par une application en cours d'exécution seront ignorés, sauf si vous avez lancé lu-cleaner avec `--force`.
+- **Largest** : les plus gros éléments de la sélection (sur les terminaux de 24 lignes ou plus).
+
+Appuyez sur `y` ou `enter` pour confirmer, sur `n` ou `esc` pour annuler. Vous pouvez aussi nettoyer avant la fin de l'analyse : la fenêtre signale alors que les tailles peuvent être partielles.
+
+### Quand la sélection contient des éléments caution
+
+Si au moins un élément sélectionné est <span class="risk caution">caution</span>, la fenêtre passe au rouge et une seule touche ne suffit plus :
+
+<div class="terminal">
+<span class="bad">╭──────────────────────────────────────────────────────────────────────────╮</span>
+<span class="bad">│</span>  Clean 3 items — 7.90 GB?                                                <span class="bad">│</span>
+<span class="bad">│</span>                                                                          <span class="bad">│</span>
+<span class="bad">│</span>    <span class="warn">moderate </span>    2 items    5.80 GB                                       <span class="bad">│</span>
+<span class="bad">│</span>    <span class="bad">caution  </span>     1 item    2.10 GB                                       <span class="bad">│</span>
+<span class="bad">│</span>                                                                          <span class="bad">│</span>
+<span class="bad">│</span>  <span class="dim">Method    </span><span class="bad">delete permanently</span><span class="dim"> — frees space now</span>                          <span class="bad">│</span>
+<span class="bad">│</span>  <span class="dim">Commands  </span><span class="cy">git worktree remove …</span>                                         <span class="bad">│</span>
+<span class="bad">│</span>                                                                          <span class="bad">│</span>
+<span class="bad">│</span>  <span class="bad">⚠ 1 caution item selected: may hold data you care about.</span>                <span class="bad">│</span>
+<span class="bad">│</span>  Type yes to confirm: <span class="acc">▏</span>                                                  <span class="bad">│</span>
+<span class="bad">│</span>                                                                          <span class="bad">│</span>
+<span class="bad">│</span>  <span class="cy">enter</span><span class="dim"> confirm  </span><span class="cy">esc</span><span class="dim"> cancel</span>                                               <span class="bad">│</span>
+<span class="bad">╰──────────────────────────────────────────────────────────────────────────╯</span>
+</div>
+
+Tapez `yes` puis appuyez sur `enter`, ou sur `esc` pour annuler. Les éléments caution peuvent contenir quelque chose que vous ne pourrez pas régénérer : du travail non commité dans un worktree, des sessions d'agent, des données d'application. Une confirmation en une touche se déclenche facilement par réflexe ; taper un mot vous oblige à vous arrêter et à relire la liste.
+
+La confirmation n'est pas la dernière vérification. Un worktree qui contient des modifications non commitées, qui est verrouillé ou qui porte des commits sur une HEAD détachée est encore refusé au moment de la suppression, sauf si vous avez lancé lu-cleaner avec `--force`. Voir [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
+
+## 6. Suivre la progression
+
+<div class="terminal">
+<span class="acc">🧹 lu-cleaner</span> <span class="ok">✓</span><span class="dim"> scan done in 21.4s · 339 items · </span>176 GB<span class="dim"> reclaimable</span>
+💾 <span class="bad">██████████████████████</span><span class="dim">░░</span> <span class="bad">91% used</span><span class="dim"> · </span>43.0 GB<span class="dim"> free of 494 GB</span>
+&nbsp;
+<span class="acc">⠹ </span>Cleaning 131 items — 69.0 GB<span class="dim">   12s</span><span class="dim">   ctrl+c cancels</span>
+&nbsp;
+<span class="dim">items </span><span class="acc">████████████████████████████████</span><span class="dim">░░░░░░░░░░░░░░░░░░</span> 84/131
+<span class="dim">data  </span><span class="acc">██████████████████████████████▏</span><span class="dim">░░░░░░░░░░░░░░░░░░░</span> 41.6 GB / 69.0 GB
+<span class="dim">freed </span><span class="ok">41.2 GB</span>
+&nbsp;
+<span class="ok">✓</span> shop-app › node_modules              1.42 GB <span class="ok">\~/dev/shop-app/node_modules</span>
+<span class="ok">✓</span> shop-app › ios/Pods                   980 MB <span class="ok">\~/dev/shop-app/ios/Pods</span>
+<span class="warn">↷</span> shop-app                             2.30 GB <span class="warn">skipped: Xcode is running — quit it first (or use \-\-force)</span>
+<span class="ok">✓</span> my-app · feature/login               2.40 GB <span class="ok">git worktree removed (branch kept)</span>
+</div>
+
+Les suppressions de chemins s'exécutent quatre à la fois ; les commandes et les suppressions de worktrees s'exécutent l'une après l'autre. Chaque élément terminé reçoit une ligne :
+
+| Marque | Signification |
+| --- | --- |
+| `✓` | Terminé. |
+| `↷` | Ignoré, avec la raison : une application tourne, un processus travaille dans le dossier, le chemin a changé depuis l'analyse, le garde-fou de sécurité l'a refusé… |
+| `✗` | Échec, avec l'erreur. |
+| `○` | Simulation : ce qui aurait été fait. |
+
+Appuyez sur `ctrl+c` pour annuler : les éléments en cours se terminent, les autres sont ignorés avec le motif `cancelled`.
+
+## 7. Lire le récapitulatif
+
+<div class="terminal">
+<span class="acc">╭──────────────────────────────────────────────────────────────╮</span>
+<span class="acc">│</span>  <span class="ok">✓ Cleaning finished</span><span class="dim"> in 38.2s</span>                                <span class="acc">│</span>
+<span class="acc">│</span>  <span class="ok">129 done</span><span class="dim"> · </span><span class="warn">2 skipped</span>                                        <span class="acc">│</span>
+<span class="acc">│</span>                                                              <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Estimated freed  </span>65.4 GB                                    <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Measured freed   </span>64.8 GB<span class="dim">   (43.0 GB → 108 GB free)</span>          <span class="acc">│</span>
+<span class="acc">╰──────────────────────────────────────────────────────────────╯</span>
+<span class="dim">items </span><span class="acc">██████████████████████████████████████████████████</span> 131/131
+<span class="dim">data  </span><span class="acc">██████████████████████████████████████████████████</span> 69.0 GB / 69.0 GB
+<span class="dim">freed </span><span class="ok">65.4 GB</span>
+&nbsp;
+<span class="dim">press any key to return to the list</span>
+<span class="warn">↷</span> shop-app                             2.30 GB <span class="warn">skipped: Xcode is running — quit it first (or use \-\-force)</span>
+<span class="warn">↷</span> codex:my-app › node_modules          1.28 GB <span class="warn">skipped: in use: process 51234 runs a program or library from \~/.codex/…</span>
+<span class="ok">✓</span> shop-app › node_modules              1.42 GB <span class="ok">\~/dev/shop-app/node_modules</span>
+<span class="dim">…</span>
+</div>
+
+Les problèmes sont listés en premier. Deux chiffres comptent :
+
+- **Estimated freed** additionne ce que chaque élément nettoyé devait libérer.
+- **Measured freed** est la différence d'espace libre sur le volume de votre dossier personnel entre avant et après le nettoyage, telle que la signale le système de fichiers.
+
+Ils sont rarement identiques, puisque d'autres applications continuent d'écrire sur le disque. Quand la valeur mesurée est inférieure à la moitié de l'estimation, le récapitulatif suggère de lancer `lu-cleaner doctor` (section suivante).
+
+Appuyez sur n'importe quelle touche pour revenir aux listes. Les éléments nettoyés disparaissent ; les éléments ignorés ou en échec restent listés et sélectionnés. Pour réessayer, quittez l'application qui les bloquait et appuyez de nouveau sur `d`.
+
+Chaque nettoyage est enregistré dans l'historique (`lu-cleaner history`), et quand vous quittez avec `q`, le récapitulatif du dernier s'affiche dans votre terminal :
+
+<div class="terminal">
+<span class="ok">✓</span> 129 items cleaned · 65.4 GB freed (estimated)
+&nbsp; Disk free: 43.0 GB → 108 GB (64.8 GB measured)
+<span class="warn">Skipped:</span> 2
+&nbsp; - codex:my-app › node_modules: in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules
+&nbsp; - shop-app: Xcode is running — quit it first (or use \-\-force)
+</div>
+
+## Si l'espace n'est pas libéré
+
+macOS ne rend pas toujours l'espace supprimé immédiatement. Voici ce qu'il faut vérifier, dans l'ordre :
+
+<Steps>
+
+1. **Lancez le diagnostic.** `doctor` liste les instantanés locaux APFS, la taille de la Corbeille et les applications en cours d'exécution qui bloquent le nettoyage :
+
+   ```bash
+   lu-cleaner doctor
+   ```
+
+2. **Les instantanés locaux** (Time Machine) conservent les blocs des fichiers supprimés jusqu'à leur expiration, au bout d'environ 24 heures. `doctor` affiche les commandes `tmutil` pour les alléger ou les supprimer. lu-cleaner ne les lance jamais à votre place.
+
+3. **La Corbeille.** Si vous avez nettoyé en mode Corbeille (`t`, `--trash` ou `use_trash = true`), rien n'est libéré tant que la Corbeille n'est pas vidée. La catégorie System propose de la vider.
+
+4. **Les fichiers ouverts.** Un processus en cours d'exécution garde les fichiers supprimés alloués jusqu'à ce qu'il se termine : Simulator, Xcode, les daemons Gradle (`./gradlew --stop`), Docker, un agent qui travaille dans un worktree. Quittez-les.
+
+5. **Les autres volumes.** La valeur mesurée ne concerne que le volume de votre dossier personnel. Les éléments nettoyés sur un disque externe libèrent de l'espace sur ce disque-là.
+
+</Steps>
+
+[Pourquoi l'espace libéré n'apparaît pas](/lu-cleaner/fr/guides/disk-space-not-freed/) détaille chaque cas, y compris les liens physiques, les clones APFS, l'espace purgeable et l'image disque de Docker.
+
+## Étapes suivantes
+
+<CardGrid>
+	<LinkCard title="Raccourcis clavier" href="/lu-cleaner/fr/reference/keyboard-shortcuts/" description="Toutes les touches du sélecteur et de l'analyseur de disque." />
+	<LinkCard title="Niveaux de risque et sélection intelligente" href="/lu-cleaner/fr/concepts/risk-and-smart-select/" description="Ce qui est présélectionné, et pourquoi." />
+	<LinkCard title="Worktrees des agents IA" href="/lu-cleaner/fr/guides/ai-worktrees/" description="Faites le ménage après Codex, Cursor, Conductor et Claude Code." />
+	<LinkCard title="Modèle de sécurité" href="/lu-cleaner/fr/concepts/safety/" description="Tout ce qui est vérifié avant qu'un chemin soit supprimé." />
+</CardGrid>

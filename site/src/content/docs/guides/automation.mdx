@@ -1,0 +1,240 @@
+---
+title: Automation and scripting
+description: Use lu-cleaner from scripts, scheduled jobs and AI coding agents, with JSON output, the rules of clean --yes, exit codes and a weekly report.
+sidebar:
+  order: 8
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+lu-cleaner is interactive by default, but every command also works without a terminal. Scripted runs follow **stricter rules than the picker**. That way a typo in a cron job cannot delete more than you meant to.
+
+## Without a terminal
+
+When stdin or stdout is not a terminal (a pipe, a scheduled job, an AI agent's shell):
+
+- `lu-cleaner` with no command prints the scan report instead of opening the dashboard.
+- `worktrees`, `artifacts` and `devices` print their list instead of opening the picker. `--list` does the same on a terminal.
+- `clean` refuses to run without `--yes` and exits with code 2. Nothing is ever deleted without an explicit selection or `--yes`.
+- Colors are only used when stdout is a terminal. `--no-color` and the `NO_COLOR` variable also turn them off.
+- The progress spinner only shows on a terminal. Warnings, such as a scanner that failed, go to stderr as `warning: provider …: …`.
+
+## JSON output
+
+Add `--json` to get machine-readable output on stdout:
+
+| Command | JSON content |
+|---|---|
+| `lu-cleaner scan --json` | Disk usage, every matching item, totals by category, scanner errors and timings |
+| `lu-cleaner worktrees --json`, `artifacts --json`, `devices --json` | The same report, limited to their categories |
+| `lu-cleaner clean --yes … --json` | One result per item (`done`, `dry-run`, `skipped` or `failed`), estimated and measured bytes freed, disk before and after |
+| `lu-cleaner doctor --json` | Disk usage, APFS snapshots, Trash, running apps that block a cleanup, tips |
+| `lu-cleaner history --json` | Past cleanups, with the history file path |
+| `lu-cleaner catalog --json`, `config show --json`, `analyze <path> --json`, `version --json` | Known paths, effective configuration, directory sizes, build info |
+
+Sizes are integers in bytes. In `scan --json`, each item has `risk`, `method`, `recommended`, `cleanable`, `freed` and `age_days`, and a `meta` object with scanner-specific details, such as a worktree's `status` and `branch` or the `package_manager` of a `node_modules`. The [JSON output reference](/lu-cleaner/reference/json-output/) documents every field.
+
+The usual filters (`-c`, `-k`, `--older-than`, `--risk`, `--smart`, `--min-size`) apply to the JSON output too. Unlike the text table, `scan --json` lists every item unless you pass `--top`.
+
+```bash
+# Free space, reclaimable total and the recommended part, in bytes
+lu-cleaner scan --json | jq '{free: .disk.free, reclaimable: .totals.size, recommended: .totals.recommended}'
+
+# Worktrees that still hold work: status, tool, branch, path
+lu-cleaner worktrees --json | jq -r '.items[]
+  | select(.kind != "worktree-prune" and .meta.status != "clean" and .meta.status != "merged")
+  | [.meta.status, .meta.tool, .meta.branch, .path] | @tsv'
+
+# How many bytes the recommended cleanup would free
+lu-cleaner clean --yes --smart --dry-run --json | jq '[.results[] | select(.status == "dry-run") | .freed] | add'
+```
+
+## Rules of `clean --yes`
+
+`clean --yes` scans, filters, prints the plan and cleans, with no picker and no confirmation. `worktrees --yes`, `artifacts --yes` and `devices --yes` follow the same rules, limited to their categories.
+
+1. **A narrowing filter is mandatory.** Pass `--smart`, `--category`/`-c` or `--kind`/`-k`. Without one, lu-cleaner refuses to run and exits with code 2: `clean --yes` alone would mean "delete everything that was found". `worktrees`, `artifacts` and `devices` count as narrowed by their category.
+2. **Caution items are left out unless you ask for them.** The highest risk allowed is <span class="risk moderate">moderate</span>, unless you pass `--risk caution`. Caution items may hold data you care about: dirty worktrees, sessions, unknown git-ignored folders, simulators with data. <span class="risk never">never</span> items are report-only and are never cleaned.
+3. **No minimum size.** `--min-size` defaults to 0, while lists use the `min_size` setting, 1 MB by default.
+4. **The plan is printed first.** You can see every item before anything is deleted, unless you use `--json`.
+5. **`--dry-run` (`-n`) runs the same checks as a real clean**: safety guard, marker files, inode identity, running apps, processes working inside, open databases. It reports what would be skipped, but deletes nothing. One exception: the git checks of a worktree (uncommitted changes, lock, commits on no branch) only run during the real removal.
+6. **Nested items are cleaned once.** If a folder and a folder inside it both match, only the outer one is kept in the plan.
+
+Two flags change what "clean" means. Scripts should almost never use them:
+
+| Flag | Effect |
+|---|---|
+| `--trash` | Moves items to `~/.Trash` instead of deleting them. **No space is freed** until the Trash is emptied. |
+| `--force` | Ignores running-app guards, processes working inside, and the dirty, locked and detached-HEAD checks of worktrees. Work can be lost. |
+
+Useful combinations:
+
+```bash
+lu-cleaner clean --yes --smart --dry-run                 # the recommended plan, nothing deleted
+lu-cleaner clean --yes --smart --risk safe               # recommended pure caches only
+lu-cleaner clean --yes --smart -c js,xcode               # recommended JS and Xcode items
+lu-cleaner clean --yes -k node_modules --older-than 60d  # node_modules of projects idle for 60 days
+```
+
+:::caution
+Without `--smart`, a category filter takes **every** item of that category up to moderate risk. That includes the `node_modules` of the project you opened this morning. Add `--older-than` or `--smart`, and read the `--dry-run` plan first.
+:::
+
+Every real clean is added to `~/.local/state/lu-cleaner/history.jsonl`, or `$XDG_STATE_HOME/lu-cleaner/` if that variable is set. Read it with `lu-cleaner history`. To give a job its own settings, point `LU_CLEANER_CONFIG` to another config file. See [Configuration](/lu-cleaner/reference/configuration/).
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success, including dry runs, "nothing to clean", and runs where some items were **skipped** |
+| `1` | Runtime error, or at least one item **failed** to clean |
+| `2` | Usage error: unknown command or flag, invalid value, `clean --yes` without a narrowing filter, `clean` without a terminal and without `--yes`, `clean --json` without `--yes` |
+| `130` | Interrupted by Ctrl-C or SIGTERM |
+
+A skipped item is not an error. It was left alone on purpose: an app is running, a process works inside it, the worktree has uncommitted changes. If your script needs to know about skipped items, read `.results[] | select(.status == "skipped")` in the JSON output.
+
+## A weekly report
+
+This job **only reports**. Every Monday it saves the scan as JSON and a one-line-per-category summary, and shows a macOS notification when the disk is more than 90% full. It uses `jq`, which is preinstalled on recent macOS versions or available with `brew install jq`.
+
+Save this script as `~/bin/lu-cleaner-weekly.sh`:
+
+```bash
+#!/bin/zsh
+# Weekly disk report with lu-cleaner. Nothing is deleted.
+set -eu
+
+# Scheduled jobs start with a minimal PATH: add where lu-cleaner, git and jq live.
+export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# cron does not set TMPDIR. Without it, lu-cleaner cannot find the caches
+# kept in your per-user temp folder (Metro, Jest...).
+export TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)"
+
+logs="$HOME/Library/Logs/lu-cleaner"
+mkdir -p "$logs"
+day="$(date +%Y-%m-%d)"
+
+lu-cleaner scan --json > "$logs/scan-$day.json"
+lu-cleaner scan --summary > "$logs/summary-$day.txt"
+
+used="$(lu-cleaner doctor --no-scan --json | jq '.used_pct | floor')"
+if [ "$used" -ge 90 ]; then
+  reco="$(jq '.totals.recommended / 1e9 | floor' "$logs/scan-$day.json")"
+  osascript -e "display notification \"Disk ${used}% full, ${reco} GB recommended\" with title \"lu-cleaner\""
+fi
+
+# Optional: also clean the recommended SAFE items (pure caches only).
+# lu-cleaner clean --yes --smart --risk safe >> "$logs/clean-$day.log" 2>&1
+```
+
+Then schedule it:
+
+<Tabs>
+<TabItem label="launchd (recommended)">
+
+Create `~/Library/LaunchAgents/dev.example.lu-cleaner-weekly.plist`. Replace `/Users/you` with your home folder, because launchd does not expand `~`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.example.lu-cleaner-weekly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/you/bin/lu-cleaner-weekly.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/lu-cleaner-weekly.err</string>
+</dict>
+</plist>
+```
+
+Load it, and run it once to check:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.example.lu-cleaner-weekly.plist
+launchctl kickstart gui/$(id -u)/dev.example.lu-cleaner-weekly
+```
+
+To remove it: `launchctl bootout gui/$(id -u)/dev.example.lu-cleaner-weekly`. If the Mac is asleep at the scheduled time, launchd runs the job when it wakes up.
+
+</TabItem>
+<TabItem label="cron">
+
+Run `crontab -e` and add:
+
+```bash
+# Every Monday at 09:30
+30 9 * * 1 /bin/zsh "$HOME/bin/lu-cleaner-weekly.sh" >> "$HOME/Library/Logs/lu-cleaner-weekly.log" 2>&1
+```
+
+cron skips jobs while the Mac is asleep, which is why launchd is the better choice on macOS.
+
+</TabItem>
+</Tabs>
+
+:::note[Background jobs have fewer permissions]
+A scheduled job doesn't inherit the Full Disk Access you may have granted to your terminal app. Some sizes can then be unknown, such as the Trash, and the report may differ slightly from a run in your terminal.
+:::
+
+### Why the scheduled job only cleans safe items
+
+If you uncomment the last line of the script, keep `--smart --risk safe`:
+
+- <span class="risk safe">safe</span> items are pure caches that their tools regenerate automatically.
+- <span class="risk moderate">moderate</span> items cost you time to get back: a reinstall, a download, a rebuild. You should decide when to pay that cost.
+- <span class="risk caution">caution</span> items can hold data, so they are never cleaned without `--risk caution`.
+
+If Xcode or the Simulator is running at that time, the items they guard are skipped and the exit code stays 0. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
+
+## Use lu-cleaner from an AI coding agent
+
+Coding agents run commands without a terminal, which suits the rules above. A safe workflow:
+
+1. **Inspect.** Run `lu-cleaner scan --summary` for an overview, or `lu-cleaner scan -c artifacts --json` for details.
+2. **Plan.** Run `lu-cleaner clean --yes --dry-run` with **explicit categories**, for example `-c js --smart` or `-c artifacts --older-than 30d`, and show the plan to the human.
+3. **Clean.** Run the same command without `--dry-run`, only after the human approves it.
+
+Some guarantees help here. An agent cannot remove the worktree it runs in: lu-cleaner refuses any target that contains its own current directory. A worktree where another process is working is marked caution, and any folder that a process works in is skipped at clean time. Still, never let an agent add `--force` or `--risk caution` on its own.
+
+Add a rule like this to your `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+## Disk cleanup (lu-cleaner)
+- Inspect first: `lu-cleaner scan --summary`, or `lu-cleaner scan --json` for details.
+- Always preview with `--dry-run` and explicit categories, e.g.
+  `lu-cleaner clean --yes --dry-run -c js --smart`, and show me the plan.
+- Run the same command without `--dry-run` only after I approve it.
+- Never use `--force`, `--risk caution` or `--trash`.
+```
+
+### Documentation for LLMs
+
+This documentation is also published in formats that are easier for language models to use:
+
+| File | Content |
+|---|---|
+| [`/lu-cleaner/llms.txt`](/lu-cleaner/llms.txt) | Short index with key facts and links to the other files |
+| [`/lu-cleaner/llms-small.txt`](/lu-cleaner/llms-small.txt) | Condensed documentation, a good fit for an agent's context |
+| [`/lu-cleaner/llms-full.txt`](/lu-cleaner/llms-full.txt) | The complete documentation in one file |
+
+Point your agent to `https://ludwig-pro.github.io/lu-cleaner/llms-small.txt` before it runs lu-cleaner.
+
+## Related
+
+- [`lu-cleaner clean` reference](/lu-cleaner/reference/commands/clean/)
+- [JSON output](/lu-cleaner/reference/json-output/)
+- [Safety model](/lu-cleaner/concepts/safety/)
+- [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/)

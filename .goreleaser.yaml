@@ -1,0 +1,32 @@
+version: 2
+project_name: lu-cleaner
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lu-cleaner
+    main: ./cmd/lu-cleaner
+    binary: lu-cleaner
+    env: [CGO_ENABLED=0]
+    goos: [darwin]
+    goarch: [arm64, amd64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+universal_binaries:
+  - replace: true
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_macOS_universal'
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:']

@@ -1,0 +1,263 @@
+---
+title: Nettoyer les worktrees des agents IA
+description: Retrouvez les worktrees git laissés par Codex, Cursor, Conductor et Claude Code, voyez lesquels peuvent être supprimés sans risque et libérez leur espace sans perdre de travail.
+sidebar:
+  order: 1
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex, Cursor, Conductor et Claude Code peuvent exécuter chaque tâche dans son propre **worktree git**. Un worktree est une copie de travail complète de votre dépôt, avec ses propres `node_modules`, `ios/Pods`, `ios/build` et build Android. Pour une application React Native, cela représente un à plusieurs gigaoctets par tâche. Les outils suppriment rarement ces worktrees une fois la tâche terminée.
+
+lu-cleaner retrouve ces worktrees où qu'ils se trouvent. Il indique quel outil a créé chacun d'eux et dans quel état se trouve son travail git. Il supprime les worktrees terminés avec `git worktree remove`, et **la branche est toujours conservée**.
+
+```bash
+lu-cleaner worktrees                  # sélecteur interactif (alias : lu-cleaner wt)
+lu-cleaner worktrees --list           # la même liste sous forme de tableau
+lu-cleaner scan -c worktrees --all    # avec le risque, les recommandations ★ et les avertissements
+```
+
+<div class="terminal">
+<span class="dim">$</span> lu-cleaner worktrees --list
+NAME                              TOOL       BRANCH               STATUS       SIZE  AGE  PATH
+my-app · feature/login            codex      feature/login        <span class="ok">merged</span>    2.40 GB   9d  <span class="dim">~/.codex/worktrees/a1b2/my-app</span>
+my-app · c3d4                     codex      (detached)           <span class="ok">clean</span>     1.90 GB   3w  <span class="dim">~/.codex/worktrees/c3d4/my-app</span>
+shop-app · fix-cart               conductor  fix-cart             <span class="bad">dirty</span>     1.20 GB   2d  <span class="dim">~/conductor/workspaces/shop-app/fix-cart</span>
+my-app · worktree-onboarding      claude     worktree-onboarding  <span class="bad">unpushed</span>   850 MB   5d  <span class="dim">~/dev/my-app/.claude/worktrees/onboarding</span>
+my-app · prune 1 stale worktree…                                                0 B    —  <span class="dim">~/dev/my-app</span>
+&nbsp;
+Total 6.35 GB in 5 items · <span class="acc">★ 4.30 GB</span> recommended (3 items)
+Disk: <span class="dim">38.2 GB free of 494 GB (92% used)</span>
+→ run: lu-cleaner clean --smart -c worktrees
+</div>
+
+Le tableau n'a pas de colonne d'avertissements. Pour savoir pourquoi un worktree est signalé, ouvrez-le dans le sélecteur (`enter` affiche ses détails) ou lancez `lu-cleaner scan -c worktrees --all`, qui affiche chaque avertissement sous sa ligne.
+
+## Où chaque outil range ses worktrees
+
+| Outil | Emplacement de ses worktrees | Type d'élément |
+|---|---|---|
+| Codex | `~/.codex/worktrees/<id>/<repo>` | `codex-worktree` |
+| Cursor | `~/.cursor/worktrees/…` | `cursor-worktree` |
+| Conductor | `~/conductor/workspaces/<repo>/<workspace>` | `conductor-worktree` |
+| Claude Code (CLI) | `<repo>/.claude/worktrees/<name>` (créés par `claude --worktree` et par l'isolation des sous-agents), `~/.claude/worktrees`, `~/.claude-worktrees` | `claude-worktree` |
+| Claude desktop | `~/Library/Application Support/Claude/worktrees`, ainsi que les entrées de `<repo>/.claude/worktrees` sur des branches `claude/…` | `claude-desktop-worktree` |
+| Créés à la main | N'importe où : chaque worktree que `git worktree list` signale pour vos dépôts, plus `<repo>/.worktrees`, `<repo>/worktrees`, `<repo>-worktrees` et `~/.worktrees` | `manual-worktree` |
+
+lu-cleaner identifie aussi les worktrees de Superset (`~/.superset/worktrees`), Claude Squad, vibe-kanban et Multica. Vous pouvez passer le type d'élément à `--kind`, par exemple `-k codex-worktree`.
+
+### Comment les worktrees sont trouvés
+
+lu-cleaner cherche les worktrees de quatre façons, ce qui lui permet de trouver aussi ceux qui ne sont pas dans les dossiers habituels :
+
+1. Il parcourt les dossiers listés ci-dessus, jusqu'à quatre niveaux de profondeur, ainsi que tout dossier indiqué dans `worktree_roots` dans votre [configuration](/lu-cleaner/fr/reference/configuration/).
+2. Il parcourt vos racines de projets pour trouver les dépôts. Il s'agit des `roots` de votre configuration, ou de dossiers détectés automatiquement comme `~/dev`, `~/Projects` et `~/conductor/repos`.
+3. Il lance `git worktree list` dans chaque dépôt trouvé. Cela révèle les worktrees de ce dépôt, où qu'ils se trouvent.
+4. Il regarde dans les dossiers imbriqués habituels (`.claude/worktrees`, `.worktrees`, `worktrees`, `<repo>-worktrees`).
+
+Si plusieurs de ces méthodes aboutissent au même worktree, il n'est compté qu'une fois : lu-cleaner compare le périphérique et l'inode du dossier.
+
+:::tip[Votre agent utilise un autre dossier ?]
+Ajoutez le dossier à `worktree_roots`. Cette liste s'ajoute à la liste intégrée :
+
+```toml
+worktree_roots = ["~/agents/worktrees"]
+```
+:::
+
+Certains worktrees sont listés mais ne peuvent pas être sélectionnés :
+
+- **Sur un volume externe.** Le supprimer ne libère rien sur votre disque interne.
+- **Dépôt principal sur un volume non monté.** Son statut reste `unknown` tant que le volume n'est pas branché.
+- **En dehors de votre dossier personnel**, par exemple dans `/tmp`. Le garde-fou de sécurité ne supprime que dans votre dossier personnel et dans votre dossier temporaire utilisateur. L'élément affiche la commande `git -C … worktree remove …` exacte à lancer vous-même.
+
+## Statuts des worktrees
+
+Chaque worktree reçoit un seul statut. Lorsque plusieurs statuts s'appliquent, celui qui figure le plus haut dans ce tableau l'emporte :
+
+| Statut | Signification | Risque | Supprimé sans `--force` ? |
+|---|---|---|---|
+| `orphan` | Git ne suit plus le dossier. Son dépôt principal a été supprimé, son entrée a été purgée, ou le dossier est une copie d'un autre worktree. | <span class="risk caution">caution</span> | Oui, comme un simple dossier : git ne peut pas l'inspecter |
+| `locked` | Verrouillé avec `git worktree lock`. Les outils le font souvent pendant qu'un agent tourne. | <span class="risk caution">caution</span> | Non |
+| `dirty` | Contient des modifications non commitées, fichiers non suivis compris | <span class="risk caution">caution</span> | Non |
+| `unpushed` | Contient des commits qu'aucun remote ne contient : en avance sur sa branche amont, ou sans branche amont | <span class="risk moderate">moderate</span> sur une branche, <span class="risk caution">caution</span> sur une HEAD détachée | Sur une branche, oui : la branche conserve les commits. Sur une HEAD détachée, seulement si une autre branche ou un tag les contient. |
+| `merged` | Tout est déjà dans la branche par défaut (`origin/HEAD`, `origin/main`, `origin/master`, `main` ou `master`), y compris les commits rebasés ou cherry-pickés dessus | <span class="risk moderate">moderate</span> | Oui |
+| `clean` | Aucune modification locale et tout est poussé, mais pas encore fusionné | <span class="risk moderate">moderate</span> | Oui |
+| `unknown` | `git status` a échoué ou expiré, ou le worktree ou son dépôt principal se trouve sur un autre volume | <span class="risk caution">caution</span> ou rapport seul | Seulement si git peut le lire au moment du nettoyage |
+
+Quelques précisions sur ces statuts :
+
+- **La HEAD détachée est normale avec Codex.** Codex extrait souvent une HEAD détachée. Ce n'est pas un problème tant que le commit se trouve aussi sur une branche, un tag ou un remote : le worktree est alors `clean` ou `merged`. Cela ne pose problème que lorsque l'agent a créé des commits qui n'existent nulle part ailleurs.
+- **Les pull requests fusionnées en squash apparaissent généralement comme `unpushed`.** Prenons une branche de plusieurs commits fusionnée en squash. Ses commits ne correspondent pas un à un à ceux de la branche par défaut, et une fois la branche de la PR supprimée sur le remote, l'avertissement indique `upstream branch deleted`. La suppression reste sans risque, car la branche locale est conservée. Vérifiez que la PR est bien fusionnée, puis sélectionnez le worktree à la main.
+
+Certaines conditions rendent un worktree <span class="risk caution">caution</span> quel que soit son statut. D'autres l'excluent de la sélection intelligente :
+
+| Avertissement | Effet |
+|---|---|
+| `in use by …` : un processus a son répertoire courant à l'intérieur (shell, serveur de développement, agent) | caution |
+| `open in Cursor` / `open in VS Code` : une fenêtre d'éditeur affiche ce dossier | caution |
+| `N active Codex threads`, `active Claude desktop session`, `active Conductor workspace — archive it in Conductor instead` | caution |
+| `moved: git records it at …` : le dossier a été déplacé à la main | caution. Lancez le `git worktree repair` suggéré. |
+| `ignored .env files would be lost: …` | Reste moderate mais n'est jamais retenu par la sélection intelligente. Git ignore ces fichiers, donc `git worktree remove` les supprime. |
+| `N unpushed commits (branch … is kept)` | Reste moderate mais n'est jamais retenu par la sélection intelligente |
+| `current directory` | Ne peut pas être sélectionné du tout |
+
+## Quels worktrees sont recommandés
+
+La sélection intelligente ne retient un worktree que si toutes ces conditions sont réunies. La sélection intelligente correspond à la touche `a` dans le sélecteur et à `--smart` en ligne de commande.
+
+- Son statut est `clean` ou `merged`, donc son risque est <span class="risk moderate">moderate</span>.
+- Il n'a **aucun avertissement** : pas de commits non poussés, pas de fichiers `.env` ignorés, et aucun processus, fenêtre d'éditeur ou session d'agent active qui l'utilise.
+- Il est inactif depuis au moins **7 jours**, ou **1 jour** s'il est fusionné dans la branche par défaut. Si votre réglage `stale_after` est inférieur à 7 jours, c'est lui qui s'applique.
+
+« Inactif » désigne le temps écoulé depuis la dernière activité du worktree. lu-cleaner retient le plus récent de ces événements : la création du worktree, son dernier commit, les modifications de son index et de sa HEAD, les dates de modification de ses fichiers modifiés, et la dernière activité du fil Codex ou de la session Claude desktop qui l'utilise. Il ignore la date de modification du dossier lui-même, car Expo, Xcode et les indexeurs la mettent à jour même quand personne n'y travaille.
+
+Les entrées de worktree obsolètes (voir [plus bas](#entrées-de-worktree-obsolètes)) sont toujours recommandées.
+
+Consultez [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) pour les règles qui s'appliquent aux autres catégories.
+
+## Supprimer le worktree, ou seulement ses artefacts ?
+
+Supprimer un worktree libère tout, mais la copie de travail de la tâche disparaît. Supprimer seulement ses **artefacts** (`node_modules`, `ios/Pods`, builds natifs) libère en général l'essentiel de l'espace et conserve les sources, les modifications non commitées, les fichiers `.env` et le lien de l'outil vers le dossier.
+
+Pour savoir ce que libère chaque option, consultez les détails du worktree. Dans le sélecteur, appuyez sur `enter`. Avec `--json`, lisez `meta`. La taille y est répartie entre `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `android/.cxx`, `.expo`, `.next`, `.turbo`, `dist`, leur total `artifacts`, et la copie de travail elle-même (`checkout`).
+
+| Situation | Que faire | Pourquoi |
+|---|---|---|
+| La tâche est terminée : branche fusionnée ou poussée, rien d'ouvert dedans | Supprimer le worktree | Libère la copie de travail et ses artefacts. La branche reste dans le dépôt. |
+| Vous reviendrez sur la tâche, ou son fil d'agent ou son espace de travail est encore actif | Supprimer seulement les artefacts | Conserve les sources et l'état de l'outil. Une réinstallation ramène les dépendances. |
+| Le worktree est `dirty` | Supprimer seulement les artefacts, ou commiter ou faire un stash d'abord | La suppression du worktree serait de toute façon refusée |
+| Il contient des fichiers `.env` ignorés par git dont vous avez encore besoin | Les copier ailleurs d'abord, ou supprimer seulement les artefacts | `git worktree remove` supprime les fichiers ignorés |
+| HEAD détachée avec des commits présents sur aucune branche | Lancer `git branch <name>` à l'intérieur, puis le supprimer | Sinon ces commits deviennent inaccessibles |
+| C'est un espace de travail Conductor | L'archiver dans Conductor | Conductor conserve son commit d'archive et sa propre vue reste cohérente |
+| `orphan` | Regarder d'abord à l'intérieur. Le supprimer si rien ne mérite d'être récupéré | Git ne peut pas savoir s'il contient du travail unique |
+
+### Supprimer seulement les artefacts
+
+Le [scanner d'artefacts](/lu-cleaner/fr/guides/react-native-projects/) parcourt aussi chaque dossier de worktree. Le nom de chaque artefact commence par l'outil dont le worktree le contient, par exemple `codex:my-app › node_modules`. Pour n'afficher que les artefacts situés dans les worktrees d'un outil, ouvrez le sélecteur d'artefacts et filtrez sur ce préfixe :
+
+```bash
+lu-cleaner artifacts
+```
+
+Appuyez ensuite sur `/` et tapez le préfixe :
+
+| Filtre | Affiche les artefacts situés dans |
+|---|---|
+| `codex:` | les worktrees Codex |
+| `cursor:` | les worktrees Cursor |
+| `conductor:` | les espaces de travail Conductor |
+| `claude:` | les dossiers `.claude/worktrees` (Claude Code, et les worktrees Claude desktop qui y sont stockés) |
+| `claude-desktop:` | `~/Library/Application Support/Claude/worktrees` |
+| `worktree:` | les autres worktrees liés : dossiers `.worktrees` et copies de travail créées à la main sous vos racines |
+
+Appuyez sur `a` pour les sélectionner avec la sélection intelligente, ou sur `space` pour choisir les éléments un par un. Appuyez ensuite sur `d` pour nettoyer. La sélection intelligente ne retient jamais les artefacts d'un projet actif au cours des dernières 24 heures. Toutes les touches sont décrites dans [Raccourcis clavier](/lu-cleaner/fr/reference/keyboard-shortcuts/).
+
+:::note
+La ligne de commande n'a pas de filtre par outil. Pour passer en revue les artefacts par outil dans un script, utilisez `jq` sur la sortie JSON. La clé `in_worktree` de `meta` contient le nom de l'outil :
+
+```bash
+lu-cleaner artifacts --json | jq -r '.items[] | select(.meta.in_worktree == "codex") | [.size, .name] | @tsv'
+```
+:::
+
+Vous pouvez sélectionner en même temps un worktree et certains artefacts qu'il contient. Les artefacts sont alors retirés du plan et rien n'est compté deux fois.
+
+## Ce qui se passe à la suppression d'un worktree
+
+<Steps>
+
+1. **Tout est revérifié.** Votre scan peut dater de plusieurs minutes, donc lu-cleaner revérifie le worktree juste avant d'agir :
+   - Le dossier doit être le même que lors du scan (même inode).
+   - Il doit passer le [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/).
+   - Il ne doit pas contenir votre répertoire courant.
+   - Aucun autre processus ne doit y avoir son répertoire courant ni y exécuter un programme.
+
+   Si une vérification échoue, l'élément est ignoré et la raison est indiquée.
+
+2. **Les vérifications git propres à lu-cleaner s'exécutent.** Sauf si vous passez `--force`, la suppression est refusée dans ces cas :
+   - Le worktree est verrouillé.
+   - La HEAD est détachée et certains de ses commits ne sont sur aucune branche, aucun tag ni aucune référence de suivi distante.
+   - `git status --porcelain` signale quoi que ce soit.
+   - lu-cleaner ne peut pas déterminer si des commits seraient perdus, ou ne peut pas lire le statut git.
+
+3. **Git supprime la copie de travail.** lu-cleaner lance `git worktree remove <path>` depuis le dépôt principal, **sans** `--force`. Git applique ses propres refus comme seconde ligne de défense : fichiers modifiés ou non suivis, verrous, sous-modules. Les fichiers ignorés comme `node_modules`, `Pods` et `.env` ne bloquent pas la suppression, et ils sont supprimés avec la copie de travail. Git supprime aussi l'entrée du worktree dans le `.git/worktrees/` du dépôt principal.
+
+4. **La branche est conservée.** Ses commits restent dans le dépôt principal, qu'ils soient poussés ou non. C'est pourquoi les commits non poussés sur une branche nommée ne risquent rien. Quand vous n'avez plus besoin de la branche, supprimez-la vous-même, par exemple avec `git branch -d feature/login`.
+
+5. **Le dossier de tâche vide est supprimé.** Codex range chaque worktree dans un dossier par tâche, comme `~/.codex/worktrees/a1b2/`. S'il ne reste que ses fichiers marqueurs (`.codex-worktree-name`, `.DS_Store`), lu-cleaner supprime aussi ce dossier.
+
+6. **La suppression est enregistrée.** Les worktrees sont supprimés un par un, après les suppressions de fichiers exécutées en parallèle. Chaque suppression est ajoutée à l'[historique](/lu-cleaner/reference/commands/history/).
+
+</Steps>
+
+:::danger[`--force` contourne les vérifications de sécurité]
+Avec `--force`, lu-cleaner saute ses propres vérifications, y compris celle des processus qui travaillent à l'intérieur. Il lance `git worktree remove --force --force`, qui supprime aussi les worktrees modifiés et verrouillés. Les modifications non commitées et les commits créés sur une HEAD détachée sont alors **perdus**. Ne l'utilisez que sur un worktree que vous avez inspecté vous-même, jamais dans un script.
+:::
+
+### Entrées de worktree obsolètes
+
+Il arrive qu'un dossier de worktree soit supprimé avec `rm`, par Cursor ou Conductor, ou par macOS lorsqu'il fait le ménage dans `/tmp`. Git conserve alors une entrée pour lui dans le dépôt principal et, tant que cette entrée n'est pas purgée, git refuse d'extraire ou de supprimer sa branche ailleurs. lu-cleaner affiche un élément par dépôt contenant de telles entrées, par exemple `my-app · prune 2 stale worktree entries` :
+
+- Le risque est <span class="risk safe">safe</span>, et l'élément est toujours recommandé.
+- Son nettoyage lance `git -C ~/dev/my-app worktree prune`.
+- Certaines entrées peuvent encore appartenir à une copie de travail située sur un volume non monté, ou à une copie de travail déplacée. `git worktree prune` les supprimerait elles aussi. Dans ce cas, lu-cleaner se contente de supprimer les dossiers de métadonnées des autres entrées au lieu de lancer la commande.
+
+### Worktrees orphelins
+
+Un orphelin est un dossier qui contient encore un fichier `.git`, mais que git ne connaît plus. Git ne peut pas le supprimer, ni savoir s'il contient du travail qui n'existe nulle part ailleurs. lu-cleaner classe les orphelins en <span class="risk caution">caution</span>. Il les supprime comme de simples dossiers, après le garde-fou de sécurité. La note de l'élément indique comment récupérer le code : cloner à nouveau le remote, ou rattacher le dossier avec `git worktree repair` lorsque seule son entrée a été purgée. Dans le sélecteur, vous devez taper `yes` pour confirmer une sélection qui contient des éléments caution.
+
+## Ce que voient les outils ensuite
+
+lu-cleaner lit l'état de chaque outil pour vous avertir avant que vous ne supprimiez un worktree que l'outil utilise encore. Il ne modifie jamais cet état. Voici ce que voit chaque outil après une suppression :
+
+| Outil | Après la suppression du worktree | Meilleure première étape |
+|---|---|---|
+| Codex | lu-cleaner ne touche pas à l'historique du fil, mais le fil désigne toujours le dossier disparu comme répertoire de travail : un fil repris n'a donc plus de copie de travail dans laquelle travailler. Les worktrees ayant des fils actifs sont <span class="risk caution">caution</span>. Quand l'application Codex a déjà mis un worktree en file d'attente pour archivage, la note l'indique : l'application en fait un instantané et le supprime elle-même. | Archiver le fil dans Codex, qui fait d'abord un instantané du worktree |
+| Cursor | Les modifications de l'agent pas encore appliquées n'existaient que dans le worktree : elles sont perdues. Cursor crée de nouveaux worktrees quand il en a besoin. | Appliquer ou abandonner d'abord les modifications de l'agent |
+| Conductor | Conductor affiche l'espace de travail comme manquant. Les worktrees des espaces de travail non archivés sont <span class="risk caution">caution</span>. Quand un espace de travail est déjà archivé dans Conductor, la note l'indique et la suppression se passe sans incident. | Archiver l'espace de travail dans Conductor, qui conserve son commit d'archive |
+| Claude desktop | L'application conserve les worktrees après l'archivage d'une session. Les supprimer est le ménage qu'elle vous laisse. Les worktrees d'une session active sont <span class="risk caution">caution</span>. | Archiver d'abord la session |
+| Claude Code (CLI) | Le travail commité reste sur la branche (par exemple `worktree-onboarding`). Les fichiers ignorés (`.env`, `node_modules`) sont perdus. | Commiter ce que vous voulez garder |
+| Créés à la main | La branche reste. Les fichiers ignorés et les builds natifs sont perdus. | Aucune |
+
+## Nettoyer les worktrees depuis un script
+
+`lu-cleaner worktrees --yes` nettoie sans le sélecteur, avec les mêmes règles que [`clean --yes`](/lu-cleaner/fr/guides/automation/) :
+
+```bash
+# Simulation : worktrees recommandés uniquement, rien n'est supprimé
+lu-cleaner worktrees --yes --smart --dry-run
+
+# Les supprimer
+lu-cleaner worktrees --yes --smart
+
+# Worktrees Codex inactifs depuis un mois (simulation)
+lu-cleaner clean --yes -k codex-worktree --older-than 30d --dry-run
+```
+
+:::caution[Ajoutez toujours `--smart` ou `--older-than`]
+Sans eux, `worktrees --yes` prend **tous** les worktrees jusqu'au risque moderate. Cela inclut les worktrees propres que vous utilisez aujourd'hui, les worktrees avec des commits non poussés sur une branche, et ceux dont les fichiers `.env` ignorés seraient perdus. Lancez d'abord la commande avec `--dry-run` et lisez le plan.
+:::
+
+Les worktrees caution (modifiés, verrouillés, orphelins, en cours d'utilisation, avec une session active) sont écartés, sauf si vous passez `--risk caution`. Même dans ce cas, les worktrees modifiés, verrouillés ou avec des commits sur une HEAD détachée sont toujours refusés au moment du nettoyage, sauf si vous passez aussi `--force`.
+
+## Quand une suppression est ignorée
+
+Un élément ignoré n'est pas un échec : la commande se termine quand même avec le code 0. Le récapitulatif liste chaque élément ignoré avec sa raison :
+
+| Message | Que faire |
+|---|---|
+| `N uncommitted change(s) — commit them or use --force` | Commiter, mettre en stash ou abandonner les modifications, ou supprimer seulement les artefacts |
+| `detached HEAD with N commit(s) on no branch — they would be lost; …` | Lancer `git branch <name>` dans le worktree, puis relancer la suppression |
+| `worktree is locked (git worktree lock) — use --force` | Si l'outil qui l'a verrouillé a terminé, lancer `git worktree unlock <path>` |
+| `in use: process 1234 is working inside …` | Quitter le shell, le serveur de développement ou l'agent qui y tourne |
+| `current directory is inside …` | Lancer lu-cleaner depuis un autre dossier |
+| `… changed since the scan (different inode) — rescan` | Relancer un scan : le dossier a été remplacé |
+| `git refused to remove it (…)` | Lire le message de git, qui a ses propres raisons |
+
+## Voir aussi
+
+- [Projets React Native](/lu-cleaner/fr/guides/react-native-projects/) : le scanner d'artefacts en détail
+- [Données des outils d'IA](/lu-cleaner/fr/guides/ai-tools-data/) : sessions, journaux et caches de Codex, Claude et Cursor
+- [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/)
+- [Référence de `lu-cleaner worktrees`](/lu-cleaner/reference/commands/worktrees/)

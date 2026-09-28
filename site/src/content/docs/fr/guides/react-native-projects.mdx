@@ -1,0 +1,234 @@
+---
+title: Nettoyer les projets React Native
+description: Supprimez node_modules, ios/Pods, les builds iOS et Android, .expo et les autres sorties de build dans tous vos projets et worktrees, puis reconstruisez-les quand vous en avez de nouveau besoin.
+sidebar:
+  order: 2
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Une copie de travail React Native transporte plusieurs gigaoctets de fichiers générés : `node_modules`, `ios/Pods`, les builds Xcode et Gradle, et les fichiers intermédiaires C++ natifs. Multipliez cela par chaque projet ouvert cette année et par chaque worktree d'agent IA, et le total grimpe vite. Le **scanner d'artefacts** trouve ces dossiers dans tous vos projets, comme `npkill` ou `kondo`, mais il sait où React Native, Expo et Xcode placent leurs sorties. Il ne touche jamais à vos sources.
+
+```bash
+lu-cleaner artifacts                       # sélecteur sur tous les projets et worktrees
+lu-cleaner artifacts ~/dev/my-app          # cette racine au lieu de celles configurées
+lu-cleaner artifacts --list --all          # afficher la liste complète à la place
+lu-cleaner artifacts --older-than 30d      # projets inchangés depuis un mois
+```
+
+Dans le tableau de bord (`lu-cleaner`), ces mêmes éléments se trouvent dans la catégorie **Project artifacts**.
+
+## Ce qu'il trouve dans un projet React Native
+
+| Dossier | Type d'élément | Risque | Doit se trouver à côté de | Revient avec |
+|---|---|---|---|---|
+| `node_modules` | `node_modules` | <span class="risk moderate">moderate</span> | `package.json` | L'installation de votre gestionnaire de paquets ([voir plus bas](#reconstruire-le-projet-quand-vous-en-avez-de-nouveau-besoin)) |
+| `ios/Pods` | `ios-pods` | <span class="risk moderate">moderate</span> | `Podfile` ou `Podfile.lock` | `pod install`, `npx pod-install` ou `npx expo run:ios` (1 à 5 minutes avec un cache CocoaPods déjà rempli) |
+| `ios/build` | `ios-build` | <span class="risk safe">safe</span>, <span class="risk moderate">moderate</span> avec codegen | `*.xcodeproj`, `*.xcworkspace` ou `Podfile` | Le prochain build Xcode ou `npx expo run:ios` |
+| `android/app/build`, `android/build` | `android-build` | <span class="risk safe">safe</span> | `build.gradle` ou `build.gradle.kts` | Le prochain build Gradle ou `npx expo run:android` (3 à 10 minutes) |
+| `android/.gradle` | `android-gradle` | <span class="risk safe">safe</span> | `settings.gradle`, `gradlew` ou `build.gradle` | La prochaine exécution de Gradle |
+| `android/.kotlin` | `android-kotlin` | <span class="risk safe">safe</span> | Comme ci-dessus | Le prochain build Gradle |
+| `.cxx`, `.externalNativeBuild` | `android-cxx` | <span class="risk safe">safe</span> | `CMakeLists.txt` ou `build.gradle` | Le prochain build natif (plusieurs minutes de C++). Le supprimer corrige aussi les erreurs de build dues à un `.cxx` périmé. |
+| `.expo` | `expo` | <span class="risk safe">safe</span> | `package.json`, `app.json` ou `app.config.*` | `expo start` ou `expo run:*` |
+| `.metro-cache`, `.metro` | `metro-cache` | <span class="risk safe">safe</span> | `package.json` ou `metro.config.*` | Rien à faire : le premier bundle est simplement plus lent |
+| `.next` | `next` | <span class="risk safe">safe</span> | `next.config.*` ou `package.json` | `next dev` ou `next build` |
+| `.turbo` | `turbo` | <span class="risk safe">safe</span> | `package.json` ou `turbo.json` | Rien à faire : les tâches s'exécutent une fois sans cache |
+| `dist`, `build`, `web-build` d'un paquet JS | `dist`, `js-build`, `web-build` | <span class="risk safe">safe</span>, <span class="risk moderate">moderate</span> pour les sorties de bibliothèque | `package.json` | Le script de build du projet |
+| `.yarn/cache`, `.yarn/unplugged` | `yarn-cache`, `yarn-unplugged` | <span class="risk moderate">moderate</span> | `.yarnrc.yml` | `yarn install` |
+| `coverage` | `coverage` | <span class="risk safe">safe</span> | `package.json` | La prochaine mesure de couverture |
+| `playwright-report`, `test-results` | `playwright-report` | <span class="risk moderate">moderate</span> | `playwright.config.*` ou `package.json` | La prochaine exécution des tests (les traces et vidéos des exécutions passées sont perdues) |
+| `vendor/bundle` | `ruby-vendor-bundle` | <span class="risk moderate">moderate</span> | `Gemfile` | `bundle install` |
+
+Le scanner connaît aussi les artefacts d'autres écosystèmes, comme Flutter, Rust, Swift Package Manager, les virtualenvs Python, CMake et .NET. Consultez la [référence des scanners](/lu-cleaner/fr/reference/scanners/). Passez le type d'élément à `--target`/`-t` avec `artifacts`, ou à `--kind`/`-k` partout :
+
+```bash
+lu-cleaner artifacts -t node_modules -t ios-pods
+```
+
+## Comment il détermine qu'un dossier est jetable
+
+Un dossier nommé `build` peut contenir la sortie de Xcode, ou du code source que quelqu'un a rangé dans un dossier `build`. lu-cleaner ne propose un dossier que si trois vérifications réussissent. Chacune existe pour écarter une erreur précise.
+
+| Vérification | Exemple | Pourquoi |
+|---|---|---|
+| **Un fichier marqueur se trouve à côté** | `package.json` à côté de `node_modules`, un `Podfile` à côté de `Pods`, un `build.gradle` à côté de `android/app/build` | Prouve que le dossier appartient à un projet de ce type. Le marqueur est revérifié juste avant la suppression. S'il a disparu, l'élément est ignoré. |
+| **Il ne contient aucun fichier suivi par git** | `ios/Pods` commité, `node_modules` embarqué dans le dépôt, cache Yarn zero-install | Quelqu'un a commité ces fichiers volontairement. Les supprimer modifierait le dépôt au lieu de libérer un cache. |
+| **Les noms génériques doivent être ignorés par git** | `build`, `dist`, `out`, `coverage`, `.yarn/*`, `vendor/bundle` | Un projet qui ignore le dossier le déclare jetable. Une sortie de build sans ambiguïté est aussi acceptée, comme le `XCBuildData` de Xcode ou un fichier `CACHEDIR.TAG`, tant que le dossier n'est pas suivi. En dehors d'un dépôt git, les dossiers génériques doivent contenir une sortie de build reconnaissable. |
+
+Le scanner a aussi des limites strictes :
+
+- Il ne suit jamais les liens symboliques, et ne passe jamais d'une racine à un autre volume.
+- Il n'entre jamais dans un artefact, un dossier `.git`, `~/Library`, la Corbeille, ni dans les bundles d'applications comme `.app` et `.xcodeproj`.
+- Il ignore les dossiers cachés, sauf `.claude/worktrees` et `.worktrees`, où les agents rangent leurs copies de travail.
+- Un artefact situé sur un volume externe est listé mais ne peut pas être sélectionné, car le supprimer ne libère rien sur votre disque interne.
+
+Certains dossiers correspondent au nom et aux marqueurs d'une règle mais contiennent des fichiers suivis, comme un `ios/Pods` commité. Ils sont listés en rapport seul avec une raison, par exemple `not proposed: contains files tracked by git (ios/Pods/Manifest.lock)`. Ils n'ont pas de taille : pour les voir, ouvrez le sélecteur avec `lu-cleaner artifacts --min-size 0` et appuyez sur `H`.
+
+Consultez le [modèle de sécurité](/lu-cleaner/fr/concepts/safety/) pour les vérifications qui s'appliquent à chaque suppression.
+
+### `ios/build` et le codegen React Native
+
+Avec la New Architecture, le codegen de React Native peut écrire des pod specs dans `ios/build/generated/ios`, et `Podfile.lock` y fait alors référence. Quand lu-cleaner trouve `build/generated/ios` dans `Podfile.lock`, il fait passer `ios/build` en <span class="risk moderate">moderate</span> et ajoute un indicateur `codegen`. La note indique quoi faire après la suppression : lancer `pod install`, puis reconstruire. Si vous reconstruisez sans `pod install`, CocoaPods ne trouve pas les specs générées.
+
+### Sorties de bibliothèque
+
+Dans un monorepo, un paquet partagé fait souvent pointer son `package.json` (`main`, `module`, `types`, `exports`, `bin` ou `files`) vers son propre dossier `dist`. Les applications et les config plugins Expo qui utilisent ce paquet ne fonctionnent plus tant qu'il n'est pas reconstruit. lu-cleaner le détecte, fait passer le dossier en <span class="risk moderate">moderate</span> et lui ajoute l'étiquette `library_output`. Après la suppression, lancez le script `build` ou `prepare` du paquet.
+
+### Avertissements qui excluent un élément de la sélection intelligente
+
+| Avertissement | Signification |
+|---|---|
+| `in use: process 4242 runs inside the project (dev server, agent, shell?)` | Quelque chose tourne dans le projet, comme Metro ou un agent. Ses dépendances pourraient disparaître sous ses pieds. |
+| `contains built app binaries (app-release.apk…)` | Un dossier de build contient directement des fichiers `.apk`, `.aab` ou `.ipa`. Gardez-le si vous avez encore besoin de ce build. |
+
+Les éléments porteurs d'un avertissement peuvent tout de même être sélectionnés à la main.
+
+:::caution[Arrêtez les serveurs de développement avant un nettoyage scripté]
+`--yes` sans `--smart` n'écarte pas les éléments porteurs d'un avertissement. Juste avant la suppression, lu-cleaner ignore un dossier dans lequel un processus travaille, ou depuis lequel un processus charge un programme ou un module natif `.node`. Un serveur Metro qui tourne depuis la racine du projet et ne fait que lire des fichiers JavaScript dans `node_modules` ne déclenche pas cette vérification. Arrêtez-le d'abord.
+:::
+
+## Monorepos
+
+Le scanner parcourt tout le dépôt. Il ne s'arrête pas au premier `package.json`, et trouve donc les artefacts propres à chaque paquet du workspace. Les éléments sont nommés `<dépôt> › <chemin dans le dépôt>`, et le type de projet (`expo`, `react-native`, `next`…) vient du paquet auquel appartient le dossier :
+
+<FileTree>
+- my-monorepo/
+  - pnpm-lock.yaml
+  - package.json
+  - node_modules/ my-monorepo › node_modules
+  - apps/
+    - mobile/
+      - package.json
+      - node_modules/ note : reinstall with pnpm i at the workspace root
+      - ios/
+        - Podfile
+        - Pods/ my-monorepo › apps/mobile/ios/Pods
+        - build/ sortie Xcode, moderate si des specs codegen s'y trouvent
+      - android/
+        - .gradle/
+        - app/
+          - build.gradle
+          - build/ sortie Gradle
+          - .cxx/ intermédiaires C++ natifs
+  - packages/
+    - ui/
+      - package.json son champ main pointe vers dist/index.js
+      - dist/ sortie de bibliothèque, moderate
+</FileTree>
+
+Chaque `node_modules` est un élément distinct. Sa note donne la commande pour le réinstaller et l'endroit où la lancer : lu-cleaner cherche le lockfile depuis le dossier du paquet jusqu'à la racine du dépôt. Dans l'arborescence ci-dessus, la note indique `reinstall with pnpm i at the workspace root`.
+
+## Liens physiques, clones et espace réellement libéré
+
+pnpm, bun et Yarn Berry peuvent installer `node_modules` sous forme de liens vers un store partagé plutôt que de vraies copies. Supprimer un tel `node_modules` ne libère que les fichiers qui n'existent nulle part ailleurs. lu-cleaner mesure cela pour les **liens physiques** (hardlinks) et affiche deux valeurs :
+
+- **La taille** (Size) est la taille allouée, chaque fichier lié physiquement n'étant compté qu'une fois.
+- **Reclaim** est ce que la suppression du dossier libère réellement. Cette valeur exclut les fichiers qui ont aussi des liens hors du dossier, par exemple dans le store pnpm.
+
+Quand les deux valeurs diffèrent :
+
+- le tableau de `scan` marque la taille d'un `*` ;
+- les détails du sélecteur affichent `only 120 MB really freed (of 1.40 GB): hardlinked elsewhere` ;
+- la note de l'élément nomme le store, par exemple `Hardlinked with the pnpm store: only 120 MB is really freed` ;
+- la sortie JSON contient les champs `reclaim` et `freed` ([Sortie JSON](/lu-cleaner/fr/reference/json-output/)).
+
+Les totaux et le plan utilisent la valeur reclaim.
+
+:::note[Les clones APFS sont comptés comme libérés]
+Certains gestionnaires de paquets copient les fichiers sous forme de clones APFS : des copies en copy-on-write qui partagent leurs blocs disque tant qu'aucun des deux côtés n'est modifié. C'est le comportement par défaut de bun sur macOS. Les clones ne peuvent pas être détectés à moindre coût : ils sont donc comptés comme entièrement récupérables, et l'estimation peut dépasser ce que vous obtenez réellement. Après un vrai nettoyage, comparez avec la ligne de récapitulatif `Disk free: A → B (C measured)`, qui provient du système de fichiers. Si l'écart est important, consultez [Espace disque non libéré](/lu-cleaner/fr/guides/disk-space-not-freed/).
+:::
+
+L'inverse est vrai aussi : tant que des projets pointent encore vers le store global, supprimer le store libère peu. Consultez [Outils JS](/lu-cleaner/fr/guides/js-toolchain/).
+
+## Choisir selon l'âge
+
+L'âge d'un artefact est celui de son **projet**, pas celui du dossier lui-même. Les installations et les builds modifient sans cesse le dossier de l'artefact, donc sa propre date ne dit rien sur le fait que vous travailliez encore sur le projet. lu-cleaner retient la date de modification la plus récente parmi les éléments suivants, en ignorant les dossiers d'artefacts eux-mêmes :
+
+- les fichiers et dossiers de premier niveau du projet (sources, lockfiles, configurations) ;
+- les fichiers et dossiers de premier niveau du paquet auquel appartient l'artefact ;
+- l'index git, `HEAD` et le reflog.
+
+`--older-than` accepte `h`, `d`, `w`, `m` (30 jours) et `y` :
+
+```bash
+# Sélecteur limité aux projets inchangés depuis 30 jours
+lu-cleaner artifacts --older-than 30d
+
+# Tableau de tout ce qui se trouve dans les projets inactifs depuis 3 mois
+lu-cleaner artifacts --list --all --older-than 3m
+
+# Simulation : node_modules des projets inactifs depuis 60 jours
+lu-cleaner artifacts -y -t node_modules --older-than 60d -n
+
+# Simulation : sorties de build safe des projets inactifs depuis 2 semaines
+lu-cleaner clean -y -c artifacts --risk safe --older-than 2w -n
+```
+
+Les éléments dont l'âge est inconnu ne correspondent jamais à `--older-than`.
+
+La sélection intelligente (la touche `a`, ou `--smart`) applique ces règles aux artefacts :
+
+- Elle ne retient jamais rien d'un projet actif au cours des dernières **24 heures**.
+- Elle retient les sorties <span class="risk safe">safe</span> (builds Xcode et Gradle, `.expo`, `.cxx`…) dès que le projet est inactif depuis **1 jour**.
+- Elle retient les éléments <span class="risk moderate">moderate</span> (`node_modules`, `Pods`…) dès que le projet est inactif depuis plus longtemps que `stale_after`, soit 14 jours par défaut.
+- Elle retient un `.yarn/cache` de Yarn Berry que Yarn ne lit plus (`.yarnrc.yml` définit `enableGlobalCache: true`) sans attendre `stale_after`.
+- Elle ne retient jamais les éléments porteurs d'un avertissement ni ceux de risque <span class="risk caution">caution</span>.
+
+## Reconstruire le projet quand vous en avez de nouveau besoin
+
+Pour `node_modules`, la note de l'élément donne la commande qui correspond à votre lockfile :
+
+| lu-cleaner trouve (du paquet jusqu'à la racine du dépôt) | Commande dans la note |
+|---|---|
+| `bun.lock` ou `bun.lockb` | `bun i` |
+| `pnpm-lock.yaml` | `pnpm i` |
+| `yarn.lock` (avec `.yarnrc.yml` : Yarn Berry) | `yarn` |
+| `package-lock.json` ou `npm-shrinkwrap.json` | `npm ci` |
+| Aucun lockfile | D'après le champ `packageManager` de `package.json` ; `npm install` à défaut |
+
+Un projet React Native typique se reconstruit ainsi :
+
+```bash
+cd ~/dev/my-app
+pnpm i                              # node_modules : utilisez la commande indiquée dans la note
+cd ios && pod install && cd ..      # ios/Pods (ou : npx pod-install)
+npx expo run:ios                    # reconstruit ios/build (ou : npx react-native run-ios)
+npx expo run:android                # reconstruit android/app/build, .gradle et .cxx
+```
+
+lu-cleaner n'a pas de règle pour les dossiers `ios/` et `android/` eux-mêmes. Avec la Continuous Native Generation d'Expo, ces dossiers sont ignorés par git. L'un d'eux n'apparaît que s'il contient plus de 200 Mo en dehors de ses artefacts connus, et alors sous la forme d'un élément `ignored-dir` de risque caution (section suivante). `npx expo prebuild` régénère les deux dossiers.
+
+## Gros dossiers ignorés par git (`ignored-dir`)
+
+Les projets accumulent aussi de gros dossiers qu'aucune règle ne connaît, et les agents IA aggravent le phénomène : captures d'écran et enregistrements de QA, copies de préproduction, exports temporaires. Quand un dossier **ignoré par git** contient plus de **200 Mo** en plus des artefacts connus qu'il renferme, lu-cleaner le liste sous la forme `my-app › tmp-recordings (git-ignored)`, avec le type `ignored-dir` :
+
+- Le risque est <span class="risk caution">caution</span>, car lu-cleaner ne peut pas savoir ce que contient le dossier. Il n'est jamais retenu par la sélection intelligente. `clean --yes` l'écarte sauf si vous passez `--risk caution`, et le sélecteur vous demande de taper `yes`.
+- Son âge est la date du dernier fichier écrit à l'intérieur, et non l'activité du projet.
+- S'il contient une copie de travail git, il est en rapport seul.
+- Les dossiers d'outils et d'éditeurs ne sont jamais signalés : `.git`, `.claude`, `.cursor`, `.codex`, `.conductor`, `.vscode`, `.idea`, `.env`, `worktrees` et similaires.
+- Sa taille inclut les artefacts connus trouvés à l'intérieur. Ces artefacts sont aussi listés comme éléments à part entière.
+
+Ouvrez-le avec `o` (afficher dans le Finder) avant de décider.
+
+## Où cherche le scanner
+
+| Source | Ce qu'elle ajoute |
+|---|---|
+| Racines de projets | Les `roots` de la [configuration](/lu-cleaner/fr/reference/configuration/) ou, si elles sont vides, les dossiers existants parmi `~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/repos`, `~/conductor/repos` et d'autres. `--root` ou les arguments de `lu-cleaner artifacts` remplacent cette liste le temps d'une exécution. |
+| Dossiers de worktrees | Toujours parcourus, même si vous passez des racines : `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees` et les autres listés dans [Worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/), plus `worktree_roots` |
+| Dossiers supplémentaires | `~/Documents/Codex`, `~/conductor/archived-contexts` et `~/.gemini/antigravity/scratch`, où des outils copient des projets. Seules les règles de dépendances et de build s'y appliquent. |
+
+Le parcours descend jusqu'à `max_depth` niveaux, 8 par défaut, sous chaque racine. Chaque worktree lié rencontré en chemin repart avec la profondeur complète. Les artefacts situés dans un Bureau ou un dossier Documents synchronisés avec iCloud reçoivent une note, car les supprimer les retire aussi d'iCloud.
+
+Pour ajouter vos propres noms d'artefacts, utilisez `extra_artifacts` dans la configuration. Dans un dépôt git, ces dossiers doivent être ignorés par git :
+
+```toml
+extra_artifacts = ["tmp-build", "e2e-artifacts"]
+```
+
+## Voir aussi
+
+- [Worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/) : supprimer des worktrees entiers plutôt que leurs artefacts
+- [Simulateurs iOS et Xcode](/lu-cleaner/fr/guides/ios-simulators-xcode/) : DerivedData, device support, simulateurs
+- [Android](/lu-cleaner/fr/guides/android/) : caches Gradle, émulateurs, paquets du SDK
+- [Référence de `lu-cleaner artifacts`](/lu-cleaner/reference/commands/artifacts/)

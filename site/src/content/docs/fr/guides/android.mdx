@@ -1,0 +1,283 @@
+---
+title: SDK Android, émulateurs et Gradle
+description: Nettoyez les émulateurs Android, les paquets du SDK inutilisés, les distributions et caches Gradle, les restes d'Android Studio et les JDK sans casser les projets qui en ont encore besoin.
+sidebar:
+  order: 4
+---
+
+import { Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+La [catégorie](/lu-cleaner/fr/concepts/categories/) `android` (alias : `gradle`, `emulators`) couvre la chaîne d'outils Android d'un développeur React Native ou Expo : les émulateurs (AVD) et leurs snapshots, les paquets du SDK, le dossier utilisateur de Gradle, les caches et réglages d'Android Studio, et les JDK installés.
+
+Les dossiers propres à chaque projet, comme `android/build`, `android/app/build`, `android/.gradle` et `.cxx`, sont des artefacts de projet, traités dans [Projets React Native](/lu-cleaner/fr/guides/react-native-projects/).
+
+## Démarrage rapide
+
+```bash
+./gradlew --stop                 # depuis n'importe quel projet Android : arrêter d'abord les démons Gradle
+lu-cleaner scan -c android       # ce qui prend de la place ; rien n'est modifié
+lu-cleaner clean -c android      # sélecteur, éléments recommandés présélectionnés
+lu-cleaner devices               # AVD et images système à côté des simulateurs iOS (a pour la sélection intelligente)
+```
+
+Un scan typique (tailles données à titre d'exemple) :
+
+<div class="terminal">
+<span class="acc">Android</span>  21.2 GB · 9 items · <span class="acc">★ 7.60 GB</span> recommended
+<span class="dim">NAME                                             SIZE   AGE  RISK      RECO</span>
+AVD Pixel 8 · API 35 · arm64-v8a              9.80 GB    1d  <span class="bad">caution</span>
+System image · API 33 · Google APIs · x86_64  3.90 GB     —  <span class="warn">moderate</span>  <span class="acc">★</span>
+NDK 27.1.12297006                             2.60 GB     —  <span class="warn">moderate</span>
+NDK 26.1.10909125                             2.40 GB     —  <span class="warn">moderate</span>  <span class="acc">★</span>
+Quick Boot snapshots · Pixel 8                1.90 GB    1d  <span class="warn">moderate</span>
+Android Studio caches · 2024.1                1.10 GB   7mo  <span class="ok">safe</span>      <span class="acc">★</span>
+Gradle 8.13 caches                             980 MB   now  <span class="warn">moderate</span>
+<span class="warn">! Gradle daemon running — stop it first (./gradlew --stop or pkill -f GradleDaemon)</span>
+Gradle 8.3 distribution (bin)                  196 MB   9mo  <span class="warn">moderate</span>  <span class="acc">★</span>
+JDK 11.0.24 (Zulu) · aarch64                   190 MB     —  <span class="warn">moderate</span>
+</div>
+
+Ici, `NDK 27.1.12297006` est conservé parce que c'est le NDK installé le plus récent (ou parce qu'un projet l'utilise), l'image système x86_64 ne peut pas démarrer sur Apple Silicon, et les caches de Gradle 8.13 sont exclus de la sélection intelligente tant qu'un démon tourne.
+
+## Comment lu-cleaner sait ce qui est utilisé
+
+Un paquet du SDK ou une version de Gradle ne vaut la peine d'être supprimé que si aucun projet n'en a besoin. Pour le savoir, lu-cleaner lit vos projets : il parcourt vos racines de projets et vos racines de worktrees (voir [Configuration](/lu-cleaner/fr/reference/configuration/)) jusqu'à `max_depth` niveaux (8 par défaut), en sautant les dossiers volumineux comme `node_modules`, `build` et `Pods`, et lit les fichiers suivants :
+
+| Fichier | Ce qu'il indique à lu-cleaner |
+|---|---|
+| `gradle/wrapper/gradle-wrapper.properties` | la distribution Gradle du wrapper (`distributionUrl`) |
+| `build.gradle`, `build.gradle.kts`, `gradle.properties` | `ndkVersion`, `buildToolsVersion`, `compileSdk`, la version de CMake, `org.gradle.java.home` |
+| `app.json`, `app.config.js`, `app.config.ts` | les versions définies via `expo-build-properties` d'Expo |
+| `local.properties` | `sdk.dir` et `ndk.dir` |
+| `node_modules/react-native/gradle/libs.versions.toml` | le NDK, les build-tools et le compileSdk avec lesquels React Native compile |
+
+Quand un projet React Native n'a pas de `node_modules`, la version de `react-native` de son `package.json` donne le NDK par défaut de cette version. Les versions de Gradle installées avec Homebrew ou SDKMAN comptent aussi comme utilisées.
+
+:::caution[Quand l'utilisation est inconnue, rien n'est présélectionné]
+Le parcours des projets s'arrête au bout de 20 secondes ou de 250 000 dossiers. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas présélectionnés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
+:::
+
+## Où se trouve le SDK
+
+lu-cleaner cherche les SDK Android dans cet ordre, et les dédoublonne d'après leur chemin réel :
+
+1. `$ANDROID_HOME`, puis `$ANDROID_SDK_ROOT`
+2. les réglages d'Android Studio (`options/android.sdk.path.xml` de chaque dossier de réglages `AndroidStudio*`)
+3. `sdk.dir` dans les `local.properties` de vos projets, seulement si ce chemin existe (un fichier commité peut désigner le SDK d'une autre machine)
+4. l'emplacement par défaut `~/Library/Android/sdk`
+5. le paquet `android-commandlinetools` de Homebrew (`/opt/homebrew/share/…` et `/usr/local/share/…`)
+
+Les variables d'environnement sont lues d'abord dans l'environnement, puis dans vos fichiers de démarrage du shell (`.zshenv`, `.zprofile`, `.zshrc`, `.bash_profile`, `.bashrc`, `.profile`), car les applications graphiques et les agents IA n'héritent pas des exports de votre shell. Seules les affectations simples sont comprises : chemins littéraux, `~`, `$HOME` et variables déjà définies ; tout ce qui est calculé avec `$(...)` ou des backticks est ignoré.
+
+La même résolution s'applique au dossier des AVD (`$ANDROID_AVD_HOME`, `$ANDROID_EMULATOR_HOME/avd`, `$ANDROID_USER_HOME/avd`, `$ANDROID_PREFS_ROOT/.android/avd`, puis `~/.android/avd`), à `$GRADLE_USER_HOME` (par défaut `~/.gradle`) et à `$JAVA_HOME`.
+
+### SDK et AVD sur un disque externe
+
+Une configuration courante consiste à déplacer le SDK et les émulateurs sur un SSD externe en laissant des liens symboliques à leur place, par exemple `~/Library/Android/sdk` qui pointe vers `/Volumes/External/Android/sdk`. lu-cleaner résout chaque lien symbolique et vérifie sur quel volume se trouvent les vrais fichiers. **Tout ce qui ne se trouve pas sur le volume de votre dossier personnel est signalé, jamais supprimé**, et les liens symboliques eux-mêmes ne sont jamais retirés :
+
+| Situation | Ce que vous voyez |
+|---|---|
+| Fichiers sur un autre volume | `Android SDK on External`, *on external volume — no internal gain* |
+| Disque non monté | *on /Volumes/External, which is not mounted — nothing to clean here (link kept)* |
+| Cible du lien symbolique absente | *dangling symlink to … — nothing to clean here (link kept)* |
+| `/Volumes/External` est un simple dossier sur le disque interne | *… is a plain folder on the internal disk, not a mounted volume — check it by hand* |
+| SDK sur le disque interne mais hors de votre dossier personnel (Homebrew) | mesuré, *outside your home folder — remove it by hand if unused* |
+
+Un dossier d'AVD dans la même situation apparaît comme `Android emulators (3 AVDs) on External`, avec les mêmes avertissements, et ses émulateurs sont listés à titre d'information uniquement.
+
+Pourquoi : supprimer des fichiers sur un disque externe ne libère rien sur le disque interne que vous cherchez à nettoyer, et quand le disque n'est pas monté, lu-cleaner ne peut pas voir ce qu'il contient. Les deux derniers cas se trouvent en dehors des zones autorisées par le [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/). À l'intérieur d'un SDK interne, un paquet isolé qui est un lien symbolique est signalé de la même façon.
+
+## Émulateurs (AVD)
+
+Un AVD se compose d'un dossier `<name>.avd` et d'un fichier `<name>.ini` placé à côté. lu-cleaner affiche un élément par AVD, par exemple `AVD Pixel 8 · API 35 · arm64-v8a`, et supprime les deux.
+
+| AVD | Risque | Sélection intelligente |
+|---|---|---|
+| AVD ordinaire | <span class="risk caution">caution</span> | jamais : il contient des apps installées, leurs données et des snapshots |
+| AVD x86 ou x86_64 sur Apple Silicon | <span class="risk moderate">moderate</span> | oui : il ne peut pas démarrer sur ce Mac |
+| Entrée cassée (un `.ini` dont le dossier a disparu) | <span class="risk safe">safe</span> | oui : seul le `.ini` est supprimé |
+| Émulateur en cours d'exécution | comme ci-dessus | avertissement *emulator is running — close it first* |
+
+D'autres avertissements vous signalent un AVD sans `.ini` (l'émulateur ne le voit pas) ou dont l'image système n'est pas installée (il ne peut pas démarrer). Recréer un AVD dans le Device Manager d'Android Studio est rapide, mais ses apps et ses données sont perdues.
+
+:::note[Fermez tous les émulateurs avant de nettoyer]
+Les émulateurs en cours d'exécution sont détectés grâce à leurs processus `qemu-system-*`. Tant qu'un moteur d'émulation tourne, les éléments AVD et snapshots sont ignorés au moment du nettoyage avec *… is running — quit it first (or use --force)*. Supprimer les images disque d'un émulateur en cours d'exécution le corromprait.
+:::
+
+### Snapshots Quick Boot
+
+Le dossier `snapshots/` d'un AVD contient `default_boot`, l'état de la RAM et de l'appareil enregistré à la fermeture pour Quick Boot. Le supprimer ne coûte que du temps : le lancement suivant se fait à froid (30 à 90 secondes), et les apps et les données restent. L'élément, `Quick Boot snapshots · Pixel 8`, est <span class="risk moderate">moderate</span> et présélectionné une fois périmé.
+
+Si vous avez enregistré vous-même des snapshots nommés, l'élément devient `Emulator snapshots · Pixel 8`, avec le risque <span class="risk caution">caution</span> et un avertissement qui les liste. lu-cleaner ne supprime jamais les images userdata d'un AVD à elles seules : les snapshots en dépendent.
+
+## Paquets du SDK
+
+Les NDK, build-tools, plateformes, CMake et sources suivent les mêmes règles de conservation :
+
+- **Utilisé par un projet** : conservé. L'élément affiche `used_by` (dans le panneau de détails et dans les métadonnées `--json`) et n'est jamais présélectionné.
+- **Version installée la plus récente** : toujours conservée.
+- **Tout le reste** : présélectionné, à condition que le parcours des projets soit allé jusqu'au bout.
+
+Les images système suivent plutôt les émulateurs : une image utilisée par un AVD ne peut pas être sélectionnée, et une image inutilisée est présélectionnée.
+
+| Paquet | Type (`-k`) | Conservé quand | Pour le récupérer |
+|---|---|---|---|
+| Images système, `system-images/android-<API>/<tag>/<abi>` | `android-system-image` | un AVD l'utilise (elle ne peut alors pas être sélectionnée du tout) | SDK Manager, 1,5 à 7 Go chacune |
+| NDK, `ndk/<version>` | `android-ndk` | un projet l'utilise, ou c'est le plus récent | AGP le télécharge de nouveau (~1 Go) |
+| Build-tools, `build-tools/<version>` | `android-build-tools` | un projet les utilise, ou ce sont les plus récents | AGP les télécharge automatiquement |
+| Plateformes, `platforms/android-<N>` | `android-platform` | c'est le `compileSdk` d'un projet, ou la plus récente | AGP la télécharge automatiquement |
+| CMake, `cmake/<version>` | `android-cmake` | un projet l'utilise, c'est le plus récent, ou c'est `3.22.1` (la version par défaut d'AGP 8, avec laquelle React Native compile) | AGP télécharge la version dont il a besoin |
+| Sources, `sources/android-<N>` | `android-sources` | c'est le `compileSdk` d'un projet, ou les plus récentes | servent uniquement à parcourir le code dans l'IDE |
+
+Les images système sont <span class="risk moderate">moderate</span>, comme les autres paquets. Si un dossier d'AVD ne peut pas être lu (disque non monté), les images portent *an AVD folder is not reachable — cannot tell whether an emulator uses this image* et ne sont pas présélectionnées. Un dossier nommé comme `35.0.0-2` est le reste d'une installation qui a échoué : <span class="risk safe">safe</span> et présélectionné.
+
+Contenu ancien et restes du SDK :
+
+| Élément | Type (`-k`) | Risque | Sélection intelligente |
+|---|---|---|---|
+| Fichiers temporaires et téléchargements partiels du SDK Manager (`.temp`, `.downloadIntermediates`, `temp`) | `android-sdk-temp` | <span class="risk safe">safe</span> | oui ; ignoré tant qu'Android Studio tourne |
+| Anciens SDK Tools, `tools/` | `android-sdk-legacy-tools` | <span class="risk moderate">moderate</span> | oui, quand `cmdline-tools/latest` est installé |
+| Copies `cmdline-tools/<version>` remplacées | `android-cmdline-tools-old` | <span class="risk moderate">moderate</span> | oui ; `latest` est celle qui est utilisée |
+| Ancien `ndk-bundle` | `android-ndk-bundle` | <span class="risk moderate">moderate</span> | oui, sauf si un projet fixe `ndk.dir` ou `ndkPath` |
+| Intel HAXM (`extras/intel`) sur Apple Silicon | `android-haxm` | <span class="risk moderate">moderate</span> | oui |
+
+### Images x86 sur Apple Silicon
+
+Les images système et AVD x86 et x86_64 ne peuvent pas démarrer sur un Mac Apple Silicon ; ce sont des restes typiques d'une migration depuis un Mac Intel. lu-cleaner ajoute *cannot boot on Apple Silicon* à leur note et les présélectionne. C'est une raison de les supprimer plutôt qu'un danger : ce n'est donc pas affiché comme un avertissement.
+
+## Gradle
+
+Gradle range tout dans son dossier utilisateur, `$GRADLE_USER_HOME` ou `~/.gradle`. Si ce dossier se trouve sur un autre volume, il est signalé et jamais nettoyé.
+
+| Élément | Type (`-k`) | Risque | Sélection intelligente et remarques |
+|---|---|---|---|
+| Distribution du wrapper, `wrapper/dists/gradle-<v>-bin` (ou `-all`) | `android-gradle-dist` | <span class="risk moderate">moderate</span> | présélectionnée quand aucun wrapper de projet ne l'utilise ; `./gradlew` la retélécharge (130 à 200 Mo) |
+| Téléchargement du wrapper interrompu (sans marqueur `.ok`) | `android-gradle-dist` | <span class="risk safe">safe</span> | présélectionné, sauf si un fichier `.part` a changé dans la dernière heure |
+| Caches par version, `caches/<version>` | `android-gradle-version-cache` | <span class="risk moderate">moderate</span> | présélectionnés quand aucun wrapper ni aucun Gradle Homebrew ou SDKMAN n'utilise cette version |
+| Transforms, jars ou build cache dans un ancien format (par exemple `transforms-3` quand `transforms-4` existe) | `android-gradle-transforms`, `android-gradle-jars`, `android-gradle-build-cache` | <span class="risk safe">safe</span> | présélectionnés |
+| Build cache local actuel | `android-gradle-build-cache` | <span class="risk safe">safe</span> | sert uniquement à accélérer les rebuilds ; se remplit de nouveau tout seul |
+| Cache de transforms actuel | `android-gradle-transforms` | <span class="risk moderate">moderate</span> | le dexing, jetifier et l'extraction des AAR sont recalculés (quelques minutes de plus) |
+| Cache des dépendances, `caches/modules-2` | `android-gradle-modules` | <span class="risk moderate">moderate</span> | 1 à 3 Go retéléchargés par le build suivant ; les builds hors ligne échouent d'ici là |
+| Autres caches partagés (Kotlin DSL, scripts, keyrings…) | `android-gradle-caches-other` | <span class="risk moderate">moderate</span> | reconstruits ou retéléchargés |
+| Journaux des démons, `daemon/<version>` | `android-gradle-daemon-logs` | <span class="risk safe">safe</span> | tant qu'un démon de cette version tourne, seuls les journaux de plus de 24 heures sont proposés |
+| Fichiers temporaires et téléchargements partiels, `.tmp` | `android-gradle-tmp` | <span class="risk safe">safe</span> | fichiers de plus d'un jour, que ni Gradle ni les autres outils de nettoyage ne suppriment ; présélectionnés |
+| JDK de toolchain, `jdks/*` | `android-gradle-jdk` | <span class="risk moderate">moderate</span> | retéléchargés (200 à 300 Mo) quand un build les demande ; jamais présélectionnés |
+| Helpers natifs, rapports de build Kotlin, état des workers | `android-gradle-misc` | <span class="risk safe">safe</span> | recréés automatiquement |
+
+`caches/journal-1` n'est jamais proposé : le nettoyage de cache intégré à Gradle en dépend.
+
+La date de dernière utilisation d'une version de Gradle provient de ses journaux de démon, le signal d'utilisation le plus fiable. Une distribution ou un cache qu'un projet utilise n'est pas présélectionné comme inutilisé, mais comme tout élément <span class="risk moderate">moderate</span>, il est présélectionné une fois resté inutilisé plus longtemps que [`stale_after`](/lu-cleaner/fr/reference/configuration/) ; le build suivant de ce projet le retélécharge ou le reconstruit alors. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
+
+### Quand un démon Gradle tourne
+
+Les démons Gradle sont des processus JVM nommés `java` : lu-cleaner ne peut donc pas bloquer le nettoyage d'après le nom du processus, comme il le fait pour Xcode ou Android Studio. À la place, quand `pgrep` trouve un `GradleDaemon`, les éléments concernés reçoivent cet avertissement et sont exclus de la sélection intelligente :
+
+*Gradle daemon running — stop it first (./gradlew --stop or pkill -f GradleDaemon)*
+
+Les éléments propres à une version (distributions, caches par version) ne sont signalés que si un démon de cette version tourne, ou si la version d'un démon ne peut pas être lue. Les caches partagés (transforms, jars, build cache, `modules-2`, autres caches, JDK de toolchain, divers) sont signalés dès qu'un démon tourne.
+
+Pourquoi c'est important : un démon en cours d'exécution garde les fichiers supprimés ouverts, donc leur espace n'est pas libéré avant qu'il se termine, et un build en cours peut échouer à mi-chemin. L'avertissement n'arrête pas un nettoyage que vous sélectionnez explicitement : arrêtez donc les démons d'abord. `./gradlew --stop` arrête les démons de la version de Gradle de ce projet ; `pkill -f GradleDaemon` les arrête tous.
+
+## Android Studio
+
+| Élément | Type (`-k`) | Risque | Remarques |
+|---|---|---|---|
+| Caches de la version installée, `~/Library/Caches/Google/AndroidStudio<version>` | `android-studio-cache` | <span class="risk moderate">moderate</span> | reconstruits au lancement suivant (la réindexation prend plusieurs minutes) ; ignorés tant qu'Android Studio tourne |
+| Caches d'une version qui n'est plus installée | `android-studio-cache` | <span class="risk safe">safe</span> | plus rien ne les lit ; présélectionnés |
+| Journaux, `~/Library/Logs/Google/AndroidStudio*` | `android-studio-logs` | <span class="risk safe">safe</span> | `idea.log` et rapports de crash |
+| Réglages d'une ancienne version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | lus uniquement pour migrer les réglages lors d'une mise à jour ; présélectionnés quand la version actuelle a ses propres réglages |
+| Cache du dépôt du SDK, ancien build cache et dumps de crash de l'émulateur dans `~/.android` | `android-user-cache` | <span class="risk safe">safe</span> | uniquement le contenu de `cache`, `build-cache` et `breakpad` |
+
+Le dossier de réglages de la version que vous utilisez n'est jamais proposé. lu-cleaner détermine les versions installées à partir du `product-info.json` de chaque `Android Studio*.app` trouvée dans `/Applications`, `~/Applications` et les résultats de Spotlight. S'il n'en trouve aucune (emplacement personnalisé, JetBrains Toolbox…), le dossier de réglages utilisé le plus récemment est considéré comme celui de la version actuelle, par prudence.
+
+Dans `~/.android`, `adbkey`, `debug.keystore` et les réglages de l'émulateur ne sont jamais touchés : ils figurent sur la liste protégée du garde-fou.
+
+## JDK
+
+Les builds Android ont besoin d'un JDK, et la plupart des machines en accumulent plusieurs. lu-cleaner les liste tous et n'en présélectionne jamais aucun :
+
+| Emplacement | Installé par | Traitement |
+|---|---|---|
+| `/Library/Java/JavaVirtualMachines` | installeurs système, casks Homebrew | rapport seul : la suppression demande des droits administrateur ; la note suggère `brew uninstall --cask <cask>` ou `sudo rm -rf …` |
+| `~/Library/Java/JavaVirtualMachines` | téléchargements depuis l'IDE | <span class="risk moderate">moderate</span> |
+| `~/.sdkman/candidates/java` | SDKMAN | <span class="risk moderate">moderate</span> |
+| `~/.local/share/mise/installs/java` | mise | <span class="risk moderate">moderate</span> |
+| `~/.asdf/installs/java` | asdf | <span class="risk moderate">moderate</span> |
+
+Un JDK référencé par `$JAVA_HOME` (environnement ou profil du shell) ou par `org.gradle.java.home` dans `~/.gradle/gradle.properties` est marqué comme utilisé et ne peut pas être sélectionné. Les détails indiquent aussi si un JDK est enregistré dans la table des JDK d'Android Studio, s'il est antérieur au JDK 17 (React Native 0.73+ a besoin du 17), et avertissent des JDK x86_64 sur Apple Silicon (*x86_64 JDK: runs only under Rosetta*).
+
+## Autres données liées à Android
+
+Ces emplacements fixes proviennent du [catalogue](/lu-cleaner/reference/catalog/) :
+
+| Élément | Emplacement | Risque |
+|---|---|---|
+| État du démon Kotlin | `~/.kotlin`, `~/Library/Application Support/kotlin/daemon` | <span class="risk moderate">moderate</span> |
+| Dépendances et caches Kotlin/Native | `~/.konan/dependencies`, `~/.konan/cache` | <span class="risk moderate">moderate</span> |
+| Compilateurs Kotlin/Native (le plus récent est conservé) | `~/.konan/kotlin-native-prebuilt-*` | <span class="risk moderate">moderate</span> |
+| Dépôt Maven local | `~/.m2/repository` | <span class="risk caution">caution</span> : les artefacts que vous avez publiés localement ne peuvent pas être retéléchargés |
+| Bibliothèques natives Skiko (la plus récente est conservée) | `~/.skiko/*` | <span class="risk safe">safe</span> |
+| Fichiers temporaires de l'émulateur | `$TMPDIR/android-*` | <span class="risk safe">safe</span> ; ignorés tant qu'un émulateur tourne |
+| Appareils virtuels Genymotion | `~/.Genymobile/Genymotion/deployed/*` | rapport seul : supprimez-les depuis Genymotion |
+| APK stockés pour Maestro | `~/.maestro/apps/android/*.apk` | rapport seul |
+
+## Marche à suivre recommandée
+
+<Steps>
+
+1. Arrêtez les démons Gradle, fermez tous les émulateurs et quittez Android Studio :
+
+   ```bash
+   pkill -f GradleDaemon
+   ```
+
+2. Vérifiez que vos racines de projets couvrent tous vos projets Android, pour que la mention « inutilisé » soit fiable :
+
+   ```bash
+   lu-cleaner config show
+   ```
+
+3. Passez tout en revue, y compris les éléments en rapport seul comme un SDK sur un disque externe :
+
+   ```bash
+   lu-cleaner scan -c android --all
+   ```
+
+4. Ouvrez le sélecteur, vérifiez la présélection catégorie par catégorie, puis appuyez sur <kbd>d</kbd> :
+
+   ```bash
+   lu-cleaner clean -c android
+   ```
+
+</Steps>
+
+## Depuis un script
+
+```bash
+# Le plan que la sélection intelligente exécuterait ; rien n'est supprimé
+lu-cleaner clean --yes --smart -c android --dry-run
+
+# Images système inutilisées (images x86 sur Apple Silicon comprises)
+lu-cleaner clean --yes --smart -k android-system-image
+
+# Distributions Gradle et caches par version dont aucun projet n'a besoin
+lu-cleaner clean --yes --smart -k android-gradle-dist,android-gradle-version-cache --dry-run
+
+# Fichiers temporaires de Gradle et journaux des démons
+lu-cleaner clean --yes -k android-gradle-tmp,android-gradle-daemon-logs
+```
+
+:::caution[Restreignez toujours clean --yes]
+Sans `--smart`, `lu-cleaner clean --yes -c android` inclut tous les éléments sélectionnables jusqu'au risque <span class="risk moderate">moderate</span>, **y compris les NDK, build-tools et versions de Gradle que vos projets utilisent**, ainsi que tout le cache des dépendances. Les avertissements sont affichés dans le plan, mais n'arrêtent pas un nettoyage non interactif. Préférez `--smart` ou `-k`, et lancez une première fois avec `--dry-run`. Les AVD et le dépôt Maven local (<span class="risk caution">caution</span>) ne sont inclus qu'avec `--risk caution`.
+:::
+
+Tous les types ci-dessus peuvent être passés à `-k`, et l'identifiant de fournisseur `android` sélectionne d'un coup tous les types du scanner Android. Les entrées du catalogue de la section précédente ont leurs propres identifiants (`android-maven-local`, `android-konan-dependencies`…), listés dans le [catalogue](/lu-cleaner/reference/catalog/). Les métadonnées de chaque élément (`used_by`, `kept`, `api`, `abi`, `version`, `real_path`…) sont disponibles dans `lu-cleaner scan --json` ; voir [Sortie JSON](/lu-cleaner/fr/reference/json-output/).
+
+## Voir aussi
+
+<CardGrid>
+	<LinkCard title="Projets React Native" href="/lu-cleaner/fr/guides/react-native-projects/" description="android/build, .gradle, .cxx et les autres artefacts propres à chaque projet." />
+	<LinkCard title="Simulateurs iOS et Xcode" href="/lu-cleaner/fr/guides/ios-simulators-xcode/" description="Le même nettoyage côté Apple." />
+	<LinkCard title="Pourquoi l'espace libéré n'apparaît pas" href="/lu-cleaner/fr/guides/disk-space-not-freed/" description="Fichiers ouverts, instantanés et autres raisons pour lesquelles l'espace libre ne bouge pas." />
+	<LinkCard title="Référence des scanners" href="/lu-cleaner/fr/reference/scanners/" description="Ce que regarde chaque scanner." />
+</CardGrid>
