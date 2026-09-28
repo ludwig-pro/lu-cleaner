@@ -298,7 +298,7 @@ func TestScanStatuses(t *testing.T) {
 	cases := map[string]want{
 		f.merged:       {"codex-worktree", statusMerged, core.RiskModerate, core.MethodWorktree, true, "", true},
 		f.dirty:        {"cursor-worktree", statusDirty, core.RiskCaution, core.MethodWorktree, false, "1 uncommitted change", true},
-		f.unpushed:     {"claude-worktree", statusUnpushed, core.RiskCaution, core.MethodWorktree, false, "1 unpushed commit", true},
+		f.unpushed:     {"claude-worktree", statusUnpushed, core.RiskModerate, core.MethodWorktree, false, "1 unpushed commit", true},
 		f.locked:       {"conductor-worktree", statusLocked, core.RiskCaution, core.MethodWorktree, false, "locked: agent running", true},
 		f.orphanPruned: {"codex-worktree", statusOrphan, core.RiskCaution, core.MethodDelete, false, "orphaned: git no longer tracks it", true},
 		f.orphanMain:   {"codex-worktree", statusOrphan, core.RiskCaution, core.MethodDelete, false, "orphaned: git no longer tracks it", true},

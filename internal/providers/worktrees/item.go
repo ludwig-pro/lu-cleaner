@@ -126,17 +126,27 @@ func (s *scan) item(w *worktree) *core.Item {
 				caution = true
 				warn = append(warn, plural(w.dirty, "uncommitted change", "uncommitted changes"))
 			}
+			// `git worktree remove` keeps the branch: local-only commits on a
+			// named branch survive (moderate, but kept out of smart select by
+			// the warning). Only a detached HEAD can lose commits (caution).
 			switch {
 			case !w.unpushedOK:
-				caution = true
-				warn = append(warn, "unpushed commits unknown")
-			case w.unpushed > 0:
-				caution = true
-				msg := plural(w.unpushed, "unpushed commit", "unpushed commits")
 				if w.detached {
-					msg += " on a detached HEAD"
-				} else if w.gone {
-					msg += " (upstream branch deleted)"
+					caution = true
+					warn = append(warn, "detached HEAD, unpushed commits unknown")
+				} else {
+					warn = append(warn, "unpushed commits unknown (branch "+w.branch+" is kept)")
+				}
+			case w.unpushed > 0:
+				msg := plural(w.unpushed, "unpushed commit", "unpushed commits")
+				switch {
+				case w.detached:
+					caution = true
+					msg += " on a detached HEAD — create a branch first or they are lost"
+				case w.gone:
+					msg += " (upstream branch deleted; branch " + w.branch + " is kept)"
+				default:
+					msg += " (branch " + w.branch + " is kept)"
 				}
 				warn = append(warn, msg)
 			}
