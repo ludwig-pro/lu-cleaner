@@ -54,6 +54,15 @@ func ParseRisk(s string) (Risk, error) {
 
 func (r Risk) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
 
+func (r *Risk) UnmarshalText(b []byte) error {
+	v, err := ParseRisk(string(b))
+	if err != nil {
+		return err
+	}
+	*r = v
+	return nil
+}
+
 // Method is how an item gets cleaned.
 type Method int
 
@@ -87,6 +96,16 @@ func (m Method) String() string {
 }
 
 func (m Method) MarshalText() ([]byte, error) { return []byte(m.String()), nil }
+
+func (m *Method) UnmarshalText(b []byte) error {
+	for _, c := range []Method{MethodDelete, MethodTrash, MethodCommand, MethodWorktree, MethodReport} {
+		if c.String() == string(b) {
+			*m = c
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown method %q", b)
+}
 
 // Cleanable reports whether the method actually removes something.
 func (m Method) Cleanable() bool { return m != MethodReport }
@@ -128,7 +147,7 @@ var Categories = []CategoryInfo{
 	{CatIDE, "IDEs", "🧩", "VS Code, Cursor, Zed, JetBrains caches"},
 	{CatContainers, "Containers", "🐳", "Docker, colima, OrbStack"},
 	{CatLangs, "Other toolchains", "🧰", "Homebrew, Go, Rust, Python, Ruby"},
-	{CatSystem, "System", "🗄️", "Library caches & logs, Trash, browsers, downloads"},
+	{CatSystem, "System", "💻", "Library caches & logs, Trash, browsers, downloads"},
 }
 
 // LookupCategory returns the CategoryInfo for id (Title falls back to id).
@@ -188,7 +207,7 @@ type Item struct {
 	Files   int64 `json:"files,omitempty"`
 	Sizing  bool  `json:"-"` // size still being computed
 
-	LastUsed time.Time `json:"last_used,omitempty"` // best estimate of last activity (drives "age")
+	LastUsed time.Time `json:"last_used,omitzero"` // best estimate of last activity (drives "age")
 
 	Risk    Risk     `json:"risk"`
 	Method  Method   `json:"method"`
@@ -200,7 +219,20 @@ type Item struct {
 	ProcessGuard   []string `json:"process_guard,omitempty"`   // refuse while one of these processes runs (pgrep -x names)
 	RequireSibling []string `json:"require_sibling,omitempty"` // at least one of these must exist next to Path
 	Selectable     bool     `json:"-"`                         // false => shown but cannot be selected
+	AlwaysShow     bool     `json:"-"`                         // shown even below the min-size filter (count-based items: symlinks, prune…)
 	AllowGitRepo   bool     `json:"-"`                         // Path may itself be a git repo (e.g. ~/.cocoapods/repos/master)
+	// Covers declares, for command items, the directory the command removes
+	// entirely (e.g. a simulator device dir for `simctl delete <udid>`). Items
+	// inside it become redundant when both are selected (see TopLevel).
+	Covers string `json:"-"`
+	// Recheck, when set, is called right before cleaning (and in dry-run) to
+	// re-validate state that may have changed since the scan (e.g. "the
+	// simulator is still shut down"). A non-nil error skips the item.
+	Recheck func(ctx context.Context) error `json:"-"`
+	// Inodes is the identity snapshot of Targets() taken by the engine at scan
+	// time (0 = missing). The executor refuses a target whose inode changed
+	// since (TOCTOU protection: a directory replaced by a symlink, a new clone...).
+	Inodes []uint64 `json:"-"`
 
 	Project string            `json:"project,omitempty"` // project root / main repo this belongs to
 	Meta    map[string]string `json:"meta,omitempty"`    // provider specific details (branch, dirty, api level...)
@@ -209,6 +241,17 @@ type Item struct {
 
 	// Recommended marks items preselected by "smart select" (safe, stale, big).
 	Recommended bool `json:"recommended,omitempty"`
+}
+
+// SetReclaim records how many bytes deleting the item really frees when that
+// is less than Size (hardlinks shared elsewhere). A tree fully hardlinked
+// elsewhere is stored as 1 byte, since 0 means "same as Size".
+func (it *Item) SetReclaim(reclaim int64) {
+	if reclaim >= it.Size {
+		it.Reclaim = 0
+		return
+	}
+	it.Reclaim = max(reclaim, 1)
 }
 
 // Freed returns the best estimate of bytes freed by cleaning the item.
@@ -255,6 +298,7 @@ func (it *Item) CanClean() bool {
 func (it *Item) Clone() *Item {
 	c := *it
 	c.Paths = append([]string(nil), it.Paths...)
+	c.Inodes = append([]uint64(nil), it.Inodes...)
 	if it.Meta != nil {
 		c.Meta = make(map[string]string, len(it.Meta))
 		for k, v := range it.Meta {

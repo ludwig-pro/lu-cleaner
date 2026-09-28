@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"golang.org/x/sys/unix"
 )
 
 // Event is sent for every item upsert and when a provider finishes.
@@ -24,6 +26,7 @@ type Event struct {
 // returned channel. The channel is closed once all providers are done.
 // A panicking provider is reported as an error instead of crashing the app.
 func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan Event {
+	ctx = fsx.WithCache(ctx) // providers measuring the same directory share one walk
 	ch := make(chan Event, 256)
 	var wg sync.WaitGroup
 	for _, p := range providers {
@@ -45,6 +48,9 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 					if it.Provider == "" {
 						it.Provider = p.ID()
 					}
+					if !it.Sizing && it.Method != core.MethodCommand && it.Method != core.MethodReport {
+						it.Inodes = Snapshot(it.Targets())
+					}
 					select {
 					case ch <- Event{Item: it, Provider: p.ID()}:
 					case <-ctx.Done():
@@ -59,6 +65,21 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 	}
 	go func() { wg.Wait(); close(ch) }()
 	return ch
+}
+
+// Snapshot returns the inode of each path (0 when missing), without following symlinks.
+func Snapshot(paths []string) []uint64 {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]uint64, len(paths))
+	var st unix.Stat_t
+	for i, p := range paths {
+		if unix.Lstat(p, &st) == nil {
+			out[i] = st.Ino
+		}
+	}
+	return out
 }
 
 // Result is the outcome of Collect.

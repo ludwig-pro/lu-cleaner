@@ -12,7 +12,7 @@ type Filter struct {
 	Kinds      []string   // empty = all (matches Item.Kind or Provider)
 	MinSize    int64
 	OlderThan  time.Duration // only items whose LastUsed is older (unknown age never matches when > 0)
-	MaxRisk    Risk          // highest risk allowed (RiskCaution = everything cleanable)
+	MaxRisk    Risk          // highest risk allowed — the zero value (RiskSafe) hides moderate+ items: set it explicitly (RiskNever = everything)
 	Query      string        // case-insensitive substring over name, path, kind, project
 }
 
@@ -42,7 +42,7 @@ func (f *Filter) Match(it *Item, now time.Time) bool {
 			return false
 		}
 	}
-	if f.MinSize > 0 && it.Size < f.MinSize {
+	if f.MinSize > 0 && it.Size < f.MinSize && !it.AlwaysShow && it.Method != MethodCommand && !it.Sizing {
 		return false
 	}
 	if f.OlderThan > 0 {
@@ -86,44 +86,105 @@ func Recommend(it *Item, now time.Time, staleAfter time.Duration) bool {
 	return false
 }
 
-// TopLevel drops items nested inside another item of the list (same path
-// prefix), keeping the outermost one. Items without a path are kept, with
-// identical commands deduplicated. Order: by path.
+// TopLevel drops items made redundant by other items of the list: an item is
+// dropped when every one of its targets (Path, or Paths for group items) is
+// equal to or inside a target of another kept item. On identical targets the
+// first item of the list wins. Command items (no targets) are kept, identical
+// commands deduplicated. Returned order: by first target path, then commands.
 func TopLevel(items []*Item) []*Item {
-	var withPath, noPath []*Item
-	for _, it := range items {
-		if it.Path == "" {
-			noPath = append(noPath, it)
+	type target struct {
+		path string
+		idx  int
+	}
+	var targets []target
+	for i, it := range items {
+		for _, p := range it.Targets() {
+			targets = append(targets, target{p, i})
+		}
+		if len(it.Targets()) == 0 && it.Covers != "" {
+			targets = append(targets, target{it.Covers, i})
+		}
+	}
+	sort.SliceStable(targets, func(a, b int) bool {
+		if targets[a].path != targets[b].path {
+			return targets[a].path < targets[b].path
+		}
+		return targets[a].idx < targets[b].idx
+	})
+	// A target is covered when an ancestor-or-equal target of another item precedes it.
+	uncovered := make([]int, len(items))
+	for i, it := range items {
+		uncovered[i] = len(it.Targets())
+		if uncovered[i] == 0 && it.Covers != "" {
+			uncovered[i] = 1
+		}
+	}
+	var stack []target // chain of ancestor targets
+	for _, t := range targets {
+		for len(stack) > 0 {
+			top := stack[len(stack)-1].path
+			if t.path == top || strings.HasPrefix(t.path, top+"/") {
+				break
+			}
+			stack = stack[:len(stack)-1]
+		}
+		covered := false
+		for _, a := range stack {
+			if a.idx != t.idx {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			uncovered[t.idx]--
 		} else {
-			withPath = append(withPath, it)
+			stack = append(stack, t)
 		}
 	}
-	sort.SliceStable(withPath, func(i, j int) bool { return withPath[i].Path < withPath[j].Path })
-	var out []*Item
-	var last string
-	for _, it := range withPath {
-		if last != "" && (it.Path == last || strings.HasPrefix(it.Path, last+"/")) {
-			continue
-		}
-		out = append(out, it)
-		last = it.Path
-	}
+	var withTargets []*Item
+	var firstPath = map[*Item]string{}
 	seen := map[string]bool{}
-	for _, it := range noPath {
-		k := strings.Join(it.Command, "\x00")
-		if k != "" && seen[k] {
+	var commands []*Item
+	for i, it := range items {
+		ts := it.Targets()
+		if len(ts) == 0 {
+			if it.Covers != "" && uncovered[i] == 0 {
+				continue // covered by a path item or another command
+			}
+			k := strings.Join(it.Command, "\x00")
+			if k != "" && seen[k] {
+				continue
+			}
+			seen[k] = true
+			commands = append(commands, it)
 			continue
 		}
-		seen[k] = true
-		out = append(out, it)
+		if uncovered[i] > 0 {
+			withTargets = append(withTargets, it)
+			min := ts[0]
+			for _, p := range ts[1:] {
+				if p < min {
+					min = p
+				}
+			}
+			firstPath[it] = min
+		}
 	}
-	return out
+	sort.SliceStable(withTargets, func(a, b int) bool { return firstPath[withTargets[a]] < firstPath[withTargets[b]] })
+	return append(withTargets, commands...)
 }
 
-// Total sums Freed() over the top-level items (no double counting of nested paths).
+// Total sums Freed() over the cleanable top-level items (no double counting
+// of nested paths; report-only and non-selectable items are left out).
 func Total(items []*Item) int64 {
+	var cleanable []*Item
+	for _, it := range items {
+		if it.CanClean() {
+			cleanable = append(cleanable, it)
+		}
+	}
 	var n int64
-	for _, it := range TopLevel(items) {
+	for _, it := range TopLevel(cleanable) {
 		n += it.Freed()
 	}
 	return n

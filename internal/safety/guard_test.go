@@ -45,8 +45,8 @@ func TestGuard(t *testing.T) {
 	blocked := []string{
 		"/", "/Users", "/Applications", home, filepath.Join(home, "Library"),
 		filepath.Join(home, "local_sources"), // a root itself
-		proj,                                // a git repository
-		filepath.Join(home, ".claude"),      // denied + contains credentials
+		proj,                                 // a git repository
+		filepath.Join(home, ".claude"),       // denied + contains credentials
 		filepath.Join(home, ".claude/.credentials.json"),
 		filepath.Join(home, "LIBRARY"), // case-insensitive
 		tmp,
@@ -70,6 +70,34 @@ func TestGuard(t *testing.T) {
 	os.Symlink("/", link)
 	if err := g.Check(filepath.Join(link, "usr"), Options{}); err == nil {
 		t.Errorf("symlinked parent escaping home not blocked")
+	}
+	if g.Protected(nm) {
+		t.Errorf("paths inside a scan root must not be reported as protected")
+	}
+	if !g.Protected(filepath.Join(home, "local_sources")) {
+		t.Errorf("a scan root itself must be protected")
+	}
+	mk(".claude/projects/-Users-x-app/memory")
+	mk(".claude/projects/-Users-x-app/sessions-old")
+	os.WriteFile(filepath.Join(home, ".codex/state_5.sqlite"), nil, 0o644)
+	os.MkdirAll(filepath.Join(home, ".codex/tmp"), 0o755)
+	for _, p := range []string{
+		filepath.Join(home, ".claude/projects/-Users-x-app/memory"),
+		filepath.Join(home, ".claude/projects/-Users-x-app"), // contains memory/
+		filepath.Join(home, ".codex/state_5.sqlite"),
+	} {
+		if err := g.Check(p, Options{}); err == nil {
+			t.Errorf("glob-protected %s not blocked", p)
+		}
+	}
+	if err := g.Check(filepath.Join(home, ".claude/projects/-Users-x-app/sessions-old"), Options{}); err != nil {
+		t.Errorf("sibling of a protected memory dir blocked: %v", err)
+	}
+	if err := g.Check(filepath.Join(home, ".codex/tmp"), Options{}); err != nil {
+		t.Errorf(".codex/tmp blocked: %v", err)
+	}
+	if err := g.Check(filepath.Join(home, ".codex/sqlite"), Options{}); err == nil {
+		t.Errorf(".codex/sqlite contains the live codex-dev.db and must be blocked")
 	}
 	if !g.Protected(filepath.Join(home, ".claude")) {
 		t.Errorf(".claude should be reported as protected (contains credentials)")

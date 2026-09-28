@@ -23,6 +23,12 @@ type Env struct {
 	Exclude []string
 	// MaxDepth bounds the artifact scan depth below each root.
 	MaxDepth int
+	// ExtraArtifacts are additional project artifact directory names (config extra_artifacts).
+	ExtraArtifacts []string
+	// KeepLatest is how many newest versions of versioned things to keep (config keep_latest, >= 1).
+	KeepLatest int
+	// StaleAfter: items unused for longer are considered stale (config stale_after).
+	StaleAfter time.Duration
 
 	// Protected reports paths the safety guard would never delete; providers
 	// must not propose them. Nil means nothing is protected.
@@ -64,12 +70,14 @@ func NewEnv() *Env {
 		tmp = r
 	}
 	return &Env{
-		Home:     home,
-		TmpDir:   tmp,
-		Now:      time.Now(),
-		MaxDepth: 8,
-		Runner:   ExecRunner{},
-		Logf:     func(string, ...any) {},
+		Home:       home,
+		TmpDir:     tmp,
+		Now:        time.Now(),
+		MaxDepth:   8,
+		KeepLatest: 1,
+		StaleAfter: 14 * 24 * time.Hour,
+		Runner:     ExecRunner{},
+		Logf:       func(string, ...any) {},
 	}
 }
 

@@ -101,3 +101,19 @@ func TestParse(t *testing.T) {
 		t.Errorf("Bytes = %s", Bytes(1_234_567_890))
 	}
 }
+
+func TestSizeCacheDedupes(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a", "x.bin"), 10_000)
+	ctx := WithCache(context.Background())
+	a, _ := Size(ctx, root, nil)
+	write(t, filepath.Join(root, "a", "y.bin"), 500_000)
+	b, _ := Size(ctx, root, nil)
+	if a != b {
+		t.Errorf("cached size changed within a run: %+v vs %+v", a, b)
+	}
+	c, _ := Size(context.Background(), root, nil)
+	if c.Bytes <= a.Bytes {
+		t.Errorf("uncached call must re-measure")
+	}
+}

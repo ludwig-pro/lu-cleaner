@@ -19,7 +19,8 @@ type Guard struct {
 	home    string
 	allowed []string        // deletions must be strictly inside one of these (lowercased)
 	deny    map[string]bool // exact paths that can never be removed (lowercased)
-	protect []string        // paths that must never be removed nor be inside a removed path (lowercased)
+	protect []string        // sensitive paths: never removed, nor anything inside them, nor anything containing them (lowercased)
+	roots   []string        // project/worktree roots: may be cleaned inside, never removed themselves nor any ancestor (lowercased)
 }
 
 // ErrBlocked is wrapped by every refusal.
@@ -101,6 +102,19 @@ func New(home, tmpDir string, roots, extra []string) *Guard {
 		"Library/Application Support/Code/User/settings.json",
 		"Library/Application Support/Code/User/keybindings.json",
 		"Library/Application Support/Code/User/snippets",
+		".claude/history.jsonl", ".claude/sessions", ".claude/projects/*/memory",
+		".codex/history.jsonl", ".codex/session_index.jsonl", ".codex/.codex-global-state.json",
+		".codex/.codex-global-state.json.bak", ".codex/state_*.sqlite*", ".codex/goals_*.sqlite",
+		".codex/memories_*.sqlite", ".codex/sqlite/codex-dev.db",
+		"Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+		"Library/Application Support/Cursor/User/globalStorage/storage.json",
+		"Library/Application Support/Code/User/globalStorage/state.vscdb",
+		"Library/Application Support/Code/User/globalStorage/storage.json",
+		"Library/Application Support/Claude/config.json",
+		"Library/Application Support/Claude/git-worktrees.json",
+		".ollama/id_ed25519", ".ollama/id_ed25519.pub",
+		".gemini/oauth_creds.json", ".gemini/settings.json", ".gemini/GEMINI.md",
+		".multica", ".conductor/settings.toml",
 		// Expo / EAS auth
 		".expo/state.json",
 	} {
@@ -108,7 +122,7 @@ func New(home, tmpDir string, roots, extra []string) *Guard {
 	}
 	for _, r := range roots {
 		if r != "" {
-			g.protectPath(r)
+			g.roots = append(g.roots, key(r))
 		}
 	}
 	for _, x := range extra {
@@ -124,6 +138,63 @@ func key(p string) string   { return strings.ToLower(filepath.Clean(p)) }
 
 func (g *Guard) denyPath(p string)    { g.deny[key(p)] = true }
 func (g *Guard) protectPath(p string) { g.protect = append(g.protect, key(p)) }
+
+// isGlob reports whether a protected entry is a glob pattern.
+func isGlob(p string) bool { return strings.ContainsAny(p, "*?[") }
+
+// hitsProtected reports whether removing k (lowercased, clean; orig is the
+// same path with its real case) would remove the protected entry p: k is p,
+// is inside p, or contains p. A glob entry matches k or any ancestor of k,
+// and blocks k when an existing path inside k matches it.
+func hitsProtected(k, orig, p string) bool {
+	if !isGlob(p) {
+		return within(p, k) || within(k, p)
+	}
+	for q := k; q != "/" && q != "."; q = filepath.Dir(q) {
+		if ok, _ := filepath.Match(p, q); ok {
+			return true
+		}
+	}
+	kParts := strings.Split(strings.TrimPrefix(k, "/"), "/")
+	pParts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if len(pParts) <= len(kParts) {
+		return false
+	}
+	for i, kp := range kParts {
+		if ok, _ := filepath.Match(pParts[i], kp); !ok {
+			return false
+		}
+	}
+	return existsMatch(orig, pParts[len(kParts):])
+}
+
+// existsMatch reports whether dir contains a path matching the (lowercased)
+// glob components rest, comparing names case-insensitively.
+func existsMatch(dir string, rest []string) bool {
+	if len(rest) == 0 {
+		return true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if ok, _ := filepath.Match(rest[0], strings.ToLower(e.Name())); ok {
+			if len(rest) == 1 || (e.IsDir() && existsMatch(filepath.Join(dir, e.Name()), rest[1:])) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// staticPrefix is the longest leading directory of a glob without metacharacters.
+func staticPrefix(p string) string {
+	for isGlob(p) {
+		p = filepath.Dir(p)
+	}
+	return p
+}
 
 // within reports whether p is parent or below it (both lowercased & clean).
 func within(p, parent string) bool {
@@ -200,19 +271,31 @@ func (g *Guard) checkOne(path string) error {
 		return fmt.Errorf("%w: %s is outside the allowed areas (home, per-user temp)", ErrBlocked, path)
 	}
 	for _, p := range g.protect {
-		if within(p, k) { // protected path is the target or lives inside it
-			return fmt.Errorf("%w: %s is or contains protected path %s", ErrBlocked, path, p)
+		if hitsProtected(k, path, p) { // protected path is the target, contains it, or lives inside it
+			return fmt.Errorf("%w: %s is, contains or is inside protected path %s", ErrBlocked, path, p)
+		}
+	}
+	for _, r := range g.roots {
+		if within(r, k) { // a scan root is the target or lives inside it
+			return fmt.Errorf("%w: %s is or contains the scan root %s", ErrBlocked, path, r)
 		}
 	}
 	return nil
 }
 
-// Protected reports whether path is (or is inside) a protected path. Used by
-// scanners to avoid even proposing such items.
+// Protected reports whether path must never be proposed for deletion: it is
+// (or is inside, or contains) a sensitive path, it is (or contains) a scan
+// root, or it is a denied system/home directory. Paths *inside* scan roots are
+// not protected. Used by scanners to avoid even proposing such items.
 func (g *Guard) Protected(path string) bool {
 	k := key(path)
 	for _, p := range g.protect {
-		if within(k, p) || within(p, k) {
+		if hitsProtected(k, path, p) {
+			return true
+		}
+	}
+	for _, r := range g.roots {
+		if within(r, k) {
 			return true
 		}
 	}

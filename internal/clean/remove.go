@@ -88,8 +88,14 @@ func removeWorktree(ctx context.Context, it *core.Item, opt Options) (string, er
 		if it.Meta["locked"] == "true" {
 			return "worktree is locked (git worktree lock) — use --force", errSkip
 		}
-		if n, _ := strconv.Atoi(it.Meta["unpushed"]); n > 0 {
-			return fmt.Sprintf("%d unpushed commit(s) — push them or use --force", n), errSkip
+		if u, ok := it.Meta["unpushed"]; ok && u != "" {
+			n, err := strconv.Atoi(u)
+			if err != nil || n < 0 {
+				return "unpushed commits unknown (" + u + ") — use --force", errSkip
+			}
+			if n > 0 {
+				return fmt.Sprintf("%d unpushed commit(s) — push them or use --force", n), errSkip
+			}
 		}
 		out, err := opt.Runner.Output(ctx, path, "git", "status", "--porcelain")
 		if err == nil {
@@ -104,26 +110,54 @@ func removeWorktree(ctx context.Context, it *core.Item, opt Options) (string, er
 
 	main := it.Project
 	if main != "" && dirExists(main) {
-		args := []string{"git", "worktree", "remove", "--force", path}
+		// Without --force git itself refuses dirty, untracked, locked or
+		// submodule worktrees: a second line of defence after our checks.
+		// Ignored files (node_modules, Pods...) never block it.
+		args := []string{"git", "worktree", "remove", path}
 		if opt.Force {
 			args = []string{"git", "worktree", "remove", "--force", "--force", path}
 		}
-		if _, err := runCmd(ctx, opt.Runner, main, args); err == nil {
-			_, _ = runCmd(ctx, opt.Runner, main, []string{"git", "worktree", "prune"})
-			return "git worktree removed", nil
+		if _, err := runCmd(ctx, opt.Runner, main, args); err != nil {
+			if !opt.Force {
+				return "git refused to remove it (" + err.Error() + ") — use --force", errSkip
+			}
+			return "", err
 		}
-		// git refused (unknown worktree, broken metadata...): fall back to a guarded rm.
+		removeEmptyToolParent(path, opt)
+		return "git worktree removed (branch kept)", nil
 	}
+	// Main repository gone: git cannot help, remove the orphaned directory.
 	if err := opt.Guard.Check(path, safetyOpts()); err != nil {
 		return "", err
 	}
 	if err := RemoveAll(path); err != nil {
 		return "", err
 	}
-	if main != "" && dirExists(main) {
-		_, _ = runCmd(ctx, opt.Runner, main, []string{"git", "worktree", "prune"})
+	removeEmptyToolParent(path, opt)
+	return "orphaned worktree directory removed", nil
+}
+
+// toolMarkers are the only files a tool leaves next to a worktree in its
+// per-task folder (e.g. ~/.codex/worktrees/<id>/{<repo>,.codex-worktree-name}).
+var toolMarkers = map[string]bool{".codex-worktree-name": true, ".DS_Store": true}
+
+// removeEmptyToolParent deletes the per-task parent folder of a removed
+// worktree when nothing but tool marker files is left in it.
+func removeEmptyToolParent(path string, opt Options) {
+	parent := filepath.Dir(path)
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) == 0 {
+		return
 	}
-	return "worktree directory removed", nil
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !toolMarkers[e.Name()] || !info.Mode().IsRegular() || info.Size() > 4096 {
+			return
+		}
+	}
+	if opt.Guard.Check(parent, safety.Options{}) == nil {
+		_ = RemoveAll(parent)
+	}
 }
 
 func countLines(s string) int {

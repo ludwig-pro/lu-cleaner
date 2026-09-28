@@ -16,6 +16,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"golang.org/x/sys/unix"
 )
 
 // Mode says how glob matches become items.
@@ -124,8 +125,9 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 }
 
 type match struct {
-	path  string
-	mtime time.Time
+	path     string
+	mtime    time.Time
+	external bool // real location on another volume than the home: no internal gain
 }
 
 // Expand resolves the entry globs to existing, allowed paths.
@@ -137,7 +139,7 @@ func (e *Entry) Expand(env *core.Env) []match {
 		found, _ := filepath.Glob(pat)
 		for _, m := range found {
 			m = filepath.Clean(m)
-			if seen[m] || env.Excluded(m) || env.IsProtected(m) {
+			if seen[m] || env.Excluded(m) || (e.Method != core.MethodReport && env.IsProtected(m)) {
 				continue
 			}
 			if excludedName(filepath.Base(m), e.Exclude) {
@@ -154,8 +156,12 @@ func (e *Entry) Expand(env *core.Env) []match {
 			if e.OlderThan > 0 && env.Now.Sub(fi.ModTime()) < e.OlderThan {
 				continue
 			}
+			ext, ok := onOtherVolume(env.Home, m)
+			if !ok {
+				continue // dangling symlink somewhere in the path: never proposed
+			}
 			seen[m] = true
-			out = append(out, match{path: m, mtime: fi.ModTime()})
+			out = append(out, match{path: m, mtime: fi.ModTime(), external: ext})
 		}
 	}
 	if e.Mode == Each && e.KeepLatest > 0 && len(out) > 0 {
@@ -169,6 +175,20 @@ func (e *Entry) Expand(env *core.Env) []match {
 	return out
 }
 
+// onOtherVolume reports whether p really lives on another device than home
+// (symlinks resolved). ok is false when p cannot be resolved (dangling link).
+func onOtherVolume(home, p string) (external, ok bool) {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false, false
+	}
+	var hs, ps unix.Stat_t
+	if unix.Stat(home, &hs) != nil || unix.Stat(real, &ps) != nil {
+		return false, false
+	}
+	return hs.Dev != ps.Dev, true
+}
+
 func excludedName(base string, globs []string) bool {
 	for _, g := range globs {
 		if ok, _ := filepath.Match(g, base); ok {
@@ -179,7 +199,24 @@ func excludedName(base string, globs []string) bool {
 }
 
 func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit core.Emit) {
-	ms := e.Expand(env)
+	all := e.Expand(env)
+	var ms []match
+	for _, m := range all {
+		if !m.external {
+			ms = append(ms, m)
+			continue
+		}
+		it := p.baseItem(env, e)
+		it.ID = "catalog:" + e.ID + ":" + m.path
+		it.Name = e.Name + " · " + filepath.Base(m.path)
+		it.Location = m.path
+		it.Method = core.MethodReport
+		it.Command = nil
+		it.Selectable = false
+		it.LastUsed = m.mtime
+		it.Warn = "on external volume — no internal gain"
+		emit(it)
+	}
 	if len(ms) == 0 {
 		return
 	}
@@ -203,9 +240,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 			st, _ := fsx.Size(ctx, m.path, nil)
 			it.Sizing = false
 			it.Size, it.Files = st.Bytes, st.Files
-			if st.Reclaim < st.Bytes {
-				it.Reclaim = st.Reclaim
-			}
+			it.SetReclaim(st.Reclaim)
 			if st.Newest.After(it.LastUsed) {
 				it.LastUsed = st.Newest
 			}
@@ -250,9 +285,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 		}
 		it.Sizing = false
 		it.Size, it.Files = total, files
-		if reclaim < total {
-			it.Reclaim = reclaim
-		}
+		it.SetReclaim(reclaim)
 		if it.Size < e.MinBytes || it.Size == 0 {
 			it.Selectable = false
 		}

@@ -216,7 +216,9 @@ func TestCommandItem(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool { return len(sub) > 0 && len(s) >= len(sub) && (stringIndex(s, sub) >= 0) }
+func contains(s, sub string) bool {
+	return len(sub) > 0 && len(s) >= len(sub) && (stringIndex(s, sub) >= 0)
+}
 
 func stringIndex(s, sub string) int {
 	for i := 0; i+len(sub) <= len(s); i++ {
@@ -225,4 +227,67 @@ func stringIndex(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestInodeChangedSinceScan(t *testing.T) {
+	f := newFixture(t)
+	p := f.mk(t, ".npm/_cacache", "a")
+	it := item(p, core.MethodDelete)
+	it.Inodes = []uint64{inode(p) + 12345}
+	sum := Run(context.Background(), []*core.Item{it}, f.opts(), nil)
+	if sum.Results[0].Status != StatusSkipped {
+		t.Fatalf("replaced path must be skipped: %+v", sum.Results[0])
+	}
+	it.Inodes = []uint64{inode(p)}
+	sum = Run(context.Background(), []*core.Item{it}, f.opts(), nil)
+	if sum.Results[0].Status != StatusDone {
+		t.Fatalf("matching inode must be cleaned: %+v", sum.Results[0])
+	}
+}
+
+func TestOpenSQLiteSkipped(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mk(t, ".codex")
+	db := filepath.Join(dir, "logs_2.sqlite")
+	os.WriteFile(db, []byte("x"), 0o644)
+	fh, err := os.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fh.Close()
+	sum := Run(context.Background(), []*core.Item{item(db, core.MethodDelete)}, f.opts(), nil)
+	if sum.Results[0].Status != StatusSkipped {
+		t.Fatalf("open sqlite must be skipped: %+v", sum.Results[0])
+	}
+}
+
+func TestWorktreeUnknownUnpushedAndCodexParent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	f := newFixture(t)
+	main := f.mk(t, "src/repo2", "README.md")
+	git(t, main, "init", "-q", "-b", "main")
+	git(t, main, "add", ".")
+	git(t, main, "commit", "-qm", "init")
+	parent := f.mk(t, ".codex/worktrees/ab12")
+	os.WriteFile(filepath.Join(parent, ".codex-worktree-name"), nil, 0o644)
+	wt := filepath.Join(parent, "repo2")
+	git(t, main, "worktree", "add", "-q", "-b", "wt-x", wt)
+
+	it := item(wt, core.MethodWorktree)
+	it.Project = main
+	it.Meta = map[string]string{"unpushed": "?"}
+	sum := Run(context.Background(), []*core.Item{it}, f.opts(), nil)
+	if sum.Results[0].Status != StatusSkipped {
+		t.Fatalf("unknown unpushed must be skipped: %+v", sum.Results[0])
+	}
+	it.Meta["unpushed"] = "0"
+	sum = Run(context.Background(), []*core.Item{it}, f.opts(), nil)
+	if sum.Results[0].Status != StatusDone {
+		t.Fatalf("%+v", sum.Results[0])
+	}
+	if _, err := os.Stat(parent); !os.IsNotExist(err) {
+		t.Errorf("empty codex task folder should be removed")
+	}
 }

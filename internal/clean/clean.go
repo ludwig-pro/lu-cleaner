@@ -19,6 +19,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
+	"golang.org/x/sys/unix"
 )
 
 // Status of one item after execution.
@@ -62,14 +63,14 @@ type Result struct {
 
 // Summary of a run.
 type Summary struct {
-	Results    []Result  `json:"results"`
-	Estimated  int64     `json:"estimated_freed"`
-	DiskBefore sysx.Disk `json:"disk_before"`
-	DiskAfter  sysx.Disk `json:"disk_after"`
-	Measured   int64     `json:"measured_freed"` // free space delta reported by the filesystem
-	Trash      bool      `json:"trash"`
-	DryRun     bool      `json:"dry_run"`
-	Took       time.Duration
+	Results    []Result      `json:"results"`
+	Estimated  int64         `json:"estimated_freed"`
+	DiskBefore sysx.Disk     `json:"disk_before"`
+	DiskAfter  sysx.Disk     `json:"disk_after"`
+	Measured   int64         `json:"measured_freed"` // free space delta reported by the filesystem
+	Trash      bool          `json:"trash"`
+	DryRun     bool          `json:"dry_run"`
+	Took       time.Duration `json:"took"`
 }
 
 // Count returns how many results have status s.
@@ -176,8 +177,18 @@ func runOne(ctx context.Context, it *core.Item, opt Options) (res Result) {
 		return skip("not cleanable (%s, %s)", it.Risk, it.Method)
 	}
 	if !opt.Force && len(it.ProcessGuard) > 0 {
-		if running := sysx.Running(it.ProcessGuard...); len(running) > 0 {
+		running, err := sysx.RunningStrict(it.ProcessGuard...)
+		if err != nil {
+			return skip("cannot verify that %s is closed: %v", strings.Join(it.ProcessGuard, ", "), err)
+		}
+		if len(running) > 0 {
 			return skip("%s is running — quit it first (or use --force)", strings.Join(running, ", "))
+		}
+	}
+
+	if it.Recheck != nil {
+		if err := it.Recheck(ctx); err != nil {
+			return skip("%v", err)
 		}
 	}
 
@@ -190,9 +201,17 @@ func runOne(ctx context.Context, it *core.Item, opt Options) (res Result) {
 	var targets []string
 	if method != core.MethodCommand {
 		cwd, _ := os.Getwd()
-		for _, p := range it.Targets() {
+		for i, p := range it.Targets() {
 			if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
 				continue
+			}
+			if i < len(it.Inodes) && it.Inodes[i] != 0 && inode(p) != it.Inodes[i] {
+				return skip("%s changed since the scan (different inode) — rescan", p)
+			}
+			if isSQLiteFile(p) {
+				if pids := openBy(ctx, p); pids != "" {
+					return skip("%s is open by process %s — quit the app first", p, pids)
+				}
 			}
 			if err := opt.Guard.Check(p, safety.Options{AllowGitRepo: it.AllowGitRepo}); err != nil {
 				return skip("%v", err)
@@ -202,6 +221,14 @@ func runOne(ctx context.Context, it *core.Item, opt Options) (res Result) {
 			}
 			if cwd != "" && within(cwd, p) {
 				return skip("current directory is inside %s", p)
+			}
+			if !opt.Force {
+				if pids := sysx.CwdInside(p); pids != "" {
+					return skip("in use: process %s is working inside %s", pids, p)
+				}
+				if pids := sysx.ExecInside(p); pids != "" {
+					return skip("in use: process %s runs a program or library from %s", pids, p)
+				}
 			}
 			targets = append(targets, p)
 		}
@@ -287,6 +314,33 @@ func describe(it *core.Item, m core.Method) string {
 		return "would move to Trash: " + summarize(it.Targets())
 	}
 	return "would delete " + summarize(it.Targets())
+}
+
+func inode(p string) uint64 {
+	var st unix.Stat_t
+	if unix.Lstat(p, &st) != nil {
+		return 0
+	}
+	return st.Ino
+}
+
+// isSQLiteFile reports database files that must not be removed while open.
+func isSQLiteFile(p string) bool {
+	b := strings.ToLower(filepath.Base(p))
+	for _, suf := range []string{".sqlite", ".sqlite3", ".db", "-wal", "-shm", "-journal", ".vscdb"} {
+		if strings.HasSuffix(b, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// openBy returns the PIDs (comma separated) holding path open, "" if none or unknown.
+func openBy(ctx context.Context, path string) string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(cctx, "/usr/sbin/lsof", "-t", "--", path).Output()
+	return strings.Join(strings.Fields(string(out)), ",")
 }
 
 func summarize(paths []string) string {

@@ -1,0 +1,249 @@
+package jsdev
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+)
+
+// ------------------------------------------------------------------ npx
+
+const npxStaleAfter = 14 * 24 * time.Hour
+
+// npmCacheDirs returns the npm cache dirs ($npm_config_cache, ~/.npm).
+func (s *scanner) npmCacheDirs() []string {
+	return uniqDirs(s.envDir("npm_config_cache"), s.envDir("NPM_CONFIG_CACHE"), s.home(".npm"))
+}
+
+// npx emits one item per ~/.npm/_npx/<hash> install, named after the package.
+func (s *scanner) npx() {
+	for _, cache := range s.npmCacheDirs() {
+		root := filepath.Join(cache, "_npx")
+		for _, e := range listDir(root) {
+			if s.ctx.Err() != nil {
+				return
+			}
+			p := filepath.Join(root, e.Name())
+			if !e.IsDir() || !s.allowed(p) {
+				continue
+			}
+			pkgs := npxPackages(p)
+			label := joinLimit(pkgs, 2)
+			if label == "" {
+				label = e.Name()
+			}
+			it := s.base("npx-package", p, "npx cache · "+label, core.RiskModerate)
+			it.Path = p
+			it.LastUsed = newestMtime(p, filepath.Join(p, "node_modules"), filepath.Join(p, "node_modules", ".package-lock.json"),
+				filepath.Join(p, "package-lock.json"))
+			it.Note = "Package installed on the fly by `npx` (often an MCP server started by an AI tool); the next `npx` call reinstalls it."
+			if len(pkgs) > 0 {
+				it.Meta["packages"] = strings.Join(pkgs, ", ")
+			}
+			if n := s.procs.usesDir(p); n > 0 {
+				it.Warn = "used by " + itoa(n) + " running process(es) (MCP server?) — deleting it breaks them until restarted"
+			} else if s.procs.ok && !it.LastUsed.IsZero() && s.env.Now.Sub(it.LastUsed) >= npxStaleAfter {
+				it.Recommended = true
+			}
+			s.sized(it, []string{p}, false)
+		}
+	}
+}
+
+// npxPackages reads <dir>/package.json: _npx.packages, else dependency names.
+func npxPackages(dir string) []string {
+	data, err := readSmall(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil
+	}
+	var pj struct {
+		Dependencies map[string]string `json:"dependencies"`
+		Npx          struct {
+			Packages []string `json:"packages"`
+		} `json:"_npx"`
+	}
+	if json.Unmarshal([]byte(data), &pj) != nil {
+		return nil
+	}
+	if len(pj.Npx.Packages) > 0 {
+		return pj.Npx.Packages
+	}
+	return sortedKeys(pj.Dependencies)
+}
+
+// ------------------------------------------------------------------ pnpm
+
+var storeMajor = regexp.MustCompile(`^v[0-9]+$`)
+
+// pnpm emits the pnpm content-addressable stores (one per store major:
+// v3 = pnpm 7-9, v10, v11...) and, when the pnpm CLI works, `pnpm store prune`.
+func (s *scanner) pnpm() {
+	current := ""
+	if s.env.Has("pnpm") {
+		if out, err := output(s.ctx, s.env, s.env.Home, cmdTimeout, "pnpm", "store", "path"); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			line := strings.TrimSpace(lines[len(lines)-1])
+			if filepath.IsAbs(line) && fsx.IsDir(filepath.Clean(line)) {
+				current = filepath.Clean(line)
+			}
+		}
+	}
+	var parents []string
+	if current != "" {
+		parents = append(parents, filepath.Dir(current))
+	}
+	parents = append(parents,
+		s.envDir("PNPM_HOME", "store"),
+		s.home("Library", "pnpm", "store"),
+		s.envDir("XDG_DATA_HOME", "pnpm", "store"),
+		s.home(".local", "share", "pnpm", "store"),
+		s.home(".pnpm-store"),
+	)
+	seen := map[string]bool{}
+	var stores []string
+	addStore := func(p string) {
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil || seen[real] || !isRealDir(real) {
+			return
+		}
+		seen[real] = true
+		stores = append(stores, p)
+	}
+	for _, parent := range uniqDirs(parents...) {
+		for _, e := range listDir(parent) {
+			if storeMajor.MatchString(e.Name()) {
+				addStore(filepath.Join(parent, e.Name()))
+			}
+		}
+	}
+	if current != "" {
+		addStore(current)
+	}
+	curReal, _ := filepath.EvalSymlinks(current)
+	for _, st := range stores {
+		if s.ctx.Err() != nil {
+			return
+		}
+		if !s.allowed(st) {
+			continue
+		}
+		real, _ := filepath.EvalSymlinks(st)
+		isCurrent := current != "" && real == curReal
+		it := s.base("pnpm-store", st, "pnpm store "+filepath.Base(st), core.RiskModerate)
+		it.Path = st
+		it.LastUsed = newestMtime(st, filepath.Join(st, "index"), filepath.Join(st, "index.db"), filepath.Join(st, "files"))
+		it.Note = "pnpm content-addressable store; the next `pnpm install` re-downloads what it needs. Installed node_modules keep working (APFS clones or hardlinks)."
+		if isCurrent {
+			it.Meta["current"] = "true (pnpm store path)"
+		}
+		if done := s.sized(it, []string{st}, false); done != nil && isCurrent {
+			s.pnpmPrune(done)
+		}
+	}
+}
+
+// pnpmPrune emits the `pnpm store prune` command item for the active store
+// (measured store: the size is an upper bound of what prune frees).
+func (s *scanner) pnpmPrune(store *core.Item) {
+	it := s.base("pnpm-store-prune", store.Path, "pnpm store prune", core.RiskSafe)
+	it.Method = core.MethodCommand
+	it.Command = []string{"pnpm", "store", "prune"}
+	it.Location = store.Path
+	it.Recommended = true
+	it.LastUsed = store.LastUsed
+	it.Size, it.Reclaim, it.Files = store.Size, store.Reclaim, store.Files
+	it.Note = "Removes only the packages no project references any more; the size shown is the whole store (upper bound)."
+	it.Meta["store"] = store.Path
+	it.Meta["size"] = "upper bound: prune frees only unreferenced packages"
+	if store.Method == core.MethodReport {
+		it.Method, it.Command, it.Selectable, it.Recommended, it.Warn = core.MethodReport, nil, false, false, store.Warn
+	}
+	s.emit(it)
+}
+
+// ------------------------------------------------------------------ yarn berry
+
+// yarnGlobalFolders returns Yarn Berry global folders ($YARN_GLOBAL_FOLDER,
+// globalFolder in ~/.yarnrc.yml, default ~/.yarn/berry).
+func (s *scanner) yarnGlobalFolders() []string {
+	cands := []string{s.envDir("YARN_GLOBAL_FOLDER")}
+	if data, err := readSmall(s.home(".yarnrc.yml")); err == nil {
+		for _, l := range strings.Split(data, "\n") {
+			l = strings.TrimSpace(l)
+			if v, ok := strings.CutPrefix(l, "globalFolder:"); ok {
+				v = strings.Trim(strings.TrimSpace(v), `"'`)
+				v = strings.ReplaceAll(v, "${HOME}", s.env.Home)
+				v = s.env.Expand(v)
+				if filepath.IsAbs(v) {
+					cands = append(cands, v)
+				}
+			}
+		}
+	}
+	cands = append(cands, s.home(".yarn", "berry"))
+	return uniqDirs(cands...)
+}
+
+func (s *scanner) yarnBerry() {
+	pnp := s.projects.pnp
+	for _, gf := range s.yarnGlobalFolders() {
+		if s.ctx.Err() != nil {
+			return
+		}
+		// Global zip cache.
+		if p := filepath.Join(gf, "cache"); isDirOrLink(p) && s.allowed(p) {
+			risk := core.RiskSafe
+			note := "Yarn Berry global zip cache; the next `yarn install` re-downloads what it needs (projects using node_modules keep working)."
+			it := s.base("yarn-berry-cache", p, "Yarn Berry global cache", risk)
+			if len(pnp) > 0 {
+				it.Risk = core.RiskModerate
+				note = "Yarn Berry global zip cache. Plug'n'Play projects read these zips at runtime: they need `yarn install` again after cleaning."
+				it.Meta["pnp_projects"] = joinLimit(prettyAll(s.env, pnp), 3)
+			}
+			it.Path = p
+			it.Note = note
+			it.LastUsed = newestMtime(p)
+			s.sized(it, []string{p}, true)
+		}
+		// Registry metadata (packuments): not removed by `yarn cache clean`.
+		if p := filepath.Join(gf, "metadata"); isDirOrLink(p) && s.allowed(p) {
+			it := s.base("yarn-berry-metadata", p, "Yarn Berry registry metadata", core.RiskSafe)
+			it.Path = p
+			it.Note = "npm registry metadata cached by Yarn Berry (not removed by `yarn cache clean`); re-fetched on the next resolution."
+			s.sized(it, []string{p}, true)
+		}
+		// hardlinks-global content store (+ legacy index/).
+		var store []string
+		for _, sub := range []string{"store", "index"} {
+			if p := filepath.Join(gf, sub); isDirOrLink(p) && s.allowed(p) {
+				store = append(store, p)
+			}
+		}
+		if len(store) > 0 {
+			it := s.base("yarn-berry-store", store[0], "Yarn Berry hardlink store", core.RiskModerate)
+			if len(store) == 1 {
+				it.Path = store[0]
+			} else {
+				it.Paths = store
+				it.Location = s.env.Pretty(gf) + "/…"
+			}
+			it.Note = "Content store of `nmMode: hardlinks-global`; files still hardlinked into node_modules survive (only the rest is freed). Refilled by the next `yarn install`."
+			s.sized(it, store, true)
+		}
+	}
+}
+
+func prettyAll(env *core.Env, paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = env.Pretty(p)
+	}
+	sort.Strings(out)
+	return out
+}

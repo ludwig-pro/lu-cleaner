@@ -16,27 +16,27 @@ import (
 type Config struct {
 	// Roots are scanned for project artifacts (node_modules, Pods, builds...).
 	// Empty = auto-detect common folders (~/local_sources, ~/dev, ~/Projects...).
-	Roots []string `toml:"roots"`
+	Roots []string `toml:"roots" json:"roots"`
 	// WorktreeRoots are folders where tools create git worktrees. Added to the built-in list.
-	WorktreeRoots []string `toml:"worktree_roots"`
+	WorktreeRoots []string `toml:"worktree_roots" json:"worktree_roots"`
 	// Exclude: never scanned, never cleaned (prefix match).
-	Exclude []string `toml:"exclude"`
+	Exclude []string `toml:"exclude" json:"exclude"`
 	// Protect: never cleaned (and nothing containing them).
-	Protect []string `toml:"protect"`
+	Protect []string `toml:"protect" json:"protect"`
 	// MaxDepth for the artifact scan below each root (default 8).
-	MaxDepth int `toml:"max_depth"`
+	MaxDepth int `toml:"max_depth" json:"max_depth"`
 	// MinSize hides items smaller than this in lists (default "1MB").
-	MinSize string `toml:"min_size"`
+	MinSize string `toml:"min_size" json:"min_size"`
 	// StaleAfter: items unused for longer are "stale" and preselected by smart select (default "14d").
-	StaleAfter string `toml:"stale_after"`
+	StaleAfter string `toml:"stale_after" json:"stale_after"`
 	// DisabledCategories are skipped entirely (e.g. ["system", "containers"]).
-	DisabledCategories []string `toml:"disabled_categories"`
+	DisabledCategories []string `toml:"disabled_categories" json:"disabled_categories"`
 	// UseTrash moves things to ~/.Trash instead of deleting (does not free space until emptied!).
-	UseTrash bool `toml:"use_trash"`
+	UseTrash bool `toml:"use_trash" json:"use_trash"`
 	// ExtraArtifacts adds project artifact directory names, e.g. ["tmp-build"].
-	ExtraArtifacts []string `toml:"extra_artifacts"`
+	ExtraArtifacts []string `toml:"extra_artifacts" json:"extra_artifacts"`
 	// KeepLatest keeps N newest versions of versioned things (node versions, runtimes, NDKs...). Default 1.
-	KeepLatest int `toml:"keep_latest"`
+	KeepLatest int `toml:"keep_latest" json:"keep_latest"`
 }
 
 // DefaultRootCandidates are probed when Roots is empty.
