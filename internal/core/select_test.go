@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestTopLevel(t *testing.T) {
 	a := &Item{ID: "a", Path: "/h/proj/node_modules"}
@@ -40,5 +43,32 @@ func TestTopLevel(t *testing.T) {
 	}
 	if Total([]*Item{{Path: "/x", Size: 10, Selectable: true}, {Path: "/x/y", Size: 5, Selectable: true}, {Paths: []string{"/z"}, Size: 3, Selectable: true}, {Path: "/r", Size: 99, Method: MethodReport, Selectable: true}}) != 13 {
 		t.Errorf("Total double counts nested items")
+	}
+}
+
+func TestRecommend(t *testing.T) {
+	now := time.Now()
+	day := 24 * time.Hour
+	mk := func(r Risk, cat Category, age time.Duration, rec bool, warn string) *Item {
+		return &Item{Risk: r, Category: cat, Size: 10 << 20, LastUsed: now.Add(-age), Recommended: rec, Warn: warn, Selectable: true}
+	}
+	cases := []struct {
+		name string
+		it   *Item
+		want bool
+	}{
+		{"safe cache", mk(RiskSafe, CatJS, time.Hour, false, ""), true},
+		{"safe with warning", mk(RiskSafe, CatJS, 10*day, false, "Xcode is running"), false},
+		{"forced but warned", mk(RiskModerate, CatAndroid, 10*day, true, "running"), false},
+		{"forced caution", mk(RiskCaution, CatAI, 90*day, true, ""), false},
+		{"moderate fresh", mk(RiskModerate, CatJS, 2*day, false, ""), false},
+		{"moderate stale", mk(RiskModerate, CatJS, 30*day, false, ""), true},
+		{"active project build", mk(RiskSafe, CatArtifacts, 2*time.Hour, true, ""), false},
+		{"idle project build", mk(RiskSafe, CatArtifacts, 3*day, false, ""), true},
+	}
+	for _, c := range cases {
+		if got := Recommend(c.it, now, 14*day); got != c.want {
+			t.Errorf("%s: Recommend = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -282,6 +282,11 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 			total += st.Bytes
 			reclaim += st.Reclaim
 			files += st.Files
+			// the newest file inside is the real "last used" of a cache (a
+			// directory mtime only changes when entries are added/removed)
+			if st.Newest.After(it.LastUsed) && !st.Newest.After(env.Now.Add(time.Hour)) {
+				it.LastUsed = st.Newest
+			}
 		}
 		it.Sizing = false
 		it.Size, it.Files = total, files

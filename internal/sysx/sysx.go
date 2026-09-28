@@ -151,14 +151,20 @@ type procPath struct {
 	path string
 }
 
-// openFDs lists (pid, path) pairs for one lsof file-descriptor class ("cwd"
-// = current directories, "txt" = executables and mapped libraries), with a
-// single system-wide `lsof -d <fd> -Fpn` call cached for 5 seconds.
+// openFDs lists (pid, path) pairs for one class: "cwd" = current
+// directories, "txt" = executables. It uses proc_info(2) natively (a few ms)
+// and falls back to a system-wide `lsof -d <fd> -Fpn`; cached for 5 seconds.
 func openFDs(fd string) []procPath {
 	lsofMu.Lock()
 	defer lsofMu.Unlock()
 	if c := lsofCache[fd]; c != nil && time.Since(c.at) < 5*time.Second {
 		return c.procs
+	}
+	if cwds, execs, ok := nativeProcPaths(); ok {
+		now := time.Now()
+		lsofCache["cwd"] = &lsofSnap{at: now, procs: cwds}
+		lsofCache["txt"] = &lsofSnap{at: now, procs: execs}
+		return lsofCache[fd].procs
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	out, _ := exec.CommandContext(ctx, "/usr/sbin/lsof", "-w", "-n", "-P", "-d", fd, "-Fpn").Output()
@@ -181,10 +187,20 @@ func openFDs(fd string) []procPath {
 }
 
 func pidsInside(fd, dir string) string {
+	dirs := []string{dir}
+	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+		dirs = append(dirs, real) // the kernel reports resolved paths (/private/var/…)
+	}
 	var pids []string
 	seen := map[string]bool{}
 	for _, c := range openFDs(fd) {
-		if (c.path == dir || strings.HasPrefix(c.path, dir+"/")) && !seen[c.pid] {
+		inside := false
+		for _, d := range dirs {
+			if c.path == d || strings.HasPrefix(c.path, d+"/") {
+				inside = true
+			}
+		}
+		if inside && !seen[c.pid] {
 			seen[c.pid] = true
 			pids = append(pids, c.pid)
 		}

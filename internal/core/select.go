@@ -64,24 +64,27 @@ func (f *Filter) Match(it *Item, now time.Time) bool {
 
 // Recommend is the "smart select" policy: what a sensible user would clean
 // without thinking twice.
-//   - safe items: always (caches), if not tiny
+//   - never: caution/never items, items with a warning (Warn), items being sized
+//   - project artifacts of a project active in the last 24 hours: never
+//   - provider-forced (Item.Recommended): yes
+//   - safe items: yes, if not tiny
 //   - moderate items: when unused for longer than staleAfter
-//   - caution items: never automatically
-//
-// Providers may force a recommendation with Item.Recommended.
 func Recommend(it *Item, now time.Time, staleAfter time.Duration) bool {
-	if !it.CanClean() || it.Sizing {
+	if !it.CanClean() || it.Sizing || it.Warn != "" || it.Risk > RiskModerate {
 		return false
 	}
+	if it.Category == CatArtifacts && !it.LastUsed.IsZero() && now.Sub(it.LastUsed) < 24*time.Hour {
+		return false // don't wipe the build outputs of the project you are working on
+	}
 	if it.Recommended {
-		return it.Risk <= RiskModerate || it.Warn == ""
+		return true
 	}
 	switch it.Risk {
 	case RiskSafe:
-		return it.Size >= 1<<20 && it.Warn == ""
+		return it.Size >= 1<<20
 	case RiskModerate:
 		age := it.Age(now)
-		return age > 0 && age >= staleAfter && it.Warn == ""
+		return age > 0 && age >= staleAfter
 	}
 	return false
 }

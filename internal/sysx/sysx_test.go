@@ -48,3 +48,29 @@ func TestExecInside(t *testing.T) {
 		t.Skip("lsof did not report our executable")
 	}
 }
+
+func TestNativeProcPaths(t *testing.T) {
+	cwds, execs, ok := nativeProcPaths()
+	if !ok {
+		t.Skip("proc_info unavailable")
+	}
+	wd, _ := os.Getwd()
+	wd, _ = filepath.EvalSymlinks(wd)
+	exe, _ := os.Executable()
+	exe, _ = filepath.EvalSymlinks(exe)
+	pid := itoa(os.Getpid())
+	foundCwd, foundExe := false, false
+	for _, c := range cwds {
+		if c.pid == pid && c.path == wd {
+			foundCwd = true
+		}
+	}
+	for _, e := range execs {
+		if e.pid == pid && e.path == exe {
+			foundExe = true
+		}
+	}
+	if !foundCwd || !foundExe {
+		t.Errorf("own process not found: cwd=%v exe=%v (%d cwds, %d execs)", foundCwd, foundExe, len(cwds), len(execs))
+	}
+}
