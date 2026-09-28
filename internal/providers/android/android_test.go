@@ -344,7 +344,7 @@ func TestSDKPackages(t *testing.T) {
 		t.Errorf("unused image should be recommended: %+v", unused)
 	}
 	x86 := r.at(t, "android-system-image", "android-30/google_apis/x86_64")
-	if !r.recommended(x86) || !strings.Contains(x86.Warn, "Apple Silicon") || !x86.CanClean() {
+	if !r.recommended(x86) || !strings.Contains(x86.Note, "Apple Silicon") || !x86.CanClean() {
 		t.Errorf("x86 image on arm64: %+v", x86)
 	}
 
@@ -455,7 +455,7 @@ func TestAVDs(t *testing.T) {
 	}
 
 	x86 := r.at(t, "android-avd", "Old_x86.avd")
-	if x86.Risk != core.RiskModerate || !r.recommended(x86) || !strings.Contains(x86.Warn, "Apple Silicon") {
+	if x86.Risk != core.RiskModerate || !r.recommended(x86) || !strings.Contains(x86.Note, "Apple Silicon") {
 		t.Errorf("x86 AVD on arm64: %+v", x86)
 	}
 	orphan := r.at(t, "android-avd-orphan-ini", "Gone.ini")

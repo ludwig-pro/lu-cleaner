@@ -209,7 +209,11 @@ func runOne(ctx context.Context, it *core.Item, opt Options) (res Result) {
 				return skip("%s changed since the scan (different inode) — rescan", p)
 			}
 			if isSQLiteFile(p) {
-				if pids := openBy(ctx, p); pids != "" {
+				pids, err := openBy(ctx, p)
+				if err != nil {
+					return skip("cannot verify that %s is closed: %v", p, err)
+				}
+				if pids != "" {
 					return skip("%s is open by process %s — quit the app first", p, pids)
 				}
 			}
@@ -335,12 +339,19 @@ func isSQLiteFile(p string) bool {
 	return false
 }
 
-// openBy returns the PIDs (comma separated) holding path open, "" if none or unknown.
-func openBy(ctx context.Context, path string) string {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// openBy returns the PIDs (comma separated) holding path open ("" if none).
+// Fail-closed: any lsof failure other than "no match" (exit 1) is an error.
+func openBy(ctx context.Context, path string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(cctx, "/usr/sbin/lsof", "-t", "--", path).Output()
-	return strings.Join(strings.Fields(string(out)), ",")
+	out, err := exec.CommandContext(cctx, "/usr/sbin/lsof", "-w", "-t", "--", path).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 || cctx.Err() != nil {
+			return "", fmt.Errorf("lsof: %w", err)
+		}
+	}
+	return strings.Join(strings.Fields(string(out)), ","), nil
 }
 
 func summarize(paths []string) string {

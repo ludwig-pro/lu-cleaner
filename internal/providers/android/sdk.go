@@ -185,7 +185,7 @@ func (s *scan) systemImages(root string, avds *avdSet) {
 		switch {
 		case s.arm64 && isX86(abi):
 			it.Recommended = true
-			it.Warn = abi + " image: cannot boot on Apple Silicon"
+			it.Note = abi + " image: cannot boot on Apple Silicon. " + it.Note
 		case len(users) > 0:
 			it.Selectable = false
 			it.Note = "Used by AVD " + strings.Join(users, ", ") + "; delete the AVD first if you no longer need it."

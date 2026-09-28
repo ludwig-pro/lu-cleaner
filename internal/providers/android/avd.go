@@ -366,7 +366,8 @@ func (s *scan) emitAVD(a *avd, sdks []*sdkRoot) {
 	case s.arm64 && isX86(a.ABI):
 		it.Risk = core.RiskModerate
 		it.Recommended = true
-		it.Warn = a.ABI + " AVD: cannot boot on Apple Silicon"
+		// a reason to delete it, not a danger: kept out of Warn (which blocks smart select)
+		it.Note = a.ABI + " AVD: cannot boot on Apple Silicon. " + it.Note
 	case a.Ini == "":
 		it.Warn = "no " + a.Name + ".ini next to it: the emulator cannot see this AVD"
 	case a.Image != "":
