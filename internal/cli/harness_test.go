@@ -126,14 +126,24 @@ func (h *harness) fakeClean(_ context.Context, items []*core.Item, opt clean.Opt
 	sum := &clean.Summary{DryRun: opt.DryRun, Trash: opt.Trash,
 		DiskBefore: sysx.Disk{Total: 500e9, Free: 50e9}, DiskAfter: sysx.Disk{Total: 500e9, Free: 50e9}}
 	for _, it := range items {
-		r := clean.Result{Item: it, Status: clean.StatusDone, Freed: it.Freed()}
+		// Same accounting as clean.Run: in Trash mode, delete items are
+		// moved (Trashed, nothing Freed), worktrees and commands skipped.
+		r := clean.Result{Item: it, Status: clean.StatusDone, Method: it.Method, Freed: it.Freed()}
+		trashMove := opt.Trash && it.Method == core.MethodDelete
+		if trashMove {
+			r.Method, r.Freed, r.Trashed = core.MethodTrash, 0, it.Freed()
+		}
 		switch {
+		case opt.Trash && (it.Method == core.MethodWorktree || it.Method == core.MethodCommand):
+			r = clean.Result{Item: it, Status: clean.StatusSkipped, Method: it.Method,
+				Message: "not possible in Trash mode (it would delete permanently)"}
 		case h.failNames[it.Name]:
 			r = clean.Result{Item: it, Status: clean.StatusFailed, Error: "permission denied"}
 		case opt.DryRun:
 			r.Status, r.Message = clean.StatusDryRun, "would delete "+it.Path
 		default:
 			sum.Estimated += r.Freed
+			sum.Trashed += r.Trashed
 		}
 		sum.Results = append(sum.Results, r)
 		if progress != nil {

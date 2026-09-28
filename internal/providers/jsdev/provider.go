@@ -31,6 +31,8 @@ type Provider struct {
 	bootTime    func() time.Time
 	devOf       func(path string) (uint64, bool) // nil = real stat
 	sysPrefixes []string                         // global npm prefixes outside $HOME (read-only)
+	// maxProjectDirs overrides the project walk budgets (0 = defaults).
+	maxProjectDirs int
 }
 
 // New returns the provider.
@@ -62,7 +64,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	var wg sync.WaitGroup
 	for _, f := range []func(){
 		func() { s.procs = loadProcs(ctx, env) },
-		func() { s.projects = loadProjects(ctx, env) },
+		func() { s.projects = loadProjects(ctx, env, p.maxProjectDirs) },
 		s.loadMultishells,
 	} {
 		wg.Add(1)

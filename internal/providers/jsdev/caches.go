@@ -1,7 +1,9 @@
 package jsdev
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -292,6 +294,12 @@ func isVitestDir(p string) bool {
 // watchman reports watches on directories that no longer exist (deleted
 // worktrees). Frees memory and FSEvents load, not disk. `--no-spawn` never
 // starts the server.
+//
+// Only the stale roots are removed (`watchman watch-del <root>`, once per
+// root): `watch-del-all` would also cancel the subscriptions of a running
+// Metro or `jest --watch`, which stop seeing file changes until restarted.
+// watchman resolves a root that no longer exists by its exact watch-list
+// string, so the roots are passed back verbatim.
 func (s *scanner) watchman() {
 	if !s.env.Has("watchman") {
 		return
@@ -308,19 +316,60 @@ func (s *scanner) watchman() {
 	}
 	var stale []string
 	for _, r := range res.Roots {
-		if _, err := os.Stat(r); err != nil {
+		if filepath.IsAbs(r) && pathMissing(r) {
 			stale = append(stale, r)
 		}
 	}
 	if len(stale) == 0 {
 		return
 	}
-	it := s.base("watchman-stale-watches", "watch-del-all", "Watchman: "+itoa(len(stale))+" watch(es) on deleted dirs", core.RiskSafe)
+	sort.Strings(stale)
+	it := s.base("watchman-stale-watches", "watchman", "Watchman: "+itoa(len(stale))+" watch(es) on deleted dirs", core.RiskSafe)
 	it.Method = core.MethodCommand
-	it.Command = []string{"watchman", "watch-del-all"}
+	it.Command = watchDel(stale[0])
+	for _, r := range stale[1:] {
+		it.PostCommands = append(it.PostCommands, watchDel(r))
+	}
 	it.Location = "watchman (" + itoa(len(res.Roots)) + " watches)"
 	it.Recommended = true
-	it.Note = "Drops every watchman watch (Metro and Jest re-create the ones they need); frees memory and CPU, not disk."
+	it.Note = "Removes only the watches whose directory no longer exists (`watchman watch-del`); live watches (running Metro, Jest) are untouched. Frees memory and CPU, not disk."
 	it.Meta["stale_roots"] = joinLimit(prettyAll(s.env, stale), 5)
+	// Re-check right before running: a root that exists again (worktree
+	// re-created at the same path) may be watched by a live tool by now, and
+	// a watch already dropped would make its watch-del fail (and stop the
+	// following ones).
+	env := s.env
+	it.Recheck = func(ctx context.Context) error {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		out, err := env.Output(c, "", "watchman", "--no-spawn", "--no-pretty", "watch-list")
+		if err != nil {
+			return errors.New("cannot list watchman watches: " + err.Error())
+		}
+		var now struct {
+			Roots []string `json:"roots"`
+		}
+		if err := json.Unmarshal(out, &now); err != nil {
+			return errors.New("cannot read watchman watch-list: " + err.Error())
+		}
+		listed := map[string]bool{}
+		for _, r := range now.Roots {
+			listed[r] = true
+		}
+		for _, r := range stale {
+			if !listed[r] {
+				return errors.New("watch on " + r + " is already gone — rescan")
+			}
+			if !pathMissing(r) {
+				return errors.New(r + " exists again — rescan")
+			}
+		}
+		return nil
+	}
 	s.emit(it)
+}
+
+// watchDel is the command removing one watch without ever starting the server.
+func watchDel(root string) []string {
+	return []string{"watchman", "--no-spawn", "watch-del", root}
 }

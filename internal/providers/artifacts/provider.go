@@ -9,16 +9,24 @@
 //   - a directory only matches a rule when one of its markers exists next to
 //     it (package.json next to node_modules, Podfile next to Pods...) — the
 //     markers become Item.RequireSibling, re-checked at clean time;
+//   - a checkout is never an artifact: a directory holding a .git entry
+//     (linked worktree checked out as dist/, nested repository, submodule),
+//     or holding a registered linked worktree, is never proposed, and
+//     generic outputs holding a nested repository are report-only;
 //   - inside a git work tree nothing holding tracked files is ever proposed,
 //     and generic names (build, dist, out, target, coverage, vendor/bundle,
 //     .yarn/*) must be ignored by git (or be untracked with unambiguous
 //     output content such as XCBuildData or CACHEDIR.TAG); outside git they
-//     need that content;
+//     need that content, and JS outputs whose content is only weak (*.js,
+//     index.html — hand-written sources look the same) are caution items
+//     never preselected;
 //   - symlinks are never followed, other devices are never entered, and
 //     items living on another volume than the home are report-only.
 //
-// LastUsed is the activity of the PROJECT (sources, lockfiles, git index),
-// not the artifact's own mtime (builds and installs touch it constantly).
+// LastUsed is the activity of the PROJECT (top-level files, git index/HEAD,
+// modified and untracked files, or without git the newest source file of a
+// bounded walk), not the artifact's own mtime (builds and installs touch it
+// constantly) nor folder mtimes (deleting an artifact moves them).
 // A generic pass lists the heavy git-ignored folders no rule knows (AI agent
 // QA caches, staging copies...) as caution items.
 package artifacts
@@ -61,6 +69,8 @@ type Provider struct {
 	extra func() []string
 	// cwdInside returns the PIDs of processes whose cwd is inside dir.
 	cwdInside func(dir string) string
+	// running returns which of the process names run now (sysx.Running).
+	running func(names ...string) []string
 	// devOf returns the device of a path (overridable in tests).
 	devOf func(p string) (uint64, bool)
 	// extraRoots are home-relative folders that hide build artifacts.
@@ -74,6 +84,7 @@ func New() *Provider {
 	return &Provider{
 		extra:     loadExtraArtifacts,
 		cwdInside: sysx.CwdInside,
+		running:   sysx.Running,
 		devOf:     statDev,
 		extraRoots: []extraRoot{
 			{"conductor/archived-contexts", "conductor-archive"},
@@ -137,6 +148,8 @@ type cand struct {
 	content map[string]bool // entries of the artifact (when read)
 
 	contentOK     bool
+	strongOK      bool // content proves generator output (rule.Strong), outside git only
+	weak          bool // accepted outside git on weak content only: caution, never preselected
 	tracked       int8 // -1 unknown, 0 no, 1 yes
 	trackedSample string
 	ignored       int8 // -1 unknown, 0 no, 1 yes
@@ -174,7 +187,7 @@ type scan struct {
 
 	roots    []*scanRoot
 	rootSet  map[string]*scanRoot
-	rootKeys map[fileKey]bool
+	rootKeys map[fileKey]*scanRoot // same roots by identity (case, Unicode form, hard links)
 
 	mu       sync.Mutex
 	cands    map[string]*cand
@@ -190,6 +203,12 @@ type scan struct {
 	projects map[string]*projInfo
 	useMu    sync.Mutex
 	inUse    map[string]string
+	runMu    sync.Mutex
+	runCache map[string][]string // ProcessGuard (joined) -> running names
+
+	// worktrees are the linked worktrees registered in the repositories
+	// found (folded paths): no candidate may swallow one.
+	worktrees []string
 }
 
 // Scan walks every root, verifies candidates with git, then sizes them.
@@ -219,11 +238,15 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	// 2. git: ignored/tracked state, unknown ignored folders.
+	// 2. git: ignored/tracked state, unknown ignored folders. The registry of
+	// linked worktrees is read before (ignored folders) and after (the git
+	// phase walks ignored folders and may find more repositories).
+	s.worktrees = s.linkedWorktrees()
 	s.processGits()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	s.worktrees = s.linkedWorktrees()
 	// 3. decisions, placeholders of the verified generic artifacts, groups.
 	items := s.decideAll()
 	// 4. sizes.
@@ -244,7 +267,7 @@ func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *
 		now:      env.Now,
 		maxDepth: env.MaxDepth,
 		rootSet:  map[string]*scanRoot{},
-		rootKeys: map[fileKey]bool{},
+		rootKeys: map[fileKey]*scanRoot{},
 		cands:    map[string]*cand{},
 		candKeys: map[fileKey]bool{},
 		gits:     map[string]*gitRoot{},
@@ -252,6 +275,7 @@ func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *
 		ignSeen:  map[string]bool{},
 		projects: map[string]*projInfo{},
 		inUse:    map[string]string{},
+		runCache: map[string][]string{},
 		self:     itoa(os.Getpid()),
 	}
 	if s.now.IsZero() {
@@ -282,7 +306,8 @@ func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *
 }
 
 // setupRoots resolves, deduplicates and labels the roots: worktree roots
-// first (their tool labels win), then project roots, then extra roots.
+// first (their tool labels win), then project roots, then extra roots. With
+// explicit roots (command line), only those are walked.
 func (s *scan) setupRoots() {
 	add := func(p, tool, label string, extra bool) {
 		p = realPath(p)
@@ -293,7 +318,7 @@ func (s *scan) setupRoots() {
 			return
 		}
 		key, ok := keyOf(p)
-		if !ok || s.rootKeys[key] {
+		if !ok || s.rootKeys[key] != nil {
 			return // same folder under another name (~/code and ~/Code...)
 		}
 		if extra {
@@ -312,16 +337,22 @@ func (s *scan) setupRoots() {
 		r.icloud = s.inICloud(p)
 		s.roots = append(s.roots, r)
 		s.rootSet[p] = r
-		s.rootKeys[key] = true
+		s.rootKeys[key] = r
 	}
-	for _, w := range s.env.WorktreeRoots {
-		add(w, s.toolOf(w), "", false)
+	// Roots given on the command line are the whole scope: no worktree
+	// homes, no built-in extra folders.
+	if !s.env.ExplicitRoots {
+		for _, w := range s.env.WorktreeRoots {
+			add(w, s.toolOf(w), "", false)
+		}
 	}
 	for _, r := range s.env.Roots {
 		add(r, "", "", false)
 	}
-	for _, x := range s.p.extraRoots {
-		add(filepath.Join(s.home, x.rel), "", x.label, true)
+	if !s.env.ExplicitRoots {
+		for _, x := range s.p.extraRoots {
+			add(filepath.Join(s.home, x.rel), "", x.label, true)
+		}
 	}
 	// A root inside another one is walked on its own (the outer walk skips it).
 	sort.SliceStable(s.roots, func(i, j int) bool { return s.roots[i].path < s.roots[j].path })
@@ -427,6 +458,9 @@ func (s *scan) processGit(g *gitRoot) {
 		s.checkIgnore(g, rels)
 	}
 	s.trackedCands(g, cs)
+	if !g.root.external {
+		s.dirtyActivity(g)
+	}
 }
 
 // ignoredSkip are ignored folders never reported: AI tool / editor state,
@@ -456,6 +490,18 @@ func (s *scan) considerIgnored(g *gitRoot, rel string) {
 	if unix.Lstat(p, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(st.Dev) != g.root.dev {
 		return
 	}
+	if hasGitEntry(p) || s.isWorktree(p) {
+		// An ignored checkout (a worktree checked out inside the repository)
+		// is the worktrees provider's business, never an ignored folder. Its
+		// own artifacts are still looked for when it has a .git entry: the
+		// walk registers it as a work tree, judged by its own git (a bare
+		// repository or a registered worktree that lost its .git is not
+		// walked: the enclosing repository would answer for it).
+		if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+			s.walkIgnored(g, rel, p)
+		}
+		return
+	}
 	s.mu.Lock()
 	covered := s.ignSeen[p]
 	for d := p; !covered && fsx.Within(d, g.path) && d != g.path; d = filepath.Dir(d) {
@@ -478,16 +524,24 @@ func (s *scan) considerIgnored(g *gitRoot, rel string) {
 	s.mu.Lock()
 	s.ignDirs = append(s.ignDirs, &ignDir{path: p, git: g, root: g.root})
 	s.mu.Unlock()
-	if !s.wasVisited(p) {
-		depth := g.depth + strings.Count(rel, "/") + 1
-		if depth < s.maxDepth {
-			tool := g.tool
-			if tool == "" {
-				tool = g.root.tool
-			}
-			newWalker(s).run(p, walkCtx{root: g.root, git: g, tool: tool, depth: depth})
-		}
+	s.walkIgnored(g, rel, p)
+}
+
+// walkIgnored walks the ignored folder p (rel in g) when the main walk did
+// not (hidden folders), so the artifacts inside it are found.
+func (s *scan) walkIgnored(g *gitRoot, rel, p string) {
+	if s.wasVisited(p) {
+		return
 	}
+	depth := g.depth + strings.Count(rel, "/") + 1
+	if depth >= s.maxDepth {
+		return
+	}
+	tool := g.tool
+	if tool == "" {
+		tool = g.root.tool
+	}
+	newWalker(s).run(p, walkCtx{root: g.root, git: g, tool: tool, depth: depth})
 }
 
 // ---------------------------------------------------------------- decisions
@@ -560,6 +614,9 @@ func (s *scan) decide(c *cand) (bool, string) {
 	if c.tracked == 1 {
 		return false, "contains files tracked by git (" + c.trackedSample + ")"
 	}
+	if w := s.worktreeIn(c.path); w != "" {
+		return false, "holds the git worktree " + w
+	}
 	if !r.Generic {
 		return true, ""
 	}
@@ -575,10 +632,17 @@ func (s *scan) decide(c *cand) (bool, string) {
 		}
 		return false, "not ignored by git"
 	}
-	if c.contentOK || r.FreeOutsideGit {
+	if r.FreeOutsideGit {
 		return true, ""
 	}
-	return false, "no build output inside"
+	if !c.contentOK {
+		return false, "no build output inside"
+	}
+	// Outside git nothing says the folder is not hand-written: when the rule
+	// knows generator-specific evidence and none is there, the folder is
+	// only proposed as caution (see baseItem).
+	c.weak = len(r.Strong) > 0 && !c.strongOK
+	return true, ""
 }
 
 // ---------------------------------------------------------------- sizing
@@ -593,10 +657,22 @@ func (s *scan) sizeAll(jobs []*sizeJob) {
 		j := jobs[i]
 		it := j.item
 		var total, reclaim, files, apparent int64
+		var nestedGit string
 		for _, c := range j.cands {
-			st, err := fsx.Size(s.ctx, c.path, nil)
+			var opt *fsx.Options
+			var probe *checkoutProbe
+			if c.rule.Generic && !c.rule.NestedGitOK {
+				// Generic names (build, dist, target...) never legitimately
+				// hold a checkout: note the first one met while sizing.
+				probe = newCheckoutProbe(c.path, c.rule.NestedGitUnder, nil)
+				opt = &fsx.Options{Skip: probe.skip}
+			}
+			st, err := fsx.Size(s.ctx, c.path, opt)
 			if err != nil && s.ctx.Err() != nil {
 				return
+			}
+			if probe != nil && nestedGit == "" {
+				nestedGit = probe.found()
 			}
 			total += st.Bytes
 			reclaim += st.Reclaim
@@ -604,6 +680,13 @@ func (s *scan) sizeAll(jobs []*sizeJob) {
 			apparent += st.Apparent
 		}
 		s.finish(j.cands[0], it, total, reclaim, files, apparent)
+		if nestedGit != "" {
+			it.Method = core.MethodReport
+			it.Selectable = false
+			it.Recommended = false
+			it.Risk = core.RiskNever
+			it.Warn = "contains a git repository (" + nestedGit + ") — not proposed"
+		}
 		for _, c := range j.cands {
 			c.item = it
 		}
@@ -634,15 +717,74 @@ func (s *scan) sizeIgnored() {
 		for _, g := range gits {
 			skip[g.path] = true
 		}
-		st, err := fsx.Size(s.ctx, d.path, &fsx.Options{Skip: func(p, _ string) bool { return skip[p] }})
+		// The probe also finds the checkouts deeper than the walk went, and
+		// linked worktrees / submodules of repositories it never met.
+		probe := newCheckoutProbe(d.path, nil, func(p string) bool { return skip[p] })
+		st, err := fsx.Size(s.ctx, d.path, &fsx.Options{Skip: probe.skip})
 		if err != nil && s.ctx.Err() != nil {
 			return
 		}
 		if st.Bytes < ignoredMin {
 			return
 		}
-		s.emit(s.ignoredItem(d, st, nested, gits))
+		s.emit(s.ignoredItem(d, st, nested, gits, probe.found()))
 	})
+}
+
+// checkoutProbe watches a size walk for checkouts below its root: folders
+// holding a .git entry of any type — a clone (.git directory), or a linked
+// worktree or submodule whose .git FILE the size walk never reports (it
+// only shows directories to Skip), whatever repository it belongs to (one
+// outside the scan roots is never registered) — and bare repositories named
+// like one (mirror.git).
+type checkoutProbe struct {
+	root  string
+	allow []string          // first-level folders (globs) where clones are expected
+	prune func(string) bool // folders pruned from the walk (not probed either)
+
+	mu    sync.Mutex
+	first string // first checkout met, relative to root's parent ("dist/deploy")
+}
+
+func newCheckoutProbe(root string, allow []string, prune func(string) bool) *checkoutProbe {
+	return &checkoutProbe{root: root, allow: allow, prune: prune}
+}
+
+// skip is the fsx.Options.Skip callback: it prunes nothing but the prune
+// folders and costs one lstat per directory.
+func (cp *checkoutProbe) skip(p, name string) bool {
+	if cp.prune != nil && cp.prune(p) {
+		return true
+	}
+	if name == ".git" {
+		return false // its parent was probed already
+	}
+	rel, err := filepath.Rel(cp.root, p)
+	if err != nil {
+		return false
+	}
+	if len(cp.allow) > 0 {
+		first, _, _ := strings.Cut(rel, string(filepath.Separator))
+		if _, ok := matchAny(cp.allow, map[string]bool{first: true}); ok {
+			return false
+		}
+	}
+	var st unix.Stat_t
+	if unix.Lstat(filepath.Join(p, ".git"), &st) == nil || strings.HasSuffix(name, ".git") && isBareRepo(p) {
+		cp.mu.Lock()
+		if cp.first == "" {
+			cp.first = filepath.Join(filepath.Base(cp.root), rel)
+		}
+		cp.mu.Unlock()
+	}
+	return false
+}
+
+// found returns the first checkout met ("" when none).
+func (cp *checkoutProbe) found() string {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return cp.first
 }
 
 // inside returns the accepted candidates and git work trees below p.

@@ -66,7 +66,7 @@ func (s *scan) classify(w *worktree) string {
 		// Claude Code CLI: worktree-<name> branches (claude -w), agent-<hex> dirs.
 		name := filepath.Base(w.path)
 		switch {
-		case s.tools != nil && s.tools.claudeWT[w.path] != nil, strings.HasPrefix(w.branch, "claude/"):
+		case s.tools != nil && s.tools.claudeWT[pathKey(w.path)] != nil, strings.HasPrefix(w.branch, "claude/"):
 			return toolClaudeDesktop
 		case strings.HasPrefix(w.branch, "worktree-"), strings.HasPrefix(name, "agent-"):
 			return toolClaude
@@ -119,16 +119,22 @@ type proc struct {
 
 const toolTimeout = 5 * time.Second
 
-// loadToolState reads every source concurrently. Absent tools are skipped
-// silently; databases are opened read-only and immutable.
-func loadToolState(ctx context.Context, env *core.Env, home string, wts []*worktree) *toolState {
-	ts := &toolState{
+// newToolState returns an empty tool state. Its maps are keyed by pathKey
+// (tools store paths in their own case and Unicode normalization).
+func newToolState() *toolState {
+	return &toolState{
 		codex:       map[string]*codexCwd{},
 		codexQueued: map[string]bool{},
 		claudeWT:    map[string]*claudeWT{},
 		conductor:   map[string]*conductorWS{},
 		editors:     map[string][]string{},
 	}
+}
+
+// loadToolState reads every source concurrently. Absent tools are skipped
+// silently; databases are opened read-only.
+func loadToolState(ctx context.Context, env *core.Env, home string, wts []*worktree) *toolState {
+	ts := newToolState()
 	if len(wts) == 0 {
 		return ts
 	}
@@ -159,22 +165,29 @@ func binary(env *core.Env, name, fallback string) string {
 }
 
 // sqliteJSON runs a read-only query and decodes its JSON rows into out.
+//
+// The apps keep their databases in WAL mode: rows not yet checkpointed (a
+// thread just started or unarchived) live only in the -wal file, which
+// immutable=1 ignores. So a plain read-only open comes first; immutable=1 is
+// the fallback when it fails (no -shm and a read-only folder, locked file...).
 func sqliteJSON(ctx context.Context, env *core.Env, db, query string, out any) bool {
 	bin := binary(env, "sqlite3", "/usr/bin/sqlite3")
 	if bin == "" || !fsx.Exists(db) {
 		return false
 	}
-	cctx, cancel := context.WithTimeout(ctx, toolTimeout)
-	defer cancel()
-	uri := "file:" + escapeURIPath(db) + "?mode=ro&immutable=1"
-	b, err := env.Output(cctx, "", bin, "-readonly", "-json", uri, query)
-	if err != nil {
-		return false
+	for _, mode := range []string{"?mode=ro", "?mode=ro&immutable=1"} {
+		cctx, cancel := context.WithTimeout(ctx, toolTimeout)
+		b, err := env.Output(cctx, "", bin, "-readonly", "-json", "-cmd", ".timeout 1000", "file:"+escapeURIPath(db)+mode, query)
+		cancel()
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(b)) == "" {
+			return true // no rows
+		}
+		return json.Unmarshal(b, out) == nil
 	}
-	if strings.TrimSpace(string(b)) == "" {
-		return true // no rows
-	}
-	return json.Unmarshal(b, out) == nil
+	return false
 }
 
 func escapeURIPath(p string) string {
@@ -201,7 +214,7 @@ func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) 
 				if r.Cwd == "" {
 					continue
 				}
-				cwd := realPath(r.Cwd)
+				cwd := pathKey(realPath(r.Cwd))
 				c := ts.codex[cwd]
 				if c == nil {
 					c = &codexCwd{}
@@ -229,7 +242,7 @@ func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) 
 		ts.mu.Lock()
 		for _, a := range gs.Archives {
 			if a.Cwd != "" {
-				ts.codexQueued[realPath(a.Cwd)] = true
+				ts.codexQueued[pathKey(realPath(a.Cwd))] = true
 			}
 		}
 		ts.mu.Unlock()
@@ -263,7 +276,7 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 		} `json:"worktrees"`
 	}
 	get := func(p string) *claudeWT {
-		p = realPath(p)
+		p = pathKey(realPath(p))
 		c := ts.claudeWT[p]
 		if c == nil {
 			c = &claudeWT{}
@@ -347,7 +360,7 @@ func (ts *toolState) loadConductor(ctx context.Context, env *core.Env, home stri
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	for _, r := range rows {
-		ts.conductor[realPath(r.P)] = &conductorWS{state: r.S}
+		ts.conductor[pathKey(realPath(r.P))] = &conductorWS{state: r.S}
 	}
 }
 
@@ -389,7 +402,7 @@ func (ts *toolState) loadEditors(ctx context.Context, env *core.Env, home string
 			if err != nil || u.Scheme != "file" || u.Path == "" {
 				continue
 			}
-			fp := realPath(u.Path)
+			fp := pathKey(realPath(u.Path))
 			ts.editors[fp] = appendUnique(ts.editors[fp], ed.name)
 		}
 		ts.mu.Unlock()
@@ -439,13 +452,14 @@ func (ts *toolState) apply(w *worktree) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	w.toolMeta = map[string]string{}
+	key := pathKey(w.path)
 	for _, p := range ts.procs {
-		if fsx.Within(p.cwd, w.path) {
+		if fsx.Within(pathKey(p.cwd), key) {
 			w.inUse = appendUnique(w.inUse, p.cmd)
 		}
 	}
 	for f, apps := range ts.editors {
-		if fsx.Within(f, w.path) {
+		if fsx.Within(f, key) {
 			for _, a := range apps {
 				w.editors = appendUnique(w.editors, a)
 			}
@@ -453,7 +467,7 @@ func (ts *toolState) apply(w *worktree) {
 	}
 	var active, archived int
 	for cwd, c := range ts.codex {
-		if fsx.Within(cwd, w.path) {
+		if fsx.Within(cwd, key) {
 			active += c.active
 			archived += c.archived
 		}
@@ -465,13 +479,13 @@ func (ts *toolState) apply(w *worktree) {
 		}
 	}
 	for cwd := range ts.codexQueued {
-		if fsx.Within(cwd, w.path) {
+		if fsx.Within(cwd, key) {
 			w.toolMeta["codex_archive"] = "queued"
 			w.toolNotes = append(w.toolNotes, "the Codex app has queued it for archival (it snapshots and removes it itself)")
 			break
 		}
 	}
-	if c := ts.claudeWT[w.path]; c != nil {
+	if c := ts.claudeWT[key]; c != nil {
 		switch {
 		case c.leased || c.active > 0:
 			w.session = "active Claude desktop session"
@@ -483,7 +497,7 @@ func (ts *toolState) apply(w *worktree) {
 			w.toolMeta["claude_session"] = "pooled"
 		}
 	}
-	if c := ts.conductor[w.path]; c != nil {
+	if c := ts.conductor[key]; c != nil {
 		w.toolMeta["conductor"] = c.state
 		if c.state == "archived" {
 			w.toolNotes = append(w.toolNotes, "Conductor already archived this workspace")
@@ -501,12 +515,13 @@ func (ts *toolState) lastActivity(path string) time.Time {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	var t time.Time
+	key := pathKey(path)
 	for cwd, c := range ts.codex {
-		if fsx.Within(cwd, path) && c.last.After(t) {
+		if fsx.Within(cwd, key) && c.last.After(t) {
 			t = c.last
 		}
 	}
-	if c := ts.claudeWT[path]; c != nil && c.last.After(t) {
+	if c := ts.claudeWT[key]; c != nil && c.last.After(t) {
 		t = c.last
 	}
 	return t

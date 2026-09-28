@@ -61,15 +61,36 @@ func (s *scan) studio() {
 	for n := range installed {
 		current[n] = true
 	}
+	// Versions are ranked by their most recently used settings directories
+	// (the caches when there are no settings).
+	pool := cfgs
+	if len(pool) == 0 {
+		pool = caches
+	}
 	if len(current) == 0 {
 		// No bundle found (custom location, Toolbox...): be conservative and
-		// treat the most recently used settings directory as the current one.
-		pool := cfgs
-		if len(pool) == 0 {
-			pool = caches
-		}
-		if n := newestDir(pool); n != "" {
+		// treat the most recently used settings directories (keep_latest of
+		// them) as the current ones.
+		for _, n := range newestDirs(pool, s.keepLatest()) {
 			current[n] = true
+		}
+	} else if keep := s.keepLatest(); keep > 1 {
+		// config keep_latest > 1: besides the installed versions, keep the
+		// most recently used other versions until keep versions are kept.
+		kept := 0
+		for _, p := range pool {
+			if current[filepath.Base(p)] {
+				kept++
+			}
+		}
+		for _, n := range newestDirs(pool, len(pool)) {
+			if kept >= keep {
+				break
+			}
+			if !current[n] {
+				current[n] = true
+				kept++
+			}
 		}
 	}
 	running := s.isStudioRunning()
@@ -124,14 +145,15 @@ func (s *scan) studio() {
 	}
 }
 
-// newestDir returns the base name of the most recently modified path.
-func newestDir(ps []string) string {
+// newestDirs returns the base names of the n most recently modified paths.
+func newestDirs(ps []string, n int) []string {
 	c := append([]string(nil), ps...)
 	sort.Slice(c, func(i, j int) bool { return mtime(c[i]).After(mtime(c[j])) })
-	if len(c) == 0 {
-		return ""
+	var out []string
+	for i := 0; i < n && i < len(c); i++ {
+		out = append(out, filepath.Base(c[i]))
 	}
-	return filepath.Base(c[0])
+	return out
 }
 
 // userCache emits the contents of ~/.android/{cache,build-cache,breakpad}:

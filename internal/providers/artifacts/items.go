@@ -2,6 +2,7 @@ package artifacts
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -84,6 +85,16 @@ func (s *scan) baseItem(c *cand) *core.Item {
 		it.Meta["git"] = "none"
 	}
 	s.kindDetails(c, it)
+	if c.weak {
+		// Outside git, *.js / index.html / assets are what hand-written
+		// sources look like too (webpack configs in build/, a starter's
+		// dist/index.html): shown, never preselected nor cleaned by --yes.
+		it.Risk = max(it.Risk, core.RiskCaution)
+		it.NoRecommend = true
+		it.Meta["evidence"] = "weak"
+		it.Note += " Not under git and nothing generator-specific inside (source maps, hashed bundles, asset-manifest.json...): it may hold hand-written files."
+	}
+	it.Recheck = noCheckout([]string{c.path})
 	if s.inICloud(c.path) {
 		it.Meta["icloud"] = "true"
 		it.Note += " In iCloud Drive (Desktop & Documents): deleting also removes it from iCloud; evicted files take no local space."
@@ -124,7 +135,7 @@ func (s *scan) kindDetails(c *cand, it *core.Item) {
 		}
 	case "yarn-cache":
 		rc, _ := readSmall(filepath.Join(c.parent, ".yarnrc.yml"), 1<<20)
-		if bytes.Contains(rc, []byte("enableGlobalCache: true")) {
+		if yarnGlobalCache(rc) {
 			it.Note = "Yarn Berry project cache left over: .yarnrc.yml has enableGlobalCache: true, so installs no longer use it."
 			it.Meta["leftover"] = "true"
 		}
@@ -138,6 +149,43 @@ func (s *scan) kindDetails(c *cand, it *core.Item) {
 				}
 			}
 		}
+	}
+}
+
+// yarnGlobalCache reports whether a .yarnrc.yml enables the global cache:
+// the last top-level enableGlobalCache key, comments stripped, must be true
+// (a commented-out or nested line, or a later false, does not count).
+func yarnGlobalCache(rc []byte) bool {
+	on := false
+	for _, l := range strings.Split(string(rc), "\n") {
+		l = strings.TrimRight(l, "\r")
+		if l == "" || l[0] == ' ' || l[0] == '\t' || l[0] == '#' {
+			continue // blank, nested key, comment
+		}
+		k, v, ok := strings.Cut(l, ":")
+		if !ok || strings.Trim(strings.TrimSpace(k), `"'`) != "enableGlobalCache" {
+			continue
+		}
+		if i := strings.IndexByte(v, '#'); i >= 0 && (i == 0 || v[i-1] == ' ' || v[i-1] == '\t') {
+			v = v[:i] // trailing comment
+		}
+		on = strings.EqualFold(strings.Trim(strings.TrimSpace(v), `"'`), "true")
+	}
+	return on
+}
+
+// noCheckout is the Recheck of artifact items: a target that became a
+// checkout since the scan (git worktree add, git init, git clone into it) is
+// left alone.
+func noCheckout(paths []string) func(context.Context) error {
+	paths = append([]string(nil), paths...)
+	return func(context.Context) error {
+		for _, p := range paths {
+			if hasGitEntry(p) {
+				return fmt.Errorf("%s now holds a .git entry (a git checkout): left alone", p)
+			}
+		}
+		return nil
 	}
 }
 
@@ -155,6 +203,7 @@ func (s *scan) groupItem(cs []*cand) *core.Item {
 		it.Paths = append(it.Paths, c.path)
 		c.project, c.pkg = cs[0].project, cs[0].pkg
 	}
+	it.Recheck = noCheckout(it.Paths)
 	it.Location = cs[0].project + "/…"
 	it.Name = fmt.Sprintf("%s%s › %s (%d dirs)", cs[0].prefix(), filepath.Base(cs[0].project), cs[0].rule.Label, len(cs))
 	return it
@@ -203,9 +252,19 @@ func (s *scan) finish(c *cand, it *core.Item, size, reclaim, files, apparent int
 	if apparent > 0 && it.Meta["icloud"] == "true" && apparent > 4*size && apparent-size > 100<<20 {
 		it.Meta["cloud_bytes"] = fsx.Bytes(apparent - size)
 	}
+	// Top-level mtimes miss deep edits and uncommitted work.
+	if t := s.deepActivity(c); t.After(it.LastUsed) {
+		it.LastUsed = t
+	}
 	var warns []string
 	if w := s.inUseWarn(c); w != "" {
 		warns = append(warns, w)
+	}
+	if w := s.runningWarn(it.ProcessGuard); w != "" {
+		warns = append(warns, w) // the executor would skip it anyway: keep it out of smart select
+	}
+	if c.weak {
+		warns = append(warns, "not under git: nothing proves it is build output — check before deleting")
 	}
 	if b := binaries(c.content); b != "" {
 		warns = append(warns, "contains built app binaries ("+b+") — keep them if you still need that build")
@@ -220,6 +279,10 @@ func (s *scan) finish(c *cand, it *core.Item, size, reclaim, files, apparent int
 		return
 	}
 	switch {
+	case it.NoRecommend:
+	case c.rule.Generic && c.git == nil:
+		// Generic names outside git: no forcing, core.Recommend's size and
+		// age rules still apply.
 	case it.Risk == core.RiskSafe && !it.LastUsed.IsZero() && s.now.Sub(it.LastUsed) >= idleForRecommend:
 		it.Recommended = true // build output of a project idle for a day
 	case it.Meta["leftover"] == "true":
@@ -241,6 +304,26 @@ func binaries(names map[string]bool) string {
 		out = append(out[:3], "…")
 	}
 	return strings.Join(out, ", ")
+}
+
+// runningWarn tells when a ProcessGuard process runs right now: cleaning
+// would be refused, so the item must not be preselected (cached per scan).
+func (s *scan) runningWarn(guard []string) string {
+	if len(guard) == 0 || s.p.running == nil {
+		return ""
+	}
+	key := strings.Join(guard, "\x00")
+	s.runMu.Lock()
+	names, ok := s.runCache[key]
+	if !ok {
+		names = s.p.running(guard...)
+		s.runCache[key] = names
+	}
+	s.runMu.Unlock()
+	if len(names) == 0 {
+		return ""
+	}
+	return strings.Join(names, ", ") + " is running — quit it before cleaning"
 }
 
 // inUseWarn tells when a process (dev server, agent, shell) runs inside the
@@ -283,7 +366,8 @@ func (s *scan) inUseWarn(c *cand) string {
 }
 
 // ignoredItem is a heavy git-ignored folder that no rule knows.
-func (s *scan) ignoredItem(d *ignDir, st fsx.Stats, nested []*cand, gits []*gitRoot) *core.Item {
+// nestedGit is a checkout the size walk met below it ("" when none).
+func (s *scan) ignoredItem(d *ignDir, st fsx.Stats, nested []*cand, gits []*gitRoot, nestedGit string) *core.Item {
 	g := d.git
 	c := &cand{path: d.path, root: d.root, git: g, tool: g.tool, rule: &rule{Kind: "ignored-dir"}}
 	if c.tool == "" {
@@ -331,13 +415,20 @@ func (s *scan) ignoredItem(d *ignDir, st fsx.Stats, nested []*cand, gits []*gitR
 	if it.LastUsed.After(s.now) {
 		it.LastUsed = s.now
 	}
-	if len(gits) > 0 {
+	wt := s.worktreeIn(d.path)
+	if len(gits) > 0 || wt != "" || nestedGit != "" {
 		it.Method = core.MethodReport
 		it.Selectable = false
-		rel, _ := filepath.Rel(d.path, gits[0].path)
-		it.Warn = "contains a git checkout (" + rel + ") — not proposed"
+		switch {
+		case len(gits) > 0:
+			wt, _ = filepath.Rel(filepath.Dir(d.path), gits[0].path)
+		case wt == "":
+			wt = nestedGit
+		}
+		it.Warn = "contains a git checkout (" + wt + ") — not proposed"
 		return it
 	}
+	it.Recheck = noCheckout([]string{d.path})
 	it.Warn = s.inUseWarn(c)
 	return it
 }

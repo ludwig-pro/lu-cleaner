@@ -38,15 +38,16 @@ import (
 // The unexported fields are seams for tests; New leaves them nil and Scan
 // fills sane defaults.
 type Provider struct {
-	appDirs    []string                            // where .app bundles are looked up
-	running    func(names ...string) []string      // sysx.Running
-	devOf      func(path string) (uint64, error)   // st_dev of a path (following symlinks)
-	getenv     func(string) string                 // os.Getenv
-	swapUsage  func() (total, used int64, ok bool) // sysctl vm.swapusage
-	updatesDir string                              // /Library/Updates ("-" disables)
-	mdfind     bool                                // ask Spotlight for app bundles
-	only       map[string]bool                     // test seam: run only these parts (nil = all)
-	lastUsed   func(path string) (time.Time, bool) // Finder "last opened" date of a file
+	appDirs    []string                                     // where .app bundles are looked up
+	running    func(names ...string) []string               // sysx.Running
+	devOf      func(path string) (uint64, error)            // st_dev of a path (following symlinks)
+	getenv     func(string) string                          // os.Getenv
+	swapUsage  func() (total, used int64, ok bool)          // sysctl vm.swapusage
+	updatesDir string                                       // /Library/Updates ("-" disables)
+	mdfind     bool                                         // ask Spotlight for app bundles
+	only       map[string]bool                              // test seam: run only these parts (nil = all)
+	lastUsed   func(path string) (time.Time, bool)          // Finder "last opened" date of a file
+	added      func(path string, st *unix.Stat_t) time.Time // when a file arrived in its folder
 }
 
 // New returns the provider.
@@ -79,6 +80,9 @@ func (p *Provider) defaults(env *core.Env) {
 	}
 	if p.lastUsed == nil {
 		p.lastUsed = finderLastUsed
+	}
+	if p.added == nil {
+		p.added = fileAdded
 	}
 }
 
@@ -195,7 +199,12 @@ func (s *scan) appSupport(rel string) string {
 // run executes an external command with a timeout. Results are memoized per
 // scan (several parts may ask the same thing).
 func (s *scan) run(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	key := name + "\x00" + strings.Join(args, "\x00")
+	return s.runIn("", timeout, name, args...)
+}
+
+// runIn is run with a working directory ("" = lu-cleaner's current one).
+func (s *scan) runIn(dir string, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	key := dir + "\x00" + name + "\x00" + strings.Join(args, "\x00")
 	s.runMu.Lock()
 	r := s.runOnce[key]
 	if r == nil {
@@ -206,7 +215,7 @@ func (s *scan) run(timeout time.Duration, name string, args ...string) ([]byte, 
 	r.once.Do(func() {
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
-		r.out, r.err = s.env.Output(ctx, "", name, args...)
+		r.out, r.err = s.env.Output(ctx, dir, name, args...)
 		if ctx.Err() != nil {
 			r.err = ctx.Err() // timed out (or scan cancelled): output is partial
 		}
@@ -427,9 +436,8 @@ func (s *scan) publish(it *core.Item, o pubOpts) {
 			return
 		}
 		it.Size, it.Files = st.Bytes, st.Files
-		if st.Reclaim < st.Bytes {
-			it.Reclaim = st.Reclaim
-		}
+		it.SetReclaim(st.Reclaim) // 0 would mean "same as Size"
+
 		if o.newest && st.Newest.After(it.LastUsed) {
 			it.LastUsed = st.Newest
 		}
@@ -539,6 +547,21 @@ func isDir(p string) bool { return fsx.IsDir(p) }
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// holdsGitRepo reports whether dir is a git repository or worktree: it
+// holds a .git entry (directory, file or symlink), or is a bare repository
+// (HEAD + objects + refs). The safety guard refuses those.
+func holdsGitRepo(dir string) bool {
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	for _, n := range []string{"HEAD", "objects", "refs"} {
+		if _, err := os.Lstat(filepath.Join(dir, n)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // permissionDenied reports TCC / permission errors.

@@ -83,6 +83,7 @@ type opts struct {
 	runner  map[string]string
 	roots   []string // relative to home; nil = ["src"]
 	devOf   func(string) (uint64, error)
+	keep    int // env.KeepLatest (config keep_latest); 0 = unset
 }
 
 func (f *fx) provider(o opts) *Provider {
@@ -119,7 +120,7 @@ func (f *fx) scan(o opts) *result {
 	if roots == nil {
 		roots = []string{"src"}
 	}
-	env := &core.Env{Home: f.home, TmpDir: f.tmp, Now: f.now, MaxDepth: 8,
+	env := &core.Env{Home: f.home, TmpDir: f.tmp, Now: f.now, MaxDepth: 8, KeepLatest: o.keep,
 		Runner: fakeRunner{out: o.runner}, Logf: f.t.Logf}
 	for _, r := range roots {
 		env.Roots = append(env.Roots, f.p(r))

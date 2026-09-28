@@ -31,8 +31,11 @@ type cli struct {
 	*App
 	f       globalFlags
 	started bool // a command's RunE was reached (errors are runtime errors)
-	out     *output
-	errw    *statusWriter
+	// trashSet: --trash was given explicitly (--trash=false then overrides
+	// use_trash from the config).
+	trashSet bool
+	out      *output
+	errw     *statusWriter
 }
 
 func newCLI(a *App) *cli {
@@ -55,6 +58,7 @@ guard right before removal.`
 const rootExamples = `  lu-cleaner                          # interactive dashboard
   lu-cleaner scan                     # what takes space, grouped by category
   lu-cleaner clean --yes --smart -n   # dry-run of the recommended cleanup
+  lu-cleaner --yes --smart            # same as clean --yes --smart
   lu-cleaner artifacts ~/dev          # npkill-like: node_modules, Pods, builds…
   lu-cleaner worktrees                # stale AI worktrees
   lu-cleaner doctor                   # why is my disk still full?`
@@ -70,6 +74,7 @@ func (c *cli) rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			c.started = true
+			c.trashSet = cmd.Flags().Changed("trash")
 			c.out = newOutput(c.App, c.noColor())
 			return nil
 		},
@@ -86,14 +91,14 @@ func (c *cli) rootCmd() *cobra.Command {
 	pf.StringSliceVarP(&c.f.kinds, "kind", "k", nil, "only these item kinds or provider ids (repeatable, comma-separated)")
 	pf.StringVar(&c.f.minSize, "min-size", "", "hide items smaller than this, e.g. 100MB (default: config min_size; 0 for clean --yes)")
 	pf.StringVar(&c.f.olderThan, "older-than", "", "only items unused for longer than this, e.g. 30d, 2w, 6m")
-	pf.StringVar(&c.f.risk, "risk", "", "highest risk allowed: safe|moderate|caution (default: moderate for clean --yes, everything otherwise)")
+	pf.StringVar(&c.f.risk, "risk", "", "highest risk allowed: safe|moderate|caution (default: moderate for clean --yes, everything otherwise); with --yes, caution also admits items with a warning")
 	pf.BoolVar(&c.f.smart, "smart", false, "only recommended items (safe caches, stale regenerable data)")
 	pf.BoolVarP(&c.f.dryRun, "dry-run", "n", false, "show what would be cleaned, delete nothing")
 	pf.BoolVarP(&c.f.yes, "yes", "y", false, "clean without the interactive picker")
-	pf.BoolVar(&c.f.trash, "trash", false, "move to ~/.Trash instead of deleting (space is freed only once the Trash is emptied)")
-	pf.BoolVar(&c.f.force, "force", false, "ignore running-app guards and dirty/unpushed worktree checks")
+	pf.BoolVar(&c.f.trash, "trash", false, "move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash")
+	pf.BoolVar(&c.f.force, "force", false, "ignore running-app and in-use guards, and the worktree checks (locked, uncommitted changes, commits on no branch, nested worktrees)")
 	pf.BoolVar(&c.f.json, "json", false, "machine-readable JSON output")
-	pf.StringArrayVar(&c.f.roots, "root", nil, "project root to scan for artifacts (repeatable, overrides config roots)")
+	pf.StringArrayVar(&c.f.roots, "root", nil, "project root to scan for artifacts (repeatable): replaces the config roots for the artifacts scan only, the other scanners keep them to see what your projects use")
 	pf.BoolVar(&c.f.noColor, "no-color", false, "disable colors (also honours NO_COLOR)")
 	pf.BoolVarP(&c.f.verbose, "verbose", "v", false, "debug logging on stderr")
 
@@ -123,8 +128,13 @@ func (c *cli) noColor() bool {
 // interactive reports whether a full-screen TUI can run.
 func (c *cli) interactive() bool { return c.StdinTTY && c.StdoutTTY }
 
-// runDashboard is `lu-cleaner` without a command.
+// runDashboard is `lu-cleaner` without a command. With --yes it is
+// `clean --yes` (same narrowing and risk rules): a script written as
+// `lu-cleaner -y --smart` must clean, not print a report and exit 0.
 func (c *cli) runDashboard(ctx context.Context) error {
+	if c.f.yes {
+		return c.runCleanYes(ctx, cleanSpec{})
+	}
 	if !c.interactive() || c.f.json {
 		return c.runReport(ctx, reportSpec{})
 	}

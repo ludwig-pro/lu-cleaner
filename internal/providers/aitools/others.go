@@ -80,11 +80,15 @@ func (s *scanner) antigravity() {
 	}
 	if !installed {
 		if p := filepath.Join(gem, "antigravity-browser-profile"); isDir(p) {
-			it := s.newItem("antigravity-browser-profile", core.CatAI, "Antigravity agent browser profile (app not installed)", core.RiskModerate)
+			// A full Chromium profile: saved passwords (Login Data), cookies,
+			// a signed-in Google account. Like the ChatGPT Atlas leftover it
+			// is user data: caution, never preselected.
+			it := s.newItem("antigravity-browser-profile", core.CatAI, "Antigravity agent browser profile (app not installed)", core.RiskCaution)
 			it.ID = itemID(it.Kind, p)
 			it.Path = p
 			it.ProcessGuard = procAntigrav
-			it.Note = "Chromium profile (extensions, caches, cookies) of the Antigravity browser agent; the app is not installed anymore, it is recreated on reinstall."
+			it.NoRecommend = true
+			it.Note = "Chromium profile of the Antigravity browser agent: saved passwords, cookies / logged-in sessions, history, extensions and caches. The app was not found; a reinstall starts an empty profile (logins are not restored)."
 			s.publish(it, pubOpts{placeholder: true, newest: true})
 		}
 		if p := s.home(".antigravity/extensions"); isDir(p) {

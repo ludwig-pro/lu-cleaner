@@ -1,10 +1,13 @@
 package worktrees
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -62,7 +65,7 @@ func (s *scan) list(r *repo) {
 		return
 	}
 	entries := parseWorktreeList(out)
-	var prunable []listEntry
+	var linked, prunable []listEntry
 	for i, e := range entries {
 		if i == 0 || e.bare {
 			continue // the main working tree (or the bare repository itself)
@@ -71,11 +74,13 @@ func (s *scan) list(r *repo) {
 			prunable = append(prunable, e)
 			continue
 		}
+		linked = append(linked, e)
 		if fsx.Exists(e.path) {
 			s.addCandidate(e.path)
 		}
 	}
 	s.mu.Lock()
+	r.entries = linked
 	r.prunable = prunable
 	s.mu.Unlock()
 }
@@ -187,10 +192,10 @@ func (s *scan) inspect(w *worktree) {
 	// left out: tools (Expo, Xcode, scanners) bump it without real use. The
 	// .git file is written when the worktree is created.
 	times := []time.Time{fsx.ModTime(filepath.Join(w.path, ".git"))}
-	if w.orphan != "" || w.offline != "" {
+	if !w.gitUsable() {
 		times = append(times, fsx.ModTime(w.path)) // no git signal left (refined by sizing)
 	}
-	if w.orphan == "" && w.offline == "" && !w.external {
+	if w.gitUsable() && !w.external {
 		s.gitState(w)
 		times = append(times, w.headDate,
 			fsx.ModTime(filepath.Join(w.gitdir, "index")),
@@ -202,7 +207,9 @@ func (s *scan) inspect(w *worktree) {
 			}
 			times = append(times, fsx.ModTime(filepath.Join(w.path, p)))
 		}
-		w.envFiles = s.ignoredEnvFiles(w)
+		if w.gitOK {
+			w.envFiles, w.envErr = s.ignoredSecrets(w)
+		}
 	}
 	for _, t := range times {
 		if t.After(w.activity) && !t.After(s.now.Add(24*time.Hour)) {
@@ -214,10 +221,18 @@ func (s *scan) inspect(w *worktree) {
 	}
 }
 
-// gitState runs git status & friends inside the worktree.
+// gitUsable reports whether git can inspect the worktree: it is tracked by
+// a reachable, readable main repository.
+func (w *worktree) gitUsable() bool {
+	return w.orphan == "" && w.offline == "" && w.unreadable == "" && w.repairAt == ""
+}
+
+// gitState runs git status & friends inside the worktree. Flags that user
+// config could change are explicit (untracked files, submodules), like the
+// checks run by the cleaner before removal.
 func (s *scan) gitState(w *worktree) {
 	out, err := s.git(gitTimeout, "-c", "core.fsmonitor=false", "-C", w.path,
-		"status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal")
+		"status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal", "--ignore-submodules=none")
 	if err != nil {
 		w.gitErr = "git status failed"
 		if errors.Is(err, errTimeout) {
@@ -255,6 +270,16 @@ func (s *scan) gitState(w *worktree) {
 	switch {
 	case unborn:
 		w.unpushed, w.unpushedOK = 0, true
+	case w.detached:
+		// Same rule as the removal (clean refuses without --force): with a
+		// detached HEAD, the commits contained in no branch, tag or
+		// remote-tracking ref are lost. Being patch-equivalent to the default
+		// branch (cherry-picked, rebased) does not save them.
+		if out, err := s.git(gitTimeout, "-C", w.path, "rev-list", "--count", "HEAD", "--not", "--branches", "--tags", "--remotes"); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(out)); err == nil {
+				w.unpushed, w.unpushedOK = n, true
+			}
+		}
 	case st.upstream != "" && st.abOK:
 		w.unpushed, w.unpushedOK = st.ahead, true
 	default:
@@ -285,8 +310,10 @@ func (s *scan) gitState(w *worktree) {
 				}
 			}
 		}
-		// Everything is in the remote default branch: nothing can be lost.
-		if w.merged && r.defRemote {
+		// Everything is in the remote default branch: nothing can be lost
+		// (a branch is kept by the removal anyway; a detached HEAD keeps the
+		// stricter rule above).
+		if w.merged && r.defRemote && !w.detached {
 			w.unpushed, w.unpushedOK = 0, true
 		}
 	}
@@ -371,70 +398,181 @@ func firstLine(s string) string {
 	return s
 }
 
-// ignoredEnvFiles lists .env files that are neither tracked nor shown by git
-// status (i.e. ignored): they would be lost with the worktree. Only the
-// worktree root, its first-level folders and apps/* / packages/* are looked at.
-func (s *scan) ignoredEnvFiles(w *worktree) []string {
-	var cands []string
-	look := func(rel string) {
-		entries, err := os.ReadDir(filepath.Join(w.path, rel))
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			n := e.Name()
-			if !strings.HasPrefix(n, ".env") || e.IsDir() {
-				continue
-			}
-			switch n {
-			case ".env.example", ".env.sample", ".env.template", ".env.dist", ".envrc":
-				continue
-			}
-			cands = append(cands, filepath.Join(rel, n))
+// ---------------------------------------------------------------- ignored secrets
+
+// artifactDirs are ignored folders that only hold regenerable build output or
+// dependencies: they are never searched for secrets.
+var artifactDirs = map[string]bool{
+	"node_modules": true, "pods": true, "build": true, "deriveddata": true, ".gradle": true,
+	".expo": true, ".next": true, "dist": true, ".turbo": true, ".cxx": true, "target": true,
+	".cache": true, ".yarn": true, "__pycache__": true, ".venv": true, "venv": true,
+	".dart_tool": true, "coverage": true, ".nuxt": true, ".output": true, ".svelte-kit": true,
+	".parcel-cache": true, ".pnpm-store": true, "out": true, "tmp": true, ".tox": true,
+	".mypy_cache": true, ".pytest_cache": true, ".ruff_cache": true, ".angular": true,
+	"xcuserdata": true, ".build": true, ".swiftpm": true, "carthage": true,
+}
+
+// regenerable tells whether an ignored folder only holds regenerable data
+// (dependencies, build output, caches): it is not searched for secrets.
+func regenerable(name string) bool {
+	n := strings.ToLower(name)
+	return artifactDirs[n] || strings.Contains(n, "cache")
+}
+
+// secretNames are file names (lowercase) holding credentials or personal
+// settings that nothing regenerates.
+var secretNames = map[string]bool{
+	".envrc": true, ".npmrc": true, ".netrc": true, ".pypirc": true,
+	".dev.vars": true, ".secrets": true, "secrets": true,
+	"google-services.json": true, "googleservice-info.plist": true,
+	"key.properties": true, "keystore.properties": true, "signing.properties": true,
+	"credentials.json": true, "credentials": true, "id_rsa": true, "id_ed25519": true, "id_ecdsa": true,
+	"claude.local.md": true, "settings.local.json": true, "auth.json": true, ".mcp.json": true,
+}
+
+// secretExts are extensions (lowercase) of keys, certificates, signing
+// material and infrastructure state.
+var secretExts = map[string]bool{
+	".keystore": true, ".jks": true, ".p8": true, ".p12": true, ".pfx": true, ".pem": true,
+	".key": true, ".mobileprovision": true, ".provisionprofile": true, ".tfstate": true,
+	".tfvars": true, ".secret": true, ".secrets": true, ".env": true, ".local": true,
+}
+
+// isSecretFile tells whether the file rel (relative to the worktree) looks
+// like a secret or a personal local setting: .env*, keystores, signing keys,
+// Firebase configs, *.local.* overrides, Claude local settings...
+func isSecretFile(rel string) bool {
+	n := strings.ToLower(filepath.Base(rel))
+	switch n {
+	case "debug.keystore":
+		return false // Android's well-known debug key (password "android"), regenerated by the build
+	case ".xcode.env.local":
+		return false // React Native: the node path, rewritten by every `pod install`
+	}
+	for _, sfx := range []string{".example", ".sample", ".template", ".dist", ".defaults", ".schema"} {
+		if strings.HasSuffix(n, sfx) {
+			return false // committed-style templates
 		}
 	}
-	look(".")
-	top, _ := os.ReadDir(w.path)
-	for _, d := range top {
-		n := d.Name()
-		if !d.IsDir() || strings.HasPrefix(n, ".") || pruneDirs[n] || n == "ios" || n == "android" {
-			continue
+	switch {
+	case secretNames[n], secretExts[filepath.Ext(n)]:
+		return true
+	case n == ".env", strings.HasPrefix(n, ".env."), strings.Contains(n, ".local."),
+		strings.Contains(n, ".tfstate"), strings.HasPrefix(n, "id_rsa"), strings.HasPrefix(n, "id_ed25519"),
+		strings.HasPrefix(n, "service-account") && strings.HasSuffix(n, ".json"),
+		strings.HasPrefix(n, "serviceaccount") && strings.HasSuffix(n, ".json"),
+		strings.HasPrefix(n, "secrets.") || strings.HasPrefix(n, "secret."):
+		return true
+	}
+	return false
+}
+
+// Bounds of the search for secrets inside a whole ignored folder.
+const (
+	secretWalkDepth   = 6
+	secretWalkEntries = 5000
+)
+
+// ignoredSecrets lists the ignored files of w that look like secrets or
+// personal settings (see isSecretFile) and exist nowhere else: `git worktree
+// remove` deletes ignored files without asking. Files identical to the same
+// path in the main working tree (tools copy .env from there) are not lost.
+// Whole ignored folders are searched too, except build output and
+// dependencies. errMsg is set when the ignored files could not be listed.
+func (s *scan) ignoredSecrets(w *worktree) (lost []string, errMsg string) {
+	out, err := s.git(gitTimeout, "-C", w.path, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil {
+		if errors.Is(err, errTimeout) {
+			return nil, "listing ignored files timed out"
 		}
-		look(n)
-		if n == "apps" || n == "packages" {
-			subs, _ := os.ReadDir(filepath.Join(w.path, n))
-			for _, sd := range subs {
-				if sd.IsDir() && !pruneDirs[sd.Name()] {
-					look(filepath.Join(n, sd.Name()))
+		return nil, "cannot list ignored files"
+	}
+	var entries []string
+	for _, e := range strings.Split(out, "\x00") {
+		if e != "" {
+			entries = append(entries, e)
+		}
+	}
+	sort.Strings(entries)
+	var found []string
+	for i, e := range entries {
+		if !strings.HasSuffix(e, "/") {
+			// Only a regular file loses data: removing a symlink leaves its
+			// target (an ignored target inside the worktree is listed itself).
+			// An lstat error keeps the entry (fail closed).
+			if isSecretFile(e) {
+				if fi, err := os.Lstat(filepath.Join(w.path, e)); err != nil || fi.Mode().IsRegular() {
+					found = append(found, filepath.Clean(e))
 				}
 			}
+			continue
+		}
+		// An untracked folder holding ignored files is listed before them:
+		// its entries follow it (sorted). Otherwise the folder itself is
+		// ignored as a whole and git does not list its content.
+		if i+1 < len(entries) && strings.HasPrefix(entries[i+1], e) {
+			continue
+		}
+		dir := strings.TrimSuffix(e, "/")
+		if regenerable(filepath.Base(dir)) {
+			continue
+		}
+		found = append(found, secretsIn(w.path, dir)...)
+	}
+	for _, rel := range found {
+		if !sameAsMain(w, rel) {
+			lost = append(lost, rel)
 		}
 	}
-	if len(cands) == 0 {
-		return nil
-	}
-	for i := range cands {
-		cands[i] = filepath.Clean(cands[i])
-	}
-	known := map[string]bool{}
-	for _, p := range w.dirtyPaths {
-		known[filepath.Clean(p)] = true
-	}
-	args := append([]string{"-C", w.path, "ls-files", "-z", "--"}, cands...)
-	if out, err := s.git(10*time.Second, args...); err == nil {
-		for _, p := range strings.Split(out, "\x00") {
-			if p != "" {
-				known[filepath.Clean(p)] = true
+	return lost, ""
+}
+
+// secretsIn searches the ignored folder dir (relative to root) for secret
+// files, without following symlinks or entering build output.
+func secretsIn(root, dir string) []string {
+	var found []string
+	seen := 0
+	base := filepath.Join(root, dir)
+	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if seen++; seen > secretWalkEntries {
+			return filepath.SkipAll
+		}
+		rel, _ := filepath.Rel(root, p)
+		if d.IsDir() {
+			if p != base && (regenerable(d.Name()) || d.Name() == ".git" ||
+				strings.Count(rel, "/")-strings.Count(dir, "/") >= secretWalkDepth) {
+				return filepath.SkipDir
 			}
+			return nil
 		}
-	} else {
+		if d.Type().IsRegular() && isSecretFile(rel) {
+			found = append(found, rel)
+		}
 		return nil
+	})
+	return found
+}
+
+// maxCompare bounds the files compared with the main working tree.
+const maxCompare = 1 << 20
+
+// sameAsMain reports whether the file rel of w has an identical copy at the
+// same place in the main working tree.
+func sameAsMain(w *worktree, rel string) bool {
+	if w.bare || w.main == "" || w.main == w.path {
+		return false
 	}
-	var lost []string
-	for _, c := range cands {
-		if !known[c] {
-			lost = append(lost, c)
-		}
+	a, b := filepath.Join(w.path, rel), filepath.Join(w.main, rel)
+	fa, err1 := os.Lstat(a)
+	fb, err2 := os.Lstat(b)
+	if err1 != nil || err2 != nil || !fa.Mode().IsRegular() || !fb.Mode().IsRegular() ||
+		fa.Size() != fb.Size() || fa.Size() > maxCompare {
+		return false
 	}
-	return lost
+	ca, err1 := os.ReadFile(a)
+	cb, err2 := os.ReadFile(b)
+	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
 }

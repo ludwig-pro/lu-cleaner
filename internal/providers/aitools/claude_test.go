@@ -73,6 +73,12 @@ func TestClaudeProjects(t *testing.T) {
 	f.file(g+"/s-g/tool-results/x.txt", 100, 0)
 	f.ageTree(g, 10*day)
 
+	// H: deleted folder, untouched for 45 days: preselected.
+	goneH := f.path("gone/h")
+	h := projects + claudeEncode(goneH)
+	f.text(h+"/s-h.jsonl", transcript(goneH), 0)
+	f.ageTree(h, 45*day)
+
 	// never-delete files
 	creds := f.text(".claude/.credentials.json", "{}", 0)
 	settings := f.text(".claude/settings.json", "{}", 0)
@@ -117,8 +123,12 @@ func TestClaudeProjects(t *testing.T) {
 	if ob == nil {
 		t.Fatalf("orphan B missing: %v", orphans)
 	}
-	if ob.Risk != core.RiskModerate || !ob.Recommended || ob.Path != "" || ob.Meta["kept"] != "memory/" {
-		t.Errorf("B = risk %v rec %v path %q meta %v", ob.Risk, ob.Recommended, ob.Path, ob.Meta)
+	// B was deleted 5 days ago: the folder may come back, never preselected.
+	if ob.Risk != core.RiskCaution || ob.Recommended || !ob.NoRecommend || ob.Path != "" || ob.Meta["kept"] != "memory/" {
+		t.Errorf("B = risk %v rec %v norec %v path %q meta %v", ob.Risk, ob.Recommended, ob.NoRecommend, ob.Path, ob.Meta)
+	}
+	if core.Recommend(ob, f.now, 14*day) {
+		t.Errorf("B: a recent orphan must not be smart-selected")
 	}
 	if !hasTarget(ob, f.path(b+"/s-b.jsonl")) || !hasTarget(ob, f.path(b+"/s-b")) {
 		t.Errorf("B targets = %v", ob.Targets())
@@ -136,10 +146,14 @@ func TestClaudeProjects(t *testing.T) {
 		}
 	}
 	og := orphans[itemID("claude-code-orphan-project", f.path(g))]
-	if og == nil || og.Meta["cwd_source"] != "sessions-index" || !og.Recommended {
-		t.Errorf("G (sessions-index fallback) = %+v", og)
+	if og == nil || og.Meta["cwd_source"] != "sessions-index" || og.Recommended || og.Risk != core.RiskCaution {
+		t.Errorf("G (sessions-index fallback, 10 days) = %+v", og)
 	}
-	if len(orphans) != 3 {
+	oh := orphans[itemID("claude-code-orphan-project", f.path(h))]
+	if oh == nil || oh.Risk != core.RiskModerate || !oh.Recommended || oh.NoRecommend || !core.Recommend(oh, f.now, 14*day) {
+		t.Errorf("H (deleted 45 days ago) must be moderate and preselected: %+v", oh)
+	}
+	if len(orphans) != 4 {
 		t.Errorf("orphans = %v", names(r.byKind("claude-code-orphan-project")))
 	}
 }
@@ -219,10 +233,21 @@ func TestResolver(t *testing.T) {
 				t.Errorf("resolve(%q) = %q", enc(want), got)
 			}
 		}
-		for _, d := range []string{"a/.codex/worktrees/x2/app", "a/nope", "b"} {
+		for _, d := range []string{"a/.codex/worktrees/x2/app", "a/nope"} {
 			if _, ex := r.resolve(enc(filepath.Join(base, d))); ex != existNo {
 				t.Errorf("resolve(missing %s) = %v, want existNo", d, ex)
 			}
+		}
+		// Nothing of the name matches below the root: it may not be a path
+		// at all (Cursor's "empty-window", a chat id...).
+		for _, name := range []string{enc(filepath.Join(base, "b")), "empty-window"} {
+			if _, ex := r.resolve(name); ex != existUnknown {
+				t.Errorf("resolve(%s) = %v, want existUnknown", name, ex)
+			}
+		}
+		// APFS is case-insensitive: a folder opened with another case exists.
+		if got, ex := r.resolve(enc(filepath.Join(base, "A/FOO/Bar"))); ex != existYes || !strings.EqualFold(enc(got), enc(filepath.Join(base, "a/foo/bar"))) {
+			t.Errorf("case-insensitive resolve = %q %v", got, ex)
 		}
 		if _, ex := r.resolve(strings.Repeat("x", 300)); ex != existUnknown {
 			t.Errorf("over-long (truncated) names must be unknown")

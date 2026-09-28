@@ -67,10 +67,14 @@ type catRow struct {
 	info     core.CategoryInfo
 	items    []*core.Item // visible items of the category
 	total    int64
-	cleanN   int // cleanable visible items
-	selN     int
+	cleanN   int // cleanable visible items (measured and verified)
+	selN     int // selected visible items
 	selTotal int64
-	sizing   bool
+	// selected items of the category hidden by the text filter: they are
+	// cleaned too, so the row says so instead of pretending they are visible
+	selHidden      int
+	selHiddenTotal int64
+	sizing         bool
 }
 
 // pickerModel is the Bubble Tea model of the picker. It is used through a
@@ -432,7 +436,9 @@ func (m *pickerModel) refresh() {
 		m.dirtySel = false
 		m.selItems = m.selItems[:0]
 		for _, it := range m.base {
-			if m.selected[it.ID] && it.CanClean() {
+			// an item still being measured may still be rejected by its
+			// provider (e.g. node_modules tracked by git): never clean it yet
+			if m.selected[it.ID] && it.CanClean() && !it.Sizing {
 				m.selItems = append(m.selItems, it)
 			}
 		}
@@ -465,7 +471,7 @@ func (m *pickerModel) buildCats() {
 		}
 		r := catRow{info: info, items: items, total: core.Total(items), sizing: running[info.ID]}
 		for _, it := range items {
-			if it.CanClean() {
+			if it.CanClean() && !it.Sizing {
 				r.cleanN++
 			}
 			if it.Sizing {
@@ -507,18 +513,29 @@ func (m *pickerModel) buildCats() {
 	}
 }
 
+// buildCatSelection counts the selection of each category row. Only visible
+// items count as the row's selection (its check box and the category toggle
+// act on them); selected items hidden by the text filter are counted apart.
 func (m *pickerModel) buildCatSelection() {
+	vis := make(map[string]bool, len(m.visible))
+	for _, it := range m.visible {
+		vis[it.ID] = true
+	}
 	for i := range m.cats {
 		r := &m.cats[i]
-		r.selN, r.selTotal = 0, 0
-		var sel []*core.Item
+		var sel, hidden []*core.Item
 		for _, it := range m.selItems {
-			if it.Category == r.info.ID {
+			if it.Category != r.info.ID {
+				continue
+			}
+			if vis[it.ID] {
 				sel = append(sel, it)
+			} else {
+				hidden = append(hidden, it)
 			}
 		}
-		r.selN = len(sel)
-		r.selTotal = core.Total(sel)
+		r.selN, r.selTotal = len(sel), core.Total(sel)
+		r.selHidden, r.selHiddenTotal = len(hidden), core.Total(hidden)
 	}
 }
 
@@ -841,6 +858,10 @@ func (m *pickerModel) toggleCurrent() {
 		m.setStatus(stInfo, "%s cannot be cleaned (%s)", it.Name, why)
 		return
 	}
+	if it.Sizing && !m.selected[it.ID] {
+		m.setStatus(stInfo, "%s is still being measured and verified — select it once its size is shown", it.Name)
+		return
+	}
 	on := !m.selected[it.ID]
 	m.setSel(it, on)
 	if on && it.Risk >= core.RiskCaution {
@@ -874,9 +895,13 @@ func (m *pickerModel) toggleCategory() {
 		m.setStatus(stInfo, "Unselected %s", r.info.Title)
 		return
 	}
-	n, skipped := 0, 0
+	n, skipped, sizing := 0, 0, 0
 	for _, it := range r.items {
 		if !it.CanClean() {
+			continue
+		}
+		if it.Sizing {
+			sizing++
 			continue
 		}
 		if it.Risk >= core.RiskCaution {
@@ -886,8 +911,15 @@ func (m *pickerModel) toggleCategory() {
 		m.setSel(it, true)
 		n++
 	}
+	var left []string
 	if skipped > 0 {
-		m.setStatus(stWarn, "Selected %s in %s — %s left unselected (open the category to pick them)", plural(n, "item"), r.info.Title, plural(skipped, "caution item"))
+		left = append(left, plural(skipped, "caution item")+" left unselected (open the category to pick them)")
+	}
+	if sizing > 0 {
+		left = append(left, plural(sizing, "item")+" still being verified")
+	}
+	if len(left) > 0 {
+		m.setStatus(stWarn, "Selected %s in %s — %s", plural(n, "item"), r.info.Title, strings.Join(left, " · "))
 	} else {
 		m.setStatus(stInfo, "Selected %s in %s", plural(n, "item"), r.info.Title)
 	}
@@ -915,7 +947,7 @@ func (m *pickerModel) selectScope(pred func(*core.Item) bool, verb string) {
 		if !it.CanClean() {
 			continue
 		}
-		on := pred(it)
+		on := pred(it) && !it.Sizing // never select what is still being verified
 		m.setSel(it, on)
 		if on {
 			n++

@@ -106,11 +106,11 @@ func (m *pickerModel) viewCrumb(w int) string {
 		s = sAccentB.Render(fmt.Sprintf("%d items", len(m.list))) + sDim.Render(" · sort: "+m.sort.String())
 	default:
 		info := core.LookupCategory(m.cat)
-		s = sAccentB.Render(fmt.Sprintf("%s %s", info.Icon, info.Title)) + sSubtle.Render(fmt.Sprintf(" (%d)", len(m.list))) +
+		s = sAccentB.Render(fmt.Sprintf("%s %s", info.Icon, safeText(info.Title))) + sSubtle.Render(fmt.Sprintf(" (%d)", len(m.list))) +
 			sDim.Render(" · sort: "+m.sort.String()+" · ← back · tab next")
 	}
 	if q := m.filter.String(); q != "" && !m.filter.active {
-		s += sCyan.Render(fmt.Sprintf(" · filter %q", q))
+		s += sCyan.Render(" · filter " + strconv.Quote(q))
 	}
 	if m.showAll {
 		s += sDim.Render(" · showing all")
@@ -177,7 +177,7 @@ func (m *pickerModel) viewCats(w, rows int) string {
 		default:
 			check = "[ ] "
 		}
-		title := pad(r.info.Title, c.title)
+		title := pad(safeText(r.info.Title), c.title)
 		if cur {
 			title = sAccentB.Render(title)
 		}
@@ -197,8 +197,13 @@ func (m *pickerModel) viewCats(w, rows int) string {
 		}
 		if c.sel > 0 {
 			sel := ""
-			if r.selN > 0 {
+			switch {
+			case r.selN > 0 && r.selHidden > 0:
+				sel = fmt.Sprintf("✓ %s +%d", fsx.Bytes(r.selTotal), r.selHidden)
+			case r.selN > 0:
 				sel = "✓ " + fsx.Bytes(r.selTotal)
+			case r.selHidden > 0:
+				sel = fmt.Sprintf("+%d hidden", r.selHidden)
 			}
 			line += sGreen.Render(padLeft(sel, c.sel))
 		}
@@ -281,6 +286,8 @@ func (m *pickerModel) itemLine(it *core.Item, cur bool, c itemCols) string {
 	switch {
 	case !can:
 		check = sDim.Render("[·] ")
+	case it.Sizing && !sel:
+		check = sDim.Render("[…] ") // not selectable until measured and verified
 	case sel:
 		check = sGreen.Render("[✓] ")
 	default:
@@ -289,10 +296,10 @@ func (m *pickerModel) itemLine(it *core.Item, cur bool, c itemCols) string {
 	age := it.Age(m.now)
 	stale := age > 0 && age >= m.stale
 
-	name := pad(it.Name, c.name)
+	name := pad(safeText(it.Name), c.name)
 	loc := ""
 	if c.loc > 0 {
-		loc = padTruncLeft(m.env.Pretty(it.Where()), c.loc)
+		loc = padTruncLeft(safeText(m.env.Pretty(it.Where())), c.loc)
 	}
 	size := padLeft(fsx.Bytes(it.Size), c.size)
 	if it.Sizing {
@@ -370,7 +377,7 @@ func (m *pickerModel) itemTags(it *core.Item, stale bool, w int) string {
 		add("stale", sYellow)
 	}
 	for _, b := range metaBadges(it) {
-		add(b, sCyan)
+		add(safeText(b), sCyan)
 	}
 	return pad(strings.Join(parts, " "), w)
 }
@@ -415,6 +422,7 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 		if value == "" {
 			return
 		}
+		value = safeText(value)
 		prefix := ""
 		if label != "" {
 			prefix = sSubtle.Render(pad(label, 9))
@@ -422,8 +430,8 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 		lines = append(lines, prefix+st.Render(value))
 	}
 	lines = append(lines, sDim.Render(strings.Repeat("─", w)))
-	head := sBold.Render(it.Name) + sSubtle.Render(" · ") + riskStyle(it.Risk).Render(it.Risk.String()) +
-		sSubtle.Render(" · "+it.Kind+" · "+it.Provider)
+	head := sBold.Render(safeText(it.Name)) + sSubtle.Render(" · ") + riskStyle(it.Risk).Render(it.Risk.String()) +
+		sSubtle.Render(" · "+safeText(it.Kind)+" · "+safeText(it.Provider))
 	if it.Files > 0 {
 		head += sSubtle.Render(" · " + thousands(it.Files) + " files")
 	}
@@ -436,19 +444,22 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 			if i == 0 {
 				label = "Paths"
 			}
-			add(label, truncLeft(m.env.Pretty(it.Paths[i]), inner-9), lipgloss.NewStyle())
+			add(label, truncLeft(safeText(m.env.Pretty(it.Paths[i])), inner-9), lipgloss.NewStyle())
 		}
 		if more := len(it.Paths) - shown; more > 0 {
 			add("", fmt.Sprintf("and %d more", more), sDim)
 		}
 	case it.Path != "":
-		add("Path", truncLeft(it.Path, inner-9), lipgloss.NewStyle())
+		add("Path", truncLeft(safeText(it.Path), inner-9), lipgloss.NewStyle())
 	case it.Location != "":
-		add("Location", truncLeft(it.Location, inner-9), lipgloss.NewStyle())
+		add("Location", truncLeft(safeText(it.Location), inner-9), lipgloss.NewStyle())
 	}
 	method := it.Method.String()
-	if it.Method == core.MethodDelete && m.trash {
+	switch {
+	case it.Method == core.MethodDelete && m.trash:
 		method = "trash (Trash mode)"
+	case (it.Method == core.MethodWorktree || it.Method == core.MethodCommand) && m.trash:
+		method += " — skipped in Trash mode (it would delete permanently)"
 	}
 	if it.Method == core.MethodCommand && len(it.Command) > 0 {
 		method += ": " + strings.Join(it.Command, " ")
@@ -495,7 +506,7 @@ func (m *pickerModel) viewStatus(w int) string {
 	}
 	if m.status == "" {
 		if it := m.currentItem(); it != nil && it.Warn != "" && !m.showDetails() {
-			return pad(sOrange.Render("⚠ "+it.Warn), w)
+			return pad(sOrange.Render("⚠ "+safeText(it.Warn)), w)
 		}
 		if m.screen == scrCategories && m.catCursor < len(m.cats) {
 			return pad(sDim.Render(m.cats[m.catCursor].info.Desc), w)
@@ -513,7 +524,7 @@ func (m *pickerModel) viewStatus(w int) string {
 	default:
 		st = sSubtle
 	}
-	return pad(st.Render(m.status), w)
+	return pad(st.Render(safeText(m.status)), w)
 }
 
 func (m *pickerModel) modeLabel() string {
@@ -587,7 +598,7 @@ func (m *pickerModel) viewHelp(w, h int) string {
 	if len(m.provErrs) > 0 {
 		lines = append(lines, "", sOrange.Render("Provider errors"))
 		for _, e := range m.provErrs {
-			lines = append(lines, sOrange.Render("• "+e))
+			lines = append(lines, sOrange.Render("• "+safeText(e)))
 		}
 	}
 	inner := min(w-6, 78)
@@ -606,11 +617,19 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 	}
 	inner := min(w-6, 74)
 	var lines []string
-	title := fmt.Sprintf("Clean %s — %s?", plural(len(c.items), "item"), fsx.Bytes(c.total))
-	if m.opt.Clean.DryRun {
-		title = fmt.Sprintf("Dry-run %s — %s?", plural(len(c.items), "item"), fsx.Bytes(c.total))
+	n := len(c.items)
+	verb := "Clean"
+	switch {
+	case m.opt.Clean.DryRun:
+		verb = "Dry-run"
+	case m.trash:
+		verb = "Move to Trash"
 	}
-	lines = append(lines, sBold.Render(title), "")
+	lines = append(lines, sBold.Render(fmt.Sprintf("%s %s — %s?", verb, plural(n, "item"), fsx.Bytes(c.total))))
+	if extra := c.selected - len(c.items) - c.trashN; extra > 0 {
+		lines = append(lines, sSubtle.Render(fmt.Sprintf("%d selected: %s inside another selected item, cleaned with it", c.selected, plural(extra, "item"))))
+	}
+	lines = append(lines, "")
 	for r := core.RiskSafe; r <= core.RiskNever; r++ {
 		rc := c.byRisk[r]
 		if rc.n == 0 {
@@ -628,6 +647,11 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 	default:
 		lines = append(lines, label("Method")+sRed.Render("delete permanently")+sSubtle.Render(" — frees space now"))
 	}
+	if c.trashN > 0 {
+		lines = append(lines,
+			label("Skipped")+sOrange.Render(plural(c.trashN, "worktree/command item")+": "+trashSkipMsg),
+			label("")+sDim.Render("t switches to delete mode"))
+	}
 	for i, cmd := range c.commands {
 		if i == 4 {
 			lines = append(lines, label("")+sDim.Render(fmt.Sprintf("and %d more", len(c.commands)-4)))
@@ -637,34 +661,46 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 		if i == 0 {
 			l = "Commands"
 		}
-		lines = append(lines, label(l)+sCyan.Render(cmd))
+		lines = append(lines, label(l)+sCyan.Render(safeText(cmd)))
 	}
 	switch {
 	case c.checking:
-		lines = append(lines, label("Running")+sDim.Render("checking "+strings.Join(c.guards, ", ")+"…"))
+		lines = append(lines, label("Running")+sDim.Render("checking "+safeText(strings.Join(c.guards, ", "))+"…"))
 	case len(c.running) > 0:
 		msg := " — items guarded by them will be skipped"
 		if m.opt.Clean.Force {
 			msg = " — force: will clean anyway"
 		}
-		lines = append(lines, label("Running")+sOrange.Render(strings.Join(c.running, ", ")+msg))
+		lines = append(lines, label("Running")+sOrange.Render(safeText(strings.Join(c.running, ", "))+msg))
 	}
 	if h >= 24 && len(c.largest) > 0 {
 		var names []string
 		for _, it := range c.largest {
-			names = append(names, fmt.Sprintf("%s (%s)", it.Name, fsx.Bytes(it.Freed())))
+			names = append(names, fmt.Sprintf("%s (%s)", safeText(it.Name), fsx.Bytes(it.Freed())))
 		}
 		lines = append(lines, label("Largest")+sSubtle.Render(joinFit(names, inner-10)))
+	}
+	if c.hidden > 0 {
+		lines = append(lines, label("Hidden")+sOrange.Render(fmt.Sprintf("%s hidden by the filter %s will be cleaned too", plural(c.hidden, "selected item"), strconv.Quote(m.filter.String()))))
 	}
 	if m.scanning {
 		lines = append(lines, label("")+sDim.Render("scan still running: sizes may be partial"))
 	}
 	lines = append(lines, "")
 	if c.caution > 0 {
-		lines = append(lines,
-			sRedB.Render(fmt.Sprintf("⚠ %s selected: may hold data you care about.", plural(c.caution, "caution item"))),
-			sBold.Render("Type yes to confirm: ")+c.input.view(),
-		)
+		lines = append(lines, sRedB.Render(fmt.Sprintf("⚠ %s: may hold data you care about.", plural(c.caution, "caution item"))))
+		if len(c.nested) > 0 {
+			var names []string
+			for i, it := range c.nested {
+				if i == 3 {
+					names = append(names, fmt.Sprintf("and %d more", len(c.nested)-3))
+					break
+				}
+				names = append(names, fmt.Sprintf("%s (%s)", safeText(m.env.Pretty(it.Where())), fsx.Bytes(it.Size)))
+			}
+			lines = append(lines, sOrange.Render(joinFit([]string{"inside the selection: " + strings.Join(names, ", ")}, inner)))
+		}
+		lines = append(lines, sBold.Render("Type yes to confirm: ")+c.input.view())
 		if c.hint != "" {
 			lines = append(lines, sOrange.Render(c.hint))
 		}
@@ -719,9 +755,16 @@ func (m *pickerModel) viewRun(w, h int) string {
 	lines = append(lines,
 		sSubtle.Render("items ")+bar(fi, bw, sAccent)+" "+fmt.Sprintf("%d/%d", run.processed, run.total),
 		sSubtle.Render("data  ")+bar(fb, bw, sAccent)+" "+fmt.Sprintf("%s / %s", fsx.Bytes(run.procBytes), fsx.Bytes(run.totalBytes)),
-		sSubtle.Render("freed ")+sGreen.Render(fsx.Bytes(run.freed)),
-		"",
 	)
+	if run.trash && !m.opt.Clean.DryRun {
+		lines = append(lines, sSubtle.Render("Trash ")+sYellow.Render(fsx.Bytes(run.trashed))+sDim.Render(" moved — not freed until you empty the Trash"))
+		if run.freed > 0 {
+			lines = append(lines, sSubtle.Render("freed ")+sGreen.Render(fsx.Bytes(run.freed)))
+		}
+	} else {
+		lines = append(lines, sSubtle.Render("freed ")+sGreen.Render(fsx.Bytes(run.freed)))
+	}
+	lines = append(lines, "")
 	room := h - len(lines) - 1
 	if m.mode == modeSummary {
 		lines = append(lines, sDim.Render("press any key to return to the list"))
@@ -764,7 +807,7 @@ func (m *pickerModel) resultLine(r clean.Result, w int) string {
 	name := ""
 	size := int64(0)
 	if r.Item != nil {
-		name = r.Item.Name
+		name = safeText(r.Item.Name)
 		size = r.Item.Freed()
 	}
 	nw := clamp(w/3, 12, 40)
@@ -785,7 +828,7 @@ func (m *pickerModel) resultLine(r clean.Result, w int) string {
 		icon, st, msg = "✗", sRed, "failed: "+r.Error
 	}
 	rest := w - 2 - nw - 1 - 10 - 1
-	return st.Render(icon) + " " + pad(name, nw) + " " + sBold.Render(padLeft(fsx.Bytes(size), 10)) + " " + st.Render(pad(msg, max(0, rest)))
+	return st.Render(icon) + " " + pad(name, nw) + " " + sBold.Render(padLeft(fsx.Bytes(size), 10)) + " " + st.Render(pad(safeText(msg), max(0, rest)))
 }
 
 func (m *pickerModel) viewSummaryCard(w int) string {
@@ -801,11 +844,15 @@ func (m *pickerModel) viewSummaryCard(w int) string {
 		var est int64
 		for _, r := range s.Results {
 			if r.Status == clean.StatusDryRun {
-				est += r.Freed
+				est += r.Freed + r.Trashed
 			}
 		}
+		what := "would free about"
+		if s.Trash {
+			what = "would move to the Trash about" // Trash moves free nothing
+		}
 		lines = append(lines, sCyan.Render("○ Dry-run finished")+sSubtle.Render(fmt.Sprintf(" in %.1fs", s.Took.Seconds())),
-			fmt.Sprintf("%s would free about %s — nothing was touched", plural(dry, "item"), sBold.Render(fsx.Bytes(est))))
+			fmt.Sprintf("%s %s %s — nothing was touched", plural(dry, "item"), what, sBold.Render(fsx.Bytes(est))))
 	default:
 		lines = append(lines, sGreen.Render("✓ Cleaning finished")+sSubtle.Render(fmt.Sprintf(" in %.1fs", s.Took.Seconds())))
 		counts := sGreen.Render(fmt.Sprintf("%d done", done))
@@ -816,14 +863,21 @@ func (m *pickerModel) viewSummaryCard(w int) string {
 			counts += sSubtle.Render(" · ") + sRed.Render(fmt.Sprintf("%d failed", failed))
 		}
 		lines = append(lines, counts, "")
-		lines = append(lines, sSubtle.Render(pad("Estimated freed", 17))+sBold.Render(fsx.Bytes(s.Estimated)))
+		// A move to the Trash frees nothing: never count it as freed.
+		freed, moved, nMoved := trashSplit(s)
+		if freed > 0 || nMoved == 0 {
+			lines = append(lines, sSubtle.Render(pad("Estimated freed", 17))+sBold.Render(fsx.Bytes(freed)))
+		}
+		if nMoved > 0 {
+			lines = append(lines, sSubtle.Render(pad("Moved to Trash", 17))+sBold.Render(fsx.Bytes(moved))+sSubtle.Render("   (not freed yet)"))
+		}
 		if s.DiskBefore.Total > 0 {
 			lines = append(lines, sSubtle.Render(pad("Measured freed", 17))+sBold.Render(fsx.Bytes(s.Measured))+
 				sSubtle.Render(fmt.Sprintf("   (%s → %s free)", fsx.Bytes(s.DiskBefore.Free), fsx.Bytes(s.DiskAfter.Free))))
 		}
-		if s.Trash {
-			lines = append(lines, "", sYellow.Render("🗑 Items were moved to the Trash: empty it to really free the space."))
-		} else if s.Estimated > 0 && s.Measured < s.Estimated/2 {
+		if nMoved > 0 {
+			lines = append(lines, "", sYellow.Render(fmt.Sprintf("🗑 %s moved to the Trash: empty it to really free the space.", plural(nMoved, "item"))))
+		} else if freed > 0 && s.Measured < freed/2 {
 			lines = append(lines, "", sYellow.Render("Space not fully returned? APFS snapshots / hardlinks / clones / Trash — run lu-cleaner doctor"))
 		}
 	}

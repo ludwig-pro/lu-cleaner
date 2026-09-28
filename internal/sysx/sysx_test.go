@@ -3,7 +3,11 @@ package sysx
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestRunningMatchesSelf(t *testing.T) {
@@ -50,7 +54,11 @@ func TestExecInside(t *testing.T) {
 }
 
 func TestNativeProcPaths(t *testing.T) {
-	cwds, execs, ok := nativeProcPaths()
+	cwds, ok := nativeCwds()
+	if !ok {
+		t.Skip("proc_info unavailable")
+	}
+	execs, ok := nativeExecs()
 	if !ok {
 		t.Skip("proc_info unavailable")
 	}
@@ -73,4 +81,85 @@ func TestNativeProcPaths(t *testing.T) {
 	if !foundCwd || !foundExe {
 		t.Errorf("own process not found: cwd=%v exe=%v (%d cwds, %d execs)", foundCwd, foundExe, len(cwds), len(execs))
 	}
+}
+
+// A file mapped by a running process (a native .node addon, a dylib, an
+// mmapped database) makes its directory busy: only the main executable was
+// checked, so node_modules was deleted under a dev server that had an addon
+// loaded from it.
+func TestExecInsideSeesMappedFiles(t *testing.T) {
+	if _, ok := nativeExecs(); !ok {
+		t.Skip("proc_info unavailable")
+	}
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules")
+	addon := filepath.Join(nm, "addon", "build", "Release", "addon.node")
+	if err := os.MkdirAll(filepath.Dir(addon), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(addon, make([]byte, 64<<10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(addon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem, err := unix.Mmap(int(f.Fd()), 0, 64<<10, unix.PROT_READ, unix.MAP_SHARED)
+	f.Close() // the mapping keeps the vnode referenced
+	if err != nil {
+		t.Skip(err)
+	}
+	pid := itoa(os.Getpid())
+	invalidateFDs()
+	has := func(pids string) bool {
+		for _, p := range strings.Split(pids, ",") {
+			if p == pid {
+				return true
+			}
+		}
+		return false
+	}
+	if pids := ExecInside(nm); !has(pids) {
+		t.Errorf("ExecInside(node_modules) = %q, want our pid %s (addon mapped)", pids, pid)
+	}
+	// Same directory spelled with another case: APFS is case-insensitive.
+	if pids := ExecInside(filepath.Join(dir, "Node_Modules")); !has(pids) {
+		t.Errorf("ExecInside(Node_Modules) = %q, want our pid %s", pids, pid)
+	}
+	if pids := ExecInside(filepath.Join(dir, "node_modules2")); has(pids) {
+		t.Errorf("sibling reported busy: %q", pids)
+	}
+	if err := unix.Munmap(mem); err != nil {
+		t.Fatal(err)
+	}
+	invalidateFDs()
+	if pids := ExecInside(nm); has(pids) {
+		t.Errorf("after munmap: ExecInside = %q still lists us", pids)
+	}
+}
+
+func TestCwdInsideIgnoresCaseAndNormalization(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Skip(err)
+	}
+	invalidateFDs()
+	if CwdInside(wd) == "" {
+		t.Skip("cwd not reported")
+	}
+	if pids := CwdInside(strings.ToUpper(wd)); pids == "" {
+		t.Errorf("CwdInside(%q) = \"\" (case differs only)", strings.ToUpper(wd))
+	}
+}
+
+func TestNativeExecsIsFast(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	start := time.Now()
+	execs, ok := nativeExecs()
+	if !ok {
+		t.Skip("proc_info unavailable")
+	}
+	t.Logf("%d mapped files in %v", len(execs), time.Since(start))
 }

@@ -1,9 +1,13 @@
 package aitools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 )
@@ -98,10 +103,18 @@ func (s *scanner) cursorWorkspaceStorage() {
 	}
 	installed, knowAll := s.cursorInstalledExtensions()
 
+	// Orphans are split: untouched for orphanRecommendAge and without chat
+	// data (moderate, preselected), or recent / holding chat history / a
+	// restorable Conductor workspace (caution, never preselected).
 	orphans := s.newItem("cursor-workspace-storage-orphans", core.CatIDE, "", core.RiskModerate)
 	orphans.ID = itemID(orphans.Kind, root)
 	orphans.ProcessGuard = procCursor
 	orphans.Recommended = true
+	review := s.newItem("cursor-workspace-storage-orphans", core.CatIDE, "", core.RiskCaution)
+	review.ID = itemID(review.Kind, root+"#review")
+	review.ProcessGuard = procCursor
+	review.NoRecommend = true
+	chats := 0
 	deadExt := map[string]*core.Item{}
 
 	for _, e := range entries {
@@ -117,8 +130,20 @@ func (s *scanner) cursorWorkspaceStorage() {
 		}
 		ex := pathExistence(target)
 		if ex == existNo {
-			orphans.Paths = append(orphans.Paths, e.path)
-			orphans.LastUsed = maxTime(orphans.LastUsed, newestShallow(e.path))
+			last, ok := newestDeep(s.ctx, e.path)
+			if !ok {
+				last = s.now
+			}
+			chat := workspaceHasChat(e.path)
+			it := review
+			if !chat && ok && !s.restorable(target) && s.now.Sub(last) >= orphanRecommendAge {
+				it = orphans
+			}
+			if chat {
+				chats++
+			}
+			it.Paths = append(it.Paths, e.path)
+			it.LastUsed = maxTime(it.LastUsed, last)
 			continue
 		}
 		if !knowAll {
@@ -144,18 +169,18 @@ func (s *scanner) cursorWorkspaceStorage() {
 	if n := len(orphans.Paths); n > 0 {
 		orphans.Location = root + "/…"
 		orphans.Name = "Cursor workspace state of deleted folders (" + strconv.Itoa(n) + ")"
-		orphans.Note = "Per-workspace UI state, indexes and legacy chat data of folders/worktrees that no longer exist; recreated empty if the folder is opened again."
+		orphans.Note = "Per-workspace UI state and indexes of folders/worktrees that no longer exist, untouched for 30+ days and without chat data; recreated empty if the folder is opened again."
 		orphans.Meta = map[string]string{"workspaces": strconv.Itoa(n)}
-		dirs := append([]string(nil), orphans.Paths...)
-		orphans.Recheck = func(context.Context) error {
-			for _, d := range dirs {
-				if t, ok := workspaceTarget(filepath.Join(d, "workspace.json")); ok && pathExistence(t) != existNo {
-					return fmt.Errorf("folder %s exists again: rescan", t)
-				}
-			}
-			return nil
-		}
+		orphans.Recheck = workspaceOrphanRecheck(orphans.Paths)
 		s.publish(orphans, pubOpts{placeholder: true, newest: true})
+	}
+	if n := len(review.Paths); n > 0 {
+		review.Location = root + "/…"
+		review.Name = "Cursor workspace state of missing folders, to review (" + strconv.Itoa(n) + ")"
+		review.Note = "Per-workspace state of folders that were not found: recently deleted, a restorable Conductor workspace, or holding chat data (composer lists, legacy AI chats, prompts) that is lost with it. A moved or renamed folder is not recognized. Never preselected."
+		review.Meta = map[string]string{"workspaces": strconv.Itoa(n), "with_chat_data": strconv.Itoa(chats)}
+		review.Recheck = workspaceOrphanRecheck(review.Paths)
+		s.publish(review, pubOpts{placeholder: true, newest: true})
 	}
 	for _, k := range sortedKeys(deadExt) {
 		it := deadExt[k]
@@ -164,6 +189,81 @@ func (s *scanner) cursorWorkspaceStorage() {
 		it.Name = "Cursor workspace data of uninstalled extension " + ext + " (" + plural(len(it.Paths), "workspace", "workspaces") + ")"
 		it.Note = "Workspace data (language-server indexes…) of an extension that is no longer installed in Cursor; dead data, rebuilt if the extension is reinstalled."
 		s.publish(it, pubOpts{placeholder: true, newest: true})
+	}
+}
+
+// workspaceOrphanRecheck re-validates workspaceStorage orphans right before
+// cleaning: every recorded folder must still be missing.
+func workspaceOrphanRecheck(dirs []string) func(context.Context) error {
+	dirs = append([]string(nil), dirs...)
+	return func(context.Context) error {
+		for _, d := range dirs {
+			if t, ok := workspaceTarget(filepath.Join(d, "workspace.json")); ok && pathExistence(t) != existNo {
+				return fmt.Errorf("folder %s exists again (or cannot be checked): rescan", t)
+			}
+		}
+		return nil
+	}
+}
+
+// cursorChatKeys are state.vscdb keys holding AI chat data (legacy AI chat
+// panel, composer lists, prompt / generation history).
+var cursorChatKeys = []string{
+	"workbench.panel.aichat",
+	"composer.composerData",
+	"aiService.prompts",
+	"aiService.generations",
+}
+
+// workspaceHasChat reports whether a workspaceStorage entry holds AI chat
+// data: one of cursorChatKeys in its state DB (a byte search: SQLite stores
+// short text keys inline), or chat session files. Unreadable means yes.
+func workspaceHasChat(dir string) bool {
+	for _, sub := range []string{"chatSessions", "chatEditingSessions"} {
+		if len(list(filepath.Join(dir, sub), true)) > 0 {
+			return true
+		}
+	}
+	for _, db := range []string{"state.vscdb", "state.vscdb-wal", "state.vscdb.backup"} {
+		if fileContainsAny(filepath.Join(dir, db), cursorChatKeys, 256<<20) {
+			return true
+		}
+	}
+	return false
+}
+
+// fileContainsAny reports whether the file at p contains one of keys. A
+// missing file is false; a file that cannot be read, or is larger than
+// maxBytes, is true (callers use it to hold data back).
+func fileContainsAny(p string, keys []string, maxBytes int64) bool {
+	f, err := os.Open(p)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || fi.Size() > maxBytes {
+		return true
+	}
+	overlap := 0
+	for _, k := range keys {
+		overlap = max(overlap, len(k)-1)
+	}
+	buf := make([]byte, 0, 1<<20+overlap)
+	chunk := make([]byte, 1<<20)
+	for {
+		n, err := f.Read(chunk)
+		buf = append(buf, chunk[:n]...)
+		for _, k := range keys {
+			if bytes.Contains(buf, []byte(k)) {
+				return true
+			}
+		}
+		if err != nil {
+			return !errors.Is(err, io.EOF)
+		}
+		if len(buf) > overlap {
+			buf = append(buf[:0], buf[len(buf)-overlap:]...)
+		}
 	}
 }
 
@@ -363,6 +463,25 @@ var cursorTranscriptDirs = []string{"agent-transcripts", "agent-tools", "termina
 
 var reDigits = regexp.MustCompile(`^\d+$`)
 
+// cursorProjectExistence tells whether the folder of ~/.cursor/projects/<name>
+// still exists. verified is true when Cursor recorded the folder itself
+// (.workspace-trusted "workspacePath"); otherwise the lossy directory name is
+// resolved. Names that are not path encodings (numeric chat ids,
+// "empty-window" for folder-less chats) are unknown.
+func cursorProjectExistence(r *resolver, dir, name string) (ex existence, target string, verified bool) {
+	if reDigits.MatchString(name) || name == "empty-window" {
+		return existUnknown, "", false
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, ".workspace-trusted")); err == nil {
+		if p := findJSONString(data, "workspacePath"); filepath.IsAbs(p) {
+			p = filepath.Clean(p)
+			return pathExistence(p), p, true
+		}
+	}
+	_, ex = r.resolve(name)
+	return ex, "", false
+}
+
 // cursorProjects handles ~/.cursor/projects/<encoded-folder>: whole dirs of
 // folders that no longer exist, else MCP descriptor caches (regenerated) and
 // agent transcripts older than transcriptAge.
@@ -375,9 +494,18 @@ func (s *scanner) cursorProjects() {
 	if len(entries) == 0 {
 		return
 	}
+	// Orphans are split: the folder recorded by Cursor itself is gone and
+	// nothing was written for orphanRecommendAge (moderate, preselected), or
+	// anything less certain (caution, never preselected): agent transcripts
+	// are not regenerated.
 	orphans := s.newItem("cursor-agent-orphan-projects", core.CatAI, "", core.RiskModerate)
 	orphans.ID = itemID(orphans.Kind, root)
+	orphans.ProcessGuard = procCursor
 	orphans.Recommended = true
+	review := s.newItem("cursor-agent-orphan-projects", core.CatAI, "", core.RiskCaution)
+	review.ID = itemID(review.Kind, root+"#review")
+	review.ProcessGuard = procCursor
+	review.NoRecommend = true
 	mcps := s.newItem("cursor-agent-mcp-caches", core.CatAI, "", core.RiskSafe)
 	mcps.ID = itemID(mcps.Kind, root)
 	old := s.newItem("cursor-agent-old-transcripts", core.CatAI, "", core.RiskCaution)
@@ -391,21 +519,21 @@ func (s *scanner) cursorProjects() {
 		if !e.dir {
 			continue
 		}
-		ex := existUnknown
-		if !reDigits.MatchString(e.name) { // numeric names are folder-less chats
-			if data, err := os.ReadFile(filepath.Join(e.path, ".workspace-trusted")); err == nil {
-				if p := findJSONString(data, "workspacePath"); filepath.IsAbs(p) {
-					ex = pathExistence(p)
+		ex, target, verified := cursorProjectExistence(s.cursorRes, e.path, e.name)
+		if ex == existNo {
+			// deep: an ongoing chat writes inside agent-transcripts/<id>/
+			t, ok := newestDeep(s.ctx, e.path)
+			if ok && s.now.Sub(t) > liveGrace {
+				restorable := s.restorable(target) ||
+					strings.Contains(strings.ToLower(e.name), "-conductor-workspaces-")
+				it := review
+				if verified && !restorable && s.now.Sub(t) >= orphanRecommendAge {
+					it = orphans
 				}
+				it.Paths = append(it.Paths, e.path)
+				it.LastUsed = maxTime(it.LastUsed, t)
+				continue
 			}
-			if ex == existUnknown {
-				_, ex = s.cursorRes.resolve(e.name)
-			}
-		}
-		if t := newestShallow(e.path); ex == existNo && s.now.Sub(t) > liveGrace {
-			orphans.Paths = append(orphans.Paths, e.path)
-			orphans.LastUsed = maxTime(orphans.LastUsed, t)
-			continue
 		}
 		if p := filepath.Join(e.path, "mcps"); isDir(p) {
 			mcps.Paths = append(mcps.Paths, p)
@@ -432,8 +560,16 @@ func (s *scanner) cursorProjects() {
 	if n := len(orphans.Paths); n > 0 {
 		orphans.Location = root + "/…"
 		orphans.Name = "Cursor agent data of deleted folders (" + strconv.Itoa(n) + ")"
-		orphans.Note = "Agent transcripts, terminals, canvases and MCP caches of folders/worktrees that no longer exist (folder decoded from the directory name)."
+		orphans.Note = "Agent transcripts, terminals, canvases and MCP caches of folders/worktrees that no longer exist (folder recorded by Cursor), untouched for 30+ days; not regenerated."
+		orphans.Recheck = s.cursorOrphanRecheck(orphans.Paths)
 		s.publish(orphans, pubOpts{placeholder: true, newest: true})
+	}
+	if n := len(review.Paths); n > 0 {
+		review.Location = root + "/…"
+		review.Name = "Cursor agent data of missing folders, to review (" + strconv.Itoa(n) + ")"
+		review.Note = "Agent transcripts, terminals, canvases and MCP caches of folders that were not found: recently deleted, a restorable Conductor workspace, or a folder decoded from the lossy directory name (a renamed folder is not recognized). Not regenerated; never preselected."
+		review.Recheck = s.cursorOrphanRecheck(review.Paths)
+		s.publish(review, pubOpts{placeholder: true, newest: true})
 	}
 	if n := len(mcps.Paths); n > 0 {
 		mcps.Location = root + "/*/mcps"
@@ -446,5 +582,26 @@ func (s *scanner) cursorProjects() {
 		old.Name = "Cursor agent transcripts > 30d (" + plural(oldProjects, "project", "projects") + ")"
 		old.Note = "Agent transcripts, tool outputs, terminals and canvases untouched for 30+ days; not regenerated."
 		s.publish(old, pubOpts{placeholder: true})
+	}
+}
+
+// cursorOrphanRecheck re-validates Cursor agent project orphans right before
+// cleaning: each folder must still be missing (fresh resolution, no cache)
+// and nothing may have been written below the directory meanwhile.
+func (s *scanner) cursorOrphanRecheck(dirs []string) func(context.Context) error {
+	dirs = append([]string(nil), dirs...)
+	root := s.cursorRes.root
+	return func(ctx context.Context) error {
+		r := newResolver(cursorEncode)
+		r.root = root
+		for _, d := range dirs {
+			if ex, _, _ := cursorProjectExistence(r, d, filepath.Base(d)); ex != existNo {
+				return fmt.Errorf("the folder of %s may exist again: rescan", filepath.Base(d))
+			}
+			if t, ok := newestDeep(ctx, d); !ok || time.Since(t) < liveGrace {
+				return fmt.Errorf("Cursor wrote in %s recently", d)
+			}
+		}
+		return nil
 	}
 }

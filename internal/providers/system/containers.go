@@ -3,10 +3,13 @@ package system
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -88,21 +91,62 @@ func parseHumanSize(s string, binary bool) int64 {
 // docker proposes the Docker engine's own cleanup commands when the current
 // context answers: build cache (safe), unused images (moderate), stopped
 // containers (caution); unused volumes are only reported (databases!).
+//
+// The commands are pinned to the context that was measured (`docker
+// --context <name> …`) and re-validated right before cleaning: a `docker
+// context use prod` run in another terminal between the scan and the clean
+// must not redirect a prune to another engine.
 func (s *scan) docker() {
 	if !s.has("docker") {
 		return
 	}
-	if _, err := s.run(5*time.Second, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
+	// The context is read first so that every later call (and the cleanup
+	// commands) targets the same engine.
+	ctxName := ""
+	if b, err := s.run(10*time.Second, "docker", "context", "show"); err == nil {
+		ctxName = strings.TrimSpace(string(b))
+	}
+	pinned := false
+	switch {
+	case s.p.getenv("DOCKER_HOST") != "":
+		// DOCKER_HOST overrides contexts for this process and for the commands
+		// it runs later (same environment): nothing can drift.
+	case ctxName == "":
+		// The current context is unknown (`docker context show` failed or
+		// timed out): bare commands would follow whatever context is current
+		// at clean time, so none are offered.
+		s.logf("docker: cannot tell the current docker context, cleanup commands not offered")
+		return
+	case !reDockerContext.MatchString(ctxName):
+		s.logf("docker: unexpected context name %q, cleanup commands not offered", ctxName)
+		return
+	default:
+		pinned = true
+	}
+	dockerCmd := func(args ...string) []string {
+		if pinned {
+			return append([]string{"docker", "--context", ctxName}, args...)
+		}
+		return append([]string{"docker"}, args...)
+	}
+	run := func(timeout time.Duration, argv []string) ([]byte, error) {
+		return s.run(timeout, argv[0], argv[1:]...)
+	}
+	if _, err := run(5*time.Second, dockerCmd("version", "--format", "{{.Server.Version}}")); err != nil {
 		return // daemon not running / VM stopped: disks are reported by vms()
 	}
-	out, err := s.run(30*time.Second, "docker", "system", "df", "--format", "json")
+	out, err := run(30*time.Second, dockerCmd("system", "df", "--format", "json"))
 	if err != nil {
 		return
 	}
 	df := parseDockerDF(out)
-	ctxName := ""
-	if b, err := s.run(3*time.Second, "docker", "context", "show"); err == nil {
-		ctxName = strings.TrimSpace(string(b))
+	endpoint := ""
+	var recheck func(context.Context) error
+	if pinned {
+		if b, err := s.run(5*time.Second, "docker", "context", "inspect", ctxName, "--format", dockerEndpointFormat); err == nil {
+			endpoint = strings.TrimSpace(string(b))
+		}
+		recheck = dockerRecheck(s.env.Runner, ctxName, endpoint)
 	}
 	var post [][]string
 	shrink := "Docker Desktop trims its disk image by itself afterwards."
@@ -117,6 +161,13 @@ func (s *scan) docker() {
 	where := "docker context " + ctxName
 	if ctxName == "" {
 		where = "docker engine"
+	}
+	meta := func(d dockerDF) map[string]string {
+		m := map[string]string{"context": ctxName, "total": d.Size, "count": toString(d.TotalCount), "active": toString(d.Active)}
+		if endpoint != "" {
+			m["endpoint"] = endpoint
+		}
+		return m
 	}
 	add := func(kind, typ, name string, risk core.Risk, cmd []string, note string) {
 		d, ok := df[typ]
@@ -133,19 +184,20 @@ func (s *scan) docker() {
 		it.Method = core.MethodCommand
 		it.Command = cmd
 		it.PostCommands = post
+		it.Recheck = recheck
 		it.Size = size
-		it.Meta = map[string]string{"context": ctxName, "total": d.Size, "count": toString(d.TotalCount), "active": toString(d.Active)}
+		it.Meta = meta(d)
 		it.Note = note + " " + shrink
 		s.emitNow(it)
 	}
 	add("docker-build-cache", "Build Cache", "Docker build cache (unused)", core.RiskSafe,
-		[]string{"docker", "builder", "prune", "-a", "-f"},
+		dockerCmd("builder", "prune", "-a", "-f"),
 		"BuildKit cache not used by a running build; rebuilt by the next `docker build` (slower first build).")
 	add("docker-unused-images", "Images", "Docker images not used by any container", core.RiskModerate,
-		[]string{"docker", "image", "prune", "-a", "-f"},
+		dockerCmd("image", "prune", "-a", "-f"),
 		"Images that no container uses; pulled or rebuilt again when needed (bandwidth, time).")
 	add("docker-stopped-containers", "Containers", "Docker stopped containers", core.RiskCaution,
-		[]string{"docker", "container", "prune", "-f"},
+		dockerCmd("container", "prune", "-f"),
 		"Stopped containers and their writable layer (files written inside them are lost; volumes are kept).")
 	if d, ok := df["Local Volumes"]; ok {
 		if size := parseHumanSize(d.Reclaimable, false); size > 0 {
@@ -155,10 +207,43 @@ func (s *scan) docker() {
 			it.Method = core.MethodReport
 			it.Selectable = false
 			it.Size = size
-			it.Meta = map[string]string{"context": ctxName, "total": d.Size, "count": toString(d.TotalCount)}
+			it.Meta = meta(d)
+			delete(it.Meta, "active")
 			it.Note = "Volumes hold databases and other persistent data: review them with `docker volume ls` and remove the ones you do not need (`docker volume rm`); never pruned automatically."
 			s.emitNow(it)
 		}
+	}
+}
+
+// reDockerContext is the docker CLI's own rule for context names; anything
+// else is not passed on a command line.
+var reDockerContext = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.+-]*$`)
+
+// dockerEndpointFormat prints the engine endpoint of a docker context.
+const dockerEndpointFormat = "{{.Endpoints.docker.Host}}"
+
+// dockerRecheck returns the Recheck of the docker cleanup commands: the
+// context must still exist, still point at the endpoint seen during the scan
+// (when it could be read), and its engine must answer.
+func dockerRecheck(r core.Runner, ctxName, endpoint string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if endpoint != "" {
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			out, err := r.Output(cctx, "", "docker", "context", "inspect", ctxName, "--format", dockerEndpointFormat)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("docker context %q cannot be read anymore (%v) — rescan", ctxName, err)
+			}
+			if got := strings.TrimSpace(string(out)); got != endpoint {
+				return fmt.Errorf("docker context %q now points to %q instead of %q — rescan", ctxName, got, endpoint)
+			}
+		}
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if _, err := r.Output(cctx, "", "docker", "--context", ctxName, "version", "--format", "{{.Server.Version}}"); err != nil {
+			return fmt.Errorf("the docker engine of context %q does not answer (%v)", ctxName, err)
+		}
+		return nil
 	}
 }
 

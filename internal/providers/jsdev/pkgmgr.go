@@ -2,6 +2,9 @@ package jsdev
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -137,30 +140,120 @@ func (s *scanner) pnpm() {
 		isCurrent := current != "" && real == curReal
 		it := s.base("pnpm-store", st, "pnpm store "+filepath.Base(st), core.RiskModerate)
 		it.Path = st
-		it.LastUsed = newestMtime(st, filepath.Join(st, "index"), filepath.Join(st, "index.db"), filepath.Join(st, "files"))
+		// links/ and projects/ too: global-virtual-store installs may only
+		// touch them.
+		it.LastUsed = newestMtime(st, filepath.Join(st, "index"), filepath.Join(st, "index.db"), filepath.Join(st, "files"),
+			filepath.Join(st, "links"), filepath.Join(st, "projects"))
 		it.Note = "pnpm content-addressable store; the next `pnpm install` re-downloads what it needs. Installed node_modules keep working (APFS clones or hardlinks)."
+		gvs := pnpmGlobalVirtualStore(st)
+		if gvs.used {
+			// Project node_modules are symlinks into <store>/links: deleting
+			// the store leaves them dangling.
+			it.Risk = core.RiskCaution
+			it.NoRecommend = true
+			users := "its projects"
+			if len(gvs.projects) > 0 {
+				users = itoa(len(gvs.projects)) + " project(s)"
+				it.Meta["gvs_projects"] = joinLimit(prettyAll(s.env, gvs.projects), 3)
+			}
+			it.Warn = "global virtual store used by " + users + ": their node_modules break until `pnpm install`"
+			it.Note = "pnpm store with a global virtual store (links/): project node_modules are symlinks into it, so deleting it breaks them until `pnpm install`. Prefer `pnpm store prune`, which keeps what registered projects use."
+		}
 		if isCurrent {
 			it.Meta["current"] = "true (pnpm store path)"
 		}
 		if done := s.sized(it, []string{st}, false); done != nil && isCurrent {
-			s.pnpmPrune(done)
+			s.pnpmPrune(done, gvs)
 		}
 	}
 }
 
-// pnpmPrune emits the `pnpm store prune` command item for the active store
-// (measured store: the size is an upper bound of what prune frees).
-func (s *scanner) pnpmPrune(store *core.Item) {
+// pnpmGVS describes a pnpm global virtual store (pnpm ≥ 10.12
+// enableGlobalVirtualStore): <store>/links holds the packages that project
+// node_modules symlink to, <store>/projects registers those projects.
+type pnpmGVS struct {
+	used     bool     // links/ not empty, or live registered projects
+	projects []string // registered projects that exist or cannot be checked
+	// unreachable are registered projects that cannot be checked (unmounted
+	// volume, EACCES, TCC): `pnpm store prune` may drop what they use.
+	unreachable []string
+}
+
+// pnpmGlobalVirtualStore inspects st/links and st/projects. Anything it
+// cannot read counts as used (fail closed).
+func pnpmGlobalVirtualStore(st string) pnpmGVS {
+	var g pnpmGVS
+	ents, err := os.ReadDir(filepath.Join(st, "links"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		g.used = true
+	}
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), ".") {
+			g.used = true
+			break
+		}
+	}
+	projDir := filepath.Join(st, "projects")
+	ents, err = os.ReadDir(projDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		g.used = true
+	}
+	for _, e := range ents {
+		p := filepath.Join(projDir, e.Name())
+		if e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		target := p
+		if t, err := os.Readlink(p); err == nil {
+			if !filepath.IsAbs(t) {
+				t = filepath.Join(projDir, t)
+			}
+			target = filepath.Clean(t)
+		}
+		if _, err := os.Stat(p); err != nil {
+			// Only a surely missing project (ENOENT under a readable parent)
+			// is gone; EACCES, TCC or an unmounted volume keep it registered.
+			if pathMissing(target) {
+				continue
+			}
+			g.unreachable = append(g.unreachable, target)
+		}
+		g.projects = append(g.projects, target)
+		g.used = true
+	}
+	return g
+}
+
+// pnpmPrune emits the `pnpm store prune` command item for the active store.
+// What prune frees is unknown (only unreferenced packages), so the item has
+// no size: the whole store would be a wild upper bound and would inflate the
+// totals.
+//
+// Covers is the content folder INSIDE the store, never the store itself:
+// core.TopLevel then always drops prune when the store deletion is selected
+// too, whatever the selection order. With Covers equal to the store path,
+// the first of the two in the list would win on the identical target, and a
+// selected store deletion could silently be replaced by prune (the TUI would
+// also count the store as wiped by prune).
+func (s *scanner) pnpmPrune(store *core.Item, gvs pnpmGVS) {
 	it := s.base("pnpm-store-prune", store.Path, "pnpm store prune", core.RiskSafe)
 	it.Method = core.MethodCommand
 	it.Command = []string{"pnpm", "store", "prune"}
 	it.Location = store.Path
+	it.Covers = filepath.Join(store.Path, "files")
+	it.AlwaysShow = true
 	it.Recommended = true
 	it.LastUsed = store.LastUsed
-	it.Size, it.Reclaim, it.Files = store.Size, store.Reclaim, store.Files
-	it.Note = "Removes only the packages no project references any more; the size shown is the whole store (upper bound)."
+	it.Note = "Removes only the packages no project references any more (the gain is unknown before running it; at most the whole store)."
 	it.Meta["store"] = store.Path
-	it.Meta["size"] = "upper bound: prune frees only unreferenced packages"
+	it.Meta["size"] = "unknown: prune frees only unreferenced packages (whole store: " + fsx.Bytes(store.Freed()) + ")"
+	if n := len(gvs.unreachable); n > 0 {
+		// pnpm treats a registered project it cannot reach as removed.
+		it.Recommended = false
+		it.NoRecommend = true
+		it.Warn = itoa(n) + " registered project(s) unreachable (unmounted volume?): prune may drop the packages they use"
+		it.Meta["unreachable_projects"] = joinLimit(prettyAll(s.env, gvs.unreachable), 3)
+	}
 	if store.Method == core.MethodReport {
 		it.Method, it.Command, it.Selectable, it.Recommended, it.Warn = core.MethodReport, nil, false, false, store.Warn
 	}
@@ -198,16 +291,25 @@ func (s *scanner) yarnBerry() {
 		}
 		// Global zip cache.
 		if p := filepath.Join(gf, "cache"); isDirOrLink(p) && s.allowed(p) {
-			risk := core.RiskSafe
-			note := "Yarn Berry global zip cache; the next `yarn install` re-downloads what it needs (projects using node_modules keep working)."
-			it := s.base("yarn-berry-cache", p, "Yarn Berry global cache", risk)
-			if len(pnp) > 0 {
-				it.Risk = core.RiskModerate
-				note = "Yarn Berry global zip cache. Plug'n'Play projects read these zips at runtime: they need `yarn install` again after cleaning."
+			it := s.base("yarn-berry-cache", p, "Yarn Berry global cache", core.RiskSafe)
+			it.Note = "Yarn Berry global zip cache; the next `yarn install` re-downloads what it needs (projects using node_modules keep working)."
+			switch {
+			case len(pnp) > 0:
+				// With the default enableGlobalCache, PnP projects run straight
+				// from these zips: for them it is the install, not a cache.
+				it.Risk = core.RiskCaution
+				it.NoRecommend = true
+				it.Warn = "used at runtime by " + itoa(len(pnp)) + " Plug'n'Play project(s): they break until `yarn install` (needs network)"
+				it.Note = "Yarn Berry global zip cache. Plug'n'Play projects read these zips at runtime: they need `yarn install` again after cleaning."
 				it.Meta["pnp_projects"] = joinLimit(prettyAll(s.env, pnp), 3)
+			case s.projects.pnpIncomplete != "":
+				// "No PnP project found" means nothing when the search was
+				// partial: never rate the cache a pure cache then.
+				it.Risk = core.RiskModerate
+				it.Note += " Plug'n'Play projects (which read these zips at runtime) may exist where the search did not look."
+				it.Meta["pnp_search"] = "incomplete: " + s.projects.pnpIncomplete
 			}
 			it.Path = p
-			it.Note = note
 			it.LastUsed = newestMtime(p)
 			s.sized(it, []string{p}, true)
 		}

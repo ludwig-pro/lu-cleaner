@@ -227,7 +227,7 @@ func TestPlanCleanSkipsNestedAndUnselectable(t *testing.T) {
 	locked.Selectable = false
 
 	f := core.Filter{MaxRisk: core.RiskModerate}
-	plan := planClean([]*core.Item{inner, outer, report, sizing, locked}, f, false, testNow, 14*day)
+	plan, _ := planClean([]*core.Item{inner, outer, report, sizing, locked}, f, false, false, testNow, 14*day)
 	if len(plan) != 1 || plan[0] != outer {
 		t.Fatalf("plan = %v", plan)
 	}
@@ -310,7 +310,9 @@ func TestArtifactsCommand(t *testing.T) {
 	if !reflect.DeepEqual(opt.Filter.Categories, []core.Category{core.CatArtifacts}) {
 		t.Fatalf("categories %v", opt.Filter.Categories)
 	}
-	if !reflect.DeepEqual(opt.Filter.Kinds, []string{"node_modules", "pods", "android-build"}) {
+	// Aliases are added: pods is the ios-pods kind, android-build is
+	// gradle-build outside an Android project.
+	if !reflect.DeepEqual(opt.Filter.Kinds, []string{"node_modules", "pods", "android-build", "ios-pods", "gradle-build"}) {
 		t.Fatalf("kinds %v", opt.Filter.Kinds)
 	}
 	if !reflect.DeepEqual(opt.Env.Roots, []string{root}) {
@@ -966,7 +968,7 @@ func TestBuildFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(f.Categories, []core.Category{core.CatWorktrees, core.CatSimulators, core.CatAI}) ||
-		!reflect.DeepEqual(f.Kinds, []string{"node_modules", "pods", "android-build"}) ||
+		!reflect.DeepEqual(f.Kinds, []string{"node_modules", "pods", "android-build", "ios-pods", "gradle-build"}) ||
 		f.MinSize != 2e9 || f.OlderThan != 21*day || f.MaxRisk != core.RiskSafe {
 		t.Fatalf("flags %+v", f)
 	}
@@ -1063,7 +1065,11 @@ func TestScanShowsReportOnlyItems(t *testing.T) {
 	if strings.Contains(h.out.String(), "Downloads") {
 		t.Fatalf("--risk caution hides report-only items:\n%s", h.out.String())
 	}
-	if code := h.run("clean", "-y", "-c", "system", "--risk", "never"); code != 0 || len(h.cleaned) != 0 {
+	// "never" is not a maximum risk (core.ParseRisk refuses it): usage error.
+	if code := h.run("clean", "-y", "-c", "system", "--risk", "never"); code != ExitUsage || len(h.cleaned) != 0 {
+		t.Fatalf("--risk never: exit %d, %d calls", code, len(h.cleaned))
+	}
+	if code := h.run("clean", "-y", "-c", "system", "--risk", "caution"); code != 0 || len(h.cleaned) != 0 {
 		t.Fatalf("report-only items are never cleaned: exit %d, %d calls", code, len(h.cleaned))
 	}
 }

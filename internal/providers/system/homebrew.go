@@ -19,9 +19,10 @@ import (
 // half (mole #1594 lesson).
 var brewCacheKeep = map[string]bool{"api": true, "bootsnap": true, ".lock": true, "Locks": true}
 
-// brewCleanupTimeout bounds `brew cleanup -n` (it takes seconds; much longer
-// on a slow disk). Variable for tests.
-var brewCleanupTimeout = 20 * time.Second
+// brewCleanupTimeout bounds `brew cleanup -n`: a few seconds with a warm
+// disk cache, but more than a minute on a cold or slow disk (74 s measured).
+// The other items of the scan are streamed meanwhile. Variable for tests.
+var brewCleanupTimeout = 2 * time.Minute
 
 // brewCleanup is the parsed output of `brew cleanup -n`.
 type brewCleanup struct {
@@ -96,9 +97,15 @@ func (s *scan) homebrew() {
 		pl := s.locate(cacheDir)
 		var paths []string
 		for _, e := range list(cacheDir, false) {
-			if !brewCacheKeep[e.name] {
-				paths = append(paths, e.path)
+			if brewCacheKeep[e.name] {
+				continue
 			}
+			if e.dir && holdsGitRepo(e.path) {
+				// "<name>--git" checkouts of HEAD formulae: the safety guard
+				// refuses git repositories, which would skip the whole item.
+				continue
+			}
+			paths = append(paths, e.path)
 		}
 		if len(paths) > 0 {
 			it := s.newItem("homebrew-cache", core.CatLangs, "Homebrew download cache", core.RiskSafe)
@@ -139,7 +146,9 @@ func (s *scan) homebrew() {
 		s.emitNow(it)
 	}
 
-	// 3. old kegs that brew cleanup skips (outdated formulae)
+	// 3. old kegs that brew cleanup skips (outdated formulae). When its dry run
+	// did not complete, we cannot tell which kegs `brew cleanup` would remove:
+	// they are still reported, without claiming that they stay forever.
 	s.homebrewOldKegs(prefix, cl)
 }
 
@@ -206,8 +215,14 @@ func (s *scan) homebrewOldKegs(prefix string, cl brewCleanup) {
 	}
 	it.ID = itemID(it.Kind, filepath.Dir(filepath.Dir(kegs[0].path)))
 	it.Location = filepath.Dir(filepath.Dir(kegs[0].path)) + "/…"
-	it.Name = "Homebrew old versions kept by outdated formulae (" + strconv.Itoa(len(kegs)) + " kegs)"
 	it.Meta = map[string]string{"formulae": strings.Join(shown, ", ")}
-	it.Note = "`brew cleanup` skips a formula until its newest version is installed, so these old versions stay forever: run `brew upgrade` then `brew cleanup` (or uninstall the formula) to remove them."
+	if cl.ok {
+		it.Name = "Homebrew old versions kept by outdated formulae (" + strconv.Itoa(len(kegs)) + " kegs)"
+		it.Note = "`brew cleanup` skips a formula until its newest version is installed, so these old versions stay forever: run `brew upgrade` then `brew cleanup` (or uninstall the formula) to remove them."
+	} else {
+		it.Name = "Homebrew old versions not linked (" + strconv.Itoa(len(kegs)) + " kegs)"
+		it.Meta["brew_cleanup"] = "unknown (brew cleanup -n did not complete)"
+		it.Note = "Installed versions that are not the linked one. `brew cleanup -n` did not complete, so it is unknown which of them `brew cleanup` removes (the \"Homebrew old versions (brew cleanup)\" item) and which stay until `brew upgrade` (outdated formulae)."
+	}
 	s.report(it, pubOpts{newest: true, placeholder: true})
 }

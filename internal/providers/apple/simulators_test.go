@@ -211,14 +211,16 @@ func TestSimulatorDevices(t *testing.T) {
 		t.Errorf("G: last boot from device.plist: %+v", g)
 	}
 
+	// E: unavailable, its runtime is gone (neither listed nor on disk), no app.
 	u := r.one(t, "ios-simulators-unavailable")
-	if u.Name != "Unavailable simulators (1)" || u.Risk != core.RiskSafe || !u.Recommended ||
-		!reflect.DeepEqual(u.Command, []string{"xcrun", "simctl", "delete", "unavailable"}) ||
-		!strings.Contains(u.Meta["devices"], "iPhone 14 (iOS 16.4)") || u.Size == 0 {
-		t.Errorf("unavailable group: %+v", u)
+	if u.ID != "apple:ios-simulators-unavailable:"+udidE || u.Name != "iPhone 14 · iOS 16.4 (unavailable)" ||
+		u.Risk != core.RiskSafe || !u.Recommended || !core.Recommend(u, now, 14*day) ||
+		!reflect.DeepEqual(u.Command, []string{"xcrun", "simctl", "delete", udidE}) ||
+		u.Covers != f.dev(udidE) || u.Recheck == nil || u.Size == 0 || u.Meta["udid"] != udidE {
+		t.Errorf("unavailable device: %+v", u)
 	}
 	if _, ok := r.final["apple:ios-simulator:"+udidE]; ok {
-		t.Error("unavailable devices must not also get their own item")
+		t.Error("unavailable devices must not also get an available-device item")
 	}
 }
 
@@ -384,7 +386,7 @@ func TestSimulatorIDsStable(t *testing.T) {
 	if !reflect.DeepEqual(a, b) {
 		t.Errorf("ids changed between scans:\n%v\n%v", a, b)
 	}
-	for _, want := range []string{"apple:ios-simulator:" + udidA, "apple:ios-simulators-unavailable:unavailable", "apple:ios-simulator-logs:unified-logs"} {
+	for _, want := range []string{"apple:ios-simulator:" + udidA, "apple:ios-simulators-unavailable:" + udidE, "apple:ios-simulator-logs:unified-logs"} {
 		if !contains(a, want) {
 			t.Errorf("missing stable id %s", want)
 		}

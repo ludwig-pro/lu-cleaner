@@ -201,7 +201,7 @@ func (s *scan) systemImages(root string, avds *avdSet) {
 func (s *scan) ndks(root string, pi *projectInfo) {
 	dir := filepath.Join(root, "ndk")
 	vers := dirNames(dir)
-	keep := newest(vers, keepLatest)
+	keep := newest(vers, s.keepLatest())
 	for _, v := range vers {
 		it := s.base("android-ndk", "NDK "+v, core.RiskModerate)
 		it.Path = filepath.Join(dir, v)
@@ -235,6 +235,9 @@ func (s *scan) keepOrRecommend(it *core.Item, pi *projectInfo, users map[string]
 		it.Note += " Used by " + plural(len(list), "project", "projects") + "."
 	case newestKept:
 		it.Meta["kept"] = "newest installed version"
+		if n := s.keepLatest(); n > 1 {
+			it.Meta["kept"] = "one of the " + strconv.Itoa(n) + " newest installed versions (keep_latest)"
+		}
 	case pi.known():
 		it.Recommended = true
 	default:
@@ -258,7 +261,7 @@ func (s *scan) versioned(root string, pi *projectInfo, kind string) {
 			clean = append(clean, n)
 		}
 	}
-	keep := newest(clean, keepLatest)
+	keep := newest(clean, s.keepLatest())
 	for _, n := range names {
 		p := filepath.Join(dir, n)
 		ver := strings.TrimPrefix(n, "android-")

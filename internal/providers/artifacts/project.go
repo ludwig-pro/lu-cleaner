@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"golang.org/x/sys/unix"
 )
 
 // projectMarkers identify the root of a (non-git) project.
@@ -74,10 +77,20 @@ func (s *scan) nearestProject(dir, stop string) string {
 
 // projInfo is cached per directory.
 type projInfo struct {
-	activity time.Time
+	activity time.Time // newest top-level file
 	pkg      *packageJSON
 	names    map[string]bool
+
+	srcOnce sync.Once
+	src     time.Time // newest source file of a bounded walk (sourceActivity)
 }
+
+const (
+	// Bounds of the source walk that finds deep edits (src/components/x.tsx)
+	// when git cannot tell: entries examined per folder tree, and depth.
+	activityBudget = 4000
+	activityDepth  = 6
+)
 
 type packageJSON struct {
 	Name             string            `json:"name"`
@@ -119,7 +132,11 @@ func (s *scan) info(d string) *projInfo {
 		for _, e := range ents {
 			n := e.Name()
 			pi.names[n] = true
-			if s.rs.names[n] || n == ".git" || n == ".DS_Store" || strings.HasPrefix(n, "._") || n == "Icon\r" {
+			// Files only: a folder's mtime moves whenever an entry inside it
+			// is added or removed — deleting android/.gradle bumps android/,
+			// deleting apps/app/node_modules bumps apps/app — and would make
+			// the project look active right after a partial clean.
+			if e.IsDir() || skipActivity(n) {
 				continue
 			}
 			if fi, err := e.Info(); err == nil && fi.ModTime().After(pi.activity) {
@@ -144,9 +161,15 @@ func (s *scan) info(d string) *projInfo {
 	return pi
 }
 
+// skipActivity: entries whose mtime says nothing about the project's use.
+func skipActivity(name string) bool {
+	return name == ".git" || name == ".DS_Store" || strings.HasPrefix(name, "._") || name == "Icon\r"
+}
+
 // activity is the last activity of the project (NOT of the artifact): the
-// newest mtime among the non-artifact top-level entries of the project and
-// package folders (sources, lockfiles, configs) and the git index / HEAD.
+// newest mtime among the top-level files of the project and package folders
+// (lockfiles, configs) and the git index / HEAD. finish() refines it with
+// deepActivity once the git phase is over.
 func (s *scan) activity(c *cand, project, pkg string) time.Time {
 	t := s.info(project).activity
 	for d := pkg; d != project && fsx.Within(d, project); d = filepath.Dir(d) {
@@ -163,6 +186,86 @@ func (s *scan) activity(c *cand, project, pkg string) time.Time {
 		t = s.now
 	}
 	return t
+}
+
+// deepActivity is what top-level mtimes miss: uncommitted (modified or
+// untracked) files anywhere in the git work tree — editing a file leaves the
+// index alone — or, when git cannot tell (no repository, git failed), the
+// newest file of a bounded walk of the project and package sources
+// (src/components/Button.tsx edited an hour ago).
+func (s *scan) deepActivity(c *cand) time.Time {
+	var t time.Time
+	if c.git != nil && c.git.dirtyOK && fsx.Within(c.project, c.git.path) {
+		t = c.git.dirty
+	} else {
+		for _, d := range []string{c.project, c.pkg} {
+			if d == "" {
+				continue
+			}
+			pi := s.info(d)
+			pi.srcOnce.Do(func() { pi.src = s.sourceActivity(d, activityBudget) })
+			if pi.src.After(t) {
+				t = pi.src
+			}
+		}
+	}
+	if t.After(s.now) {
+		t = s.now
+	}
+	return t
+}
+
+// sourceActivity returns the newest mtime of the regular files below root,
+// breadth first, examining at most budget entries and activityDepth levels.
+// Artifacts (by name), hidden folders, other checkouts and excluded paths
+// are skipped; folder mtimes are ignored (see info).
+func (s *scan) sourceActivity(root string, budget int) time.Time {
+	type dir struct {
+		path  string
+		depth int
+	}
+	var newest int64 // ns
+	queue := []dir{{root, 0}}
+	seen := 0
+	var st unix.Stat_t
+	for len(queue) > 0 && seen < budget && s.ctx.Err() == nil {
+		d := queue[0]
+		queue = queue[1:]
+		f, err := os.Open(d.path)
+		if err != nil {
+			continue
+		}
+		ents, _ := f.ReadDir(-1)
+		if d.path != root && slices.ContainsFunc(ents, func(e os.DirEntry) bool { return e.Name() == ".git" }) {
+			f.Close()
+			continue // a nested checkout: another project
+		}
+		fd := int(f.Fd())
+		for _, e := range ents {
+			if seen++; seen > budget {
+				break
+			}
+			n := e.Name()
+			switch {
+			case skipActivity(n):
+			case e.IsDir():
+				child := filepath.Join(d.path, n)
+				if d.depth+1 < activityDepth && !strings.HasPrefix(n, ".") && !s.rs.names[n] && !pruneNames[n] && !s.env.Excluded(child) {
+					queue = append(queue, dir{child, d.depth + 1})
+				}
+			case e.Type().IsRegular():
+				// fstatat relative to the open folder: no path resolution.
+				if unix.Fstatat(fd, n, &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
+					newest = max(newest, st.Mtim.Nano())
+				}
+			}
+		}
+		f.Close()
+	}
+	if newest == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, newest)
 }
 
 // projectType guesses what kind of project pkg (then project) is.

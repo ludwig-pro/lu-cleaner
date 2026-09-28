@@ -13,6 +13,7 @@ package aitools
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -31,10 +32,15 @@ const providerID = "ai"
 
 // Age thresholds.
 const (
-	day                = 24 * time.Hour
-	claudeSessionAge   = 30 * day // Claude Code prunes at 30 days by default (cleanupPeriodDays)
-	codexSessionAge    = 30 * day
-	liveGrace          = time.Hour // anything written this recently may belong to a live session
+	day              = 24 * time.Hour
+	claudeSessionAge = 30 * day // Claude Code prunes at 30 days by default (cleanupPeriodDays)
+	codexSessionAge  = 30 * day
+	liveGrace        = time.Hour // anything written this recently may belong to a live session
+	// orphanRecommendAge: data of a folder that no longer exists is only
+	// preselected once untouched for this long. A missing folder may come
+	// back (rename, Conductor unarchive, re-created worktree) and the data
+	// (transcripts, chats) is never regenerated.
+	orphanRecommendAge = 30 * day
 	backupMinAge       = 7 * day
 	archiveContextAge  = 30 * day
 	multicaTaskMinAge  = 7 * day
@@ -69,13 +75,17 @@ type Provider struct {
 	appDirs []string
 	// resolverRoot is where encoded project names are resolved from ("/"; tests override it).
 	resolverRoot string
+	// execInside reports whether a running process executes a binary located
+	// in dir (sysx.ExecInside: proc_pidpath, i.e. symlinks resolved).
+	execInside func(dir string) bool
 }
 
 // New returns the provider.
 func New() *Provider {
 	return &Provider{
-		running: sysx.Running,
-		appDirs: []string{"/Applications", "~/Applications", "/Applications/Setapp"},
+		running:    sysx.Running,
+		appDirs:    []string{"/Applications", "~/Applications", "/Applications/Setapp"},
+		execInside: sysExecInside,
 	}
 }
 
@@ -145,6 +155,8 @@ type scanner struct {
 	now     time.Time
 	homeDev int64
 	running func(names ...string) []string
+	// execInside: see Provider.execInside (never nil).
+	execInside func(dir string) bool
 
 	procOnce sync.Once
 	procs    []string // executable paths of running processes
@@ -154,6 +166,9 @@ type scanner struct {
 
 	claudeRes *resolver
 	cursorRes *resolver
+
+	appMu sync.Mutex
+	apps  map[string]string // Spotlight lookups of <name>.app ("" = not found)
 }
 
 func newScanner(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *scanner {
@@ -164,6 +179,10 @@ func newScanner(ctx context.Context, p *Provider, env *core.Env, emit core.Emit)
 	s.running = p.running
 	if s.running == nil {
 		s.running = sysx.Running
+	}
+	s.execInside = p.execInside
+	if s.execInside == nil {
+		s.execInside = sysExecInside
 	}
 	var st unix.Stat_t
 	if unix.Stat(env.Home, &st) == nil {
@@ -192,7 +211,10 @@ func (s *scanner) usable(p string) bool {
 	return !s.env.Excluded(p) && !s.env.IsProtected(p)
 }
 
-// findApp returns the path of the first installed <name>.app, or "".
+// findApp returns the path of the first installed <name>.app, or "". The
+// usual application folders are searched first, then LaunchServices'
+// Spotlight index (apps installed anywhere else). Results are cached for the
+// scan.
 func (s *scanner) findApp(names ...string) string {
 	for _, d := range s.p.appDirs {
 		d = s.env.Expand(d)
@@ -203,11 +225,51 @@ func (s *scanner) findApp(names ...string) string {
 			}
 		}
 	}
+	for _, n := range names {
+		if p := s.spotlightApp(n); p != "" {
+			return p
+		}
+	}
 	return ""
 }
 
-// processPaths returns the executable paths of the running processes
-// (`ps -axo comm=`), fetched once per scan.
+// spotlightApp asks Spotlight for an application bundle named <name>.app
+// outside the Trash ("" when none, or when mdfind is unavailable).
+func (s *scanner) spotlightApp(name string) string {
+	s.appMu.Lock()
+	defer s.appMu.Unlock()
+	if p, ok := s.apps[name]; ok {
+		return p
+	}
+	if s.apps == nil {
+		s.apps = map[string]string{}
+	}
+	s.apps[name] = ""
+	if strings.ContainsAny(name, `'"\*`) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+	defer cancel()
+	q := "kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '" + name + ".app'"
+	out, err := s.env.Output(ctx, "", "mdfind", q)
+	if err != nil {
+		return ""
+	}
+	trash := s.home(".Trash")
+	for _, l := range strings.Split(string(out), "\n") {
+		l = filepath.Clean(strings.TrimSpace(l))
+		if !filepath.IsAbs(l) || fsx.Within(l, trash) || strings.Contains(l, "/.Trashes/") || !isDir(l) {
+			continue
+		}
+		s.apps[name] = l
+		return l
+	}
+	return ""
+}
+
+// processPaths returns the absolute executable paths of the running
+// processes (`ps -axo comm=`), plus their symlink-resolved form, fetched
+// once per scan.
 func (s *scanner) processPaths() []string {
 	s.procOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
@@ -217,8 +279,13 @@ func (s *scanner) processPaths() []string {
 			return
 		}
 		for _, l := range strings.Split(string(out), "\n") {
-			if l = strings.TrimSpace(l); l != "" {
-				s.procs = append(s.procs, l)
+			if l = strings.TrimSpace(l); !filepath.IsAbs(l) {
+				continue
+			}
+			l = filepath.Clean(l)
+			s.procs = append(s.procs, l)
+			if r, err := filepath.EvalSymlinks(l); err == nil && r != l {
+				s.procs = append(s.procs, r)
 			}
 		}
 	})
@@ -226,14 +293,26 @@ func (s *scanner) processPaths() []string {
 }
 
 // runningWithin reports whether a running process executable lives in dir.
+//
+// `ps -o comm` shows the path the binary was exec'd through: for a CLI
+// launched via ~/.local/bin/claude (a symlink to versions/<v>) that is the
+// symlink, which points to another version after an auto-update. The kernel's
+// view (proc_pidpath: the resolved executable vnode) is therefore the
+// authority; ps paths are kept as a cheap extra signal.
 func (s *scanner) runningWithin(dir string) bool {
+	if s.execInside(dir) {
+		return true
+	}
 	for _, p := range s.processPaths() {
-		if filepath.IsAbs(p) && fsx.Within(filepath.Clean(p), dir) {
+		if fsx.Within(p, dir) {
 			return true
 		}
 	}
 	return false
 }
+
+// sysExecInside is the real execInside.
+func sysExecInside(dir string) bool { return sysx.ExecInside(dir) != "" }
 
 // ---------------------------------------------------------------- volumes
 
@@ -292,17 +371,38 @@ func underMissingMount(p string) bool {
 	return missingVolume(filepath.Clean(t))
 }
 
-// missingVolume reports whether p is below /Volumes/<name> and that volume is absent.
+// missingVolume reports whether p lives on storage that is not reachable
+// right now, so that "p does not exist" proves nothing: below
+// /Volumes/<name> (or /System/Volumes/Data/Volumes/<name>) while that volume
+// is not mounted, below ~/Library/CloudStorage/<provider> while that
+// provider folder is absent (logged out, File Provider disabled), or below
+// ~/Library/Mobile Documents/<container> (iCloud Drive) while that container
+// is absent (signed out of iCloud).
 func missingVolume(p string) bool {
-	if !strings.HasPrefix(p, "/Volumes/") {
-		return false
+	for _, prefix := range []string{"/Volumes/", "/System/Volumes/Data/Volumes/"} {
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		name := strings.SplitN(strings.TrimPrefix(p, prefix), "/", 2)[0]
+		if name == "" {
+			return false
+		}
+		_, err := os.Stat(filepath.Join(prefix, name))
+		return err != nil
 	}
-	name := strings.SplitN(strings.TrimPrefix(p, "/Volumes/"), "/", 2)[0]
-	if name == "" {
-		return false
+	for _, cloud := range []string{"/Library/CloudStorage/", "/Library/Mobile Documents/"} {
+		i := strings.Index(p, cloud)
+		if i <= 0 {
+			continue
+		}
+		name := strings.SplitN(p[i+len(cloud):], "/", 2)[0]
+		if name == "" {
+			return false
+		}
+		_, err := os.Stat(p[:i+len(cloud)] + name)
+		return err != nil
 	}
-	_, err := os.Stat(filepath.Join("/Volumes", name))
-	return err != nil
+	return false
 }
 
 // ---------------------------------------------------------------- items
@@ -501,6 +601,38 @@ func newestShallow(p string) time.Time {
 	}
 	return t
 }
+
+// newestDeep returns the newest mtime of p and of everything below it
+// (symlinks are not followed). ok is false when the tree could not be walked
+// completely (unreadable entry, more than maxNewestEntries entries, ctx
+// cancelled): callers must then treat the tree as recently used.
+func newestDeep(ctx context.Context, p string) (newest time.Time, ok bool) {
+	n := 0
+	ok = true
+	err := filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			ok = false
+			return filepath.SkipAll
+		}
+		if n++; n > maxNewestEntries || ctx.Err() != nil {
+			ok = false
+			return filepath.SkipAll
+		}
+		fi, err := d.Info()
+		if err != nil {
+			ok = false
+			return filepath.SkipAll
+		}
+		if fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+		return nil
+	})
+	return newest, ok && err == nil
+}
+
+// maxNewestEntries bounds newestDeep (per-project agent data is small).
+const maxNewestEntries = 50_000
 
 func maxTime(a, b time.Time) time.Time {
 	if b.After(a) {

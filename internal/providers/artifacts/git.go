@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,12 +16,16 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
 	gitListTimeout  = 20 * time.Second // ls-files --others --ignored per work tree
-	gitCheckTimeout = 10 * time.Second // check-ignore / ls-files <paths> batches
+	gitCheckTimeout = 10 * time.Second // check-ignore / ls-files <paths> / diff-files / untracked
 	gitBatch        = 200              // paths per command line
+	maxDirtyStat    = 300              // modified / untracked entries stat'ed for the activity
+	// untrackedDirBudget bounds the walk of one untracked folder.
+	untrackedDirBudget = 300
 )
 
 // gitRoot is a git work tree found while walking (main repo, linked
@@ -42,9 +47,15 @@ type gitRoot struct {
 	outer     []string        // outermost ignored directories (rel)
 	checked   bool            // ignore state known for every candidate (listing or check-ignore)
 	trackedOK bool            // tracked-files check succeeded
+	dirtyOK   bool            // uncommitted files listed: dirty is their activity
+	dirty     time.Time       // newest mtime of the modified / untracked files
 }
 
-// addGitRoot registers dir (which holds a .git entry) as a work tree.
+// addGitRoot registers dir (which holds a .git entry) as a work tree. A
+// .git entry that cannot be used (garbage or unreadable .git file, dangling
+// symlink) still makes dir a checkout: it is registered with an unknown git
+// dir, git then fails there (or answers for an enclosing repository), and
+// its generic candidates are never judged "outside git".
 func (s *scan) addGitRoot(dir string, wc walkCtx) *gitRoot {
 	s.mu.Lock()
 	if g, ok := s.gits[dir]; ok {
@@ -55,16 +66,23 @@ func (s *scan) addGitRoot(dir string, wc walkCtx) *gitRoot {
 	g := &gitRoot{path: dir, root: wc.root, depth: wc.depth}
 	dotgit := filepath.Join(dir, ".git")
 	fi, err := os.Lstat(dotgit)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	switch {
+	case err != nil:
+		// Unreadable: a checkout all the same.
 	case fi.IsDir():
 		g.gitdir = dotgit
+	case fi.Mode()&os.ModeSymlink != 0:
+		// git follows a .git symlink to a git dir (repo tool, dotfiles).
+		if rd, err := filepath.EvalSymlinks(dotgit); err == nil && realDir(rd) {
+			g.gitdir = rd
+		}
 	case fi.Mode().IsRegular():
 		gd := readGitFile(dotgit)
 		if gd == "" {
-			return nil
+			break
 		}
 		if !filepath.IsAbs(gd) {
 			gd = filepath.Join(dir, gd)
@@ -81,8 +99,6 @@ func (s *scan) addGitRoot(dir string, wc walkCtx) *gitRoot {
 				g.tool = "worktree"
 			}
 		}
-	default:
-		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -310,6 +326,89 @@ func (g *gitRoot) indexTime() time.Time {
 	)
 }
 
+// commonDir is the repository's common git dir: where linked worktrees are
+// registered (<common>/worktrees/<name>/gitdir).
+func (g *gitRoot) commonDir() string {
+	if g.gitdir == "" {
+		return ""
+	}
+	if b, err := readSmall(filepath.Join(g.gitdir, "commondir"), 4096); err == nil {
+		if cd := strings.TrimSpace(string(b)); cd != "" {
+			if !filepath.IsAbs(cd) {
+				cd = filepath.Join(g.gitdir, cd)
+			}
+			return filepath.Clean(cd)
+		}
+	}
+	return g.gitdir
+}
+
+// linkedWorktrees returns the folded paths of every linked worktree
+// registered in the repositories found. The walk never enters artifacts, so
+// a worktree checked out below a build folder (build/site) is only known
+// from there.
+func (s *scan) linkedWorktrees() []string {
+	s.mu.Lock()
+	commons := map[string]bool{}
+	for _, g := range s.gits {
+		if cd := g.commonDir(); cd != "" {
+			commons[cd] = true
+		}
+	}
+	s.mu.Unlock()
+	var out []string
+	for cd := range commons {
+		admin := filepath.Join(cd, "worktrees")
+		ents, _ := os.ReadDir(admin)
+		for _, e := range ents {
+			b, err := readSmall(filepath.Join(admin, e.Name(), "gitdir"), 4096)
+			gd := strings.TrimSpace(string(b))
+			if err != nil || gd == "" {
+				continue
+			}
+			if !filepath.IsAbs(gd) { // worktree.useRelativePaths
+				gd = filepath.Join(admin, e.Name(), gd)
+			}
+			wt := filepath.Dir(filepath.Clean(gd))
+			out = append(out, foldPath(wt), foldPath(realPath(wt)))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// worktreeIn returns the registered linked worktree at or below p (relative
+// to p's parent for messages), "" when none.
+func (s *scan) worktreeIn(p string) string {
+	fp := foldPath(p)
+	for _, w := range s.worktrees {
+		if fsx.Within(w, fp) {
+			if rel, err := filepath.Rel(foldPath(filepath.Dir(p)), w); err == nil {
+				return rel
+			}
+			return w
+		}
+	}
+	return ""
+}
+
+// isWorktree reports whether p is a registered linked worktree.
+func (s *scan) isWorktree(p string) bool {
+	fp := foldPath(p)
+	for _, w := range s.worktrees {
+		if w == fp {
+			return true
+		}
+	}
+	return false
+}
+
+// foldPath normalizes a path for comparisons on the (case-insensitive,
+// normalization-insensitive) APFS: NFC, lower case.
+func foldPath(p string) string {
+	return strings.ToLower(norm.NFC.String(filepath.Clean(p)))
+}
+
 func readSmall(p string, max int64) ([]byte, error) {
 	f, err := os.Open(p)
 	if err != nil {
@@ -317,4 +416,74 @@ func readSmall(p string, max int64) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, max))
+}
+
+// dirtyActivity records the newest mtime of the work tree's uncommitted
+// files, wherever they are: editing a file leaves the index, HEAD and the
+// top-level entries untouched. Two cheap listings instead of `git status`
+// (which refreshes the index and blocks on lazy fetches in partial clones):
+// `git diff-files` compares stat data with the index (hashing only racily
+// clean files, never needing blob objects) for modified tracked files, and
+// `ls-files --others --exclude-standard --directory` lists untracked ones
+// (untracked folders collapsed, walked with a small budget).
+func (s *scan) dirtyActivity(g *gitRoot) {
+	run := func(args ...string) ([]byte, bool) {
+		ctx, cancel := context.WithTimeout(s.ctx, gitCheckTimeout)
+		defer cancel()
+		out, err := s.env.Output(ctx, g.path, "git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.quotePath=false"}, args...)...)
+		if err != nil {
+			s.logf("artifacts: git %s in %s: %v", args[0], g.path, err)
+			return nil, false
+		}
+		return out, true
+	}
+	modified, ok1 := run("diff-files", "--name-only", "-z", "--ignore-submodules=all")
+	if !ok1 {
+		return
+	}
+	untracked, ok2 := run("ls-files", "-z", "--others", "--exclude-standard", "--directory")
+	if !ok2 {
+		return
+	}
+	var newest time.Time
+	n := 0
+	// Modified files are tracked, hence sources wherever they are (a
+	// tracked file is never inside an artifact: decide rejects those), even
+	// in folders named like one (bin/, scripts/build/, internal/out/).
+	// Untracked files are listed one by one only in folders git knows, so
+	// they count too; an untracked FOLDER named like an artifact
+	// (packages/x/node_modules/ not ignored) is the artifact's own writes,
+	// and too big to walk.
+	for _, e := range bytes.Split(append(append(modified, 0), untracked...), []byte{0}) {
+		rel := string(e)
+		dir := strings.HasSuffix(rel, "/")
+		if rel == "" || dir && s.inArtifact(rel) {
+			continue
+		}
+		if n++; n > maxDirtyStat {
+			break
+		}
+		p := filepath.Join(g.path, rel)
+		var t time.Time
+		if dir {
+			t = s.sourceActivity(p, untrackedDirBudget) // files only: the folder's mtime moves when an artifact inside is deleted
+		} else {
+			t = fsx.ModTime(p) // a deleted file has none (zero)
+		}
+		if t.After(newest) {
+			newest = t
+		}
+	}
+	g.dirty, g.dirtyOK = newest, true
+}
+
+// inArtifact reports whether a work-tree relative folder ("a/b/") is, or
+// lies inside, a folder named like an artifact.
+func (s *scan) inArtifact(rel string) bool {
+	for _, part := range strings.Split(strings.TrimSuffix(rel, "/"), "/") {
+		if s.rs.names[part] {
+			return true
+		}
+	}
+	return false
 }

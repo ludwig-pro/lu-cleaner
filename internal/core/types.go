@@ -37,8 +37,24 @@ func (r Risk) String() string {
 	return fmt.Sprintf("risk(%d)", int(r))
 }
 
-// ParseRisk parses "safe", "moderate", "caution" or "never".
+// ParseRisk parses a user-supplied maximum risk (--risk): "safe",
+// "moderate" or "caution" (or s, m/mod, c). "never" is rejected: never
+// items are report-only, and a maximum of "never" would silently admit every
+// caution item (it reads like "take no risk"). Serialized values (JSON,
+// history) go through UnmarshalText, which accepts "never".
 func ParseRisk(s string) (Risk, error) {
+	r, err := parseRisk(s)
+	if err != nil {
+		return r, err
+	}
+	if r == RiskNever {
+		return RiskSafe, fmt.Errorf("risk %q is not a maximum risk: never items are report-only (want safe|moderate|caution; caution is the highest)", s)
+	}
+	return r, nil
+}
+
+// parseRisk parses any risk name, "never" included.
+func parseRisk(s string) (Risk, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "safe", "s":
 		return RiskSafe, nil
@@ -55,7 +71,7 @@ func ParseRisk(s string) (Risk, error) {
 func (r Risk) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
 
 func (r *Risk) UnmarshalText(b []byte) error {
-	v, err := ParseRisk(string(b))
+	v, err := parseRisk(string(b))
 	if err != nil {
 		return err
 	}
@@ -160,28 +176,84 @@ func LookupCategory(id Category) CategoryInfo {
 	return CategoryInfo{ID: id, Title: string(id), Icon: "•"}
 }
 
-// ParseCategory accepts a category id (case-insensitive) or a few aliases.
+// categorySynonyms are unambiguous alternative spellings of category ids.
+var categorySynonyms = map[string]Category{
+	"wt":        CatWorktrees,
+	"worktree":  CatWorktrees,
+	"artifact":  CatArtifacts,
+	"sim":       CatSimulators,
+	"simulator": CatSimulators,
+	"container": CatContainers,
+	"lang":      CatLangs,
+}
+
+// toolNames are tool and item names that are NOT categories although users
+// type them as such. They used to be aliases of the whole category, so
+// `clean --yes -c cursor` silently cleaned every AI tool (Claude, Codex...),
+// and `-c node_modules` every project artifact. They are now rejected with a
+// hint naming the category they belong to.
+var toolNames = map[string]Category{
+	// artifacts
+	"node_modules": CatArtifacts, "projects": CatArtifacts,
+	// simulators
+	"ios": CatSimulators,
+	// android
+	"gradle": CatAndroid, "emulators": CatAndroid, "emulator": CatAndroid, "avd": CatAndroid,
+	// ai
+	"claude": CatAI, "codex": CatAI, "cursor": CatAI, "chatgpt": CatAI, "conductor": CatAI,
+	// js
+	"node": CatJS, "npm": CatJS, "yarn": CatJS, "pnpm": CatJS, "bun": CatJS,
+	// containers
+	"docker": CatContainers, "colima": CatContainers, "orbstack": CatContainers,
+	// langs, system
+	"brew": CatLangs, "homebrew": CatLangs, "trash": CatSystem,
+}
+
+// ParseCategory accepts a category id (case-insensitive) or an unambiguous
+// synonym (wt, worktree, artifact, sim, simulator, container, lang). Tool
+// names (cursor, docker, node_modules...) are rejected: a category spans
+// many tools, and treating a tool name as its category would widen a
+// `clean --yes` far beyond what the user asked for.
 func ParseCategory(s string) (Category, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
-	aliases := map[string]Category{
-		"wt": CatWorktrees, "worktree": CatWorktrees,
-		"artifact": CatArtifacts, "projects": CatArtifacts, "node_modules": CatArtifacts,
-		"sim": CatSimulators, "simulator": CatSimulators, "ios": CatSimulators,
-		"android": CatAndroid, "gradle": CatAndroid, "emulators": CatAndroid,
-		"ai": CatAI, "claude": CatAI, "codex": CatAI, "cursor": CatAI,
-		"js": CatJS, "node": CatJS, "npm": CatJS,
-		"ide": CatIDE, "docker": CatContainers, "containers": CatContainers,
-		"langs": CatLangs, "system": CatSystem, "xcode": CatXcode,
-	}
 	for _, c := range Categories {
 		if string(c.ID) == s {
 			return c.ID, nil
 		}
 	}
-	if c, ok := aliases[s]; ok {
+	if c, ok := categorySynonyms[s]; ok {
 		return c, nil
 	}
-	return "", fmt.Errorf("unknown category %q", s)
+	if c, ok := toolNames[s]; ok {
+		return "", fmt.Errorf("%q is not a category: it belongs to %q, which covers other tools too (%s); use %q to mean all of them, or --kind (-k) <kind or provider id> to narrow (kinds are listed by `lu-cleaner scan -c %s --json`)",
+			s, c, LookupCategory(c).Desc, c, c)
+	}
+	return "", fmt.Errorf("unknown category %q (want %s)", s, categoryIDs())
+}
+
+// ParseCategoryOrTool is ParseCategory that also accepts the tool names it
+// rejects (cursor, docker, node_modules...): it then returns the category
+// the tool belongs to, with tool=true. Only for settings where widening to
+// the whole category is the safe direction, such as the config's
+// disabled_categories (disabling more than asked, as older versions did),
+// never to select what to clean.
+func ParseCategoryOrTool(s string) (c Category, tool bool, err error) {
+	c, err = ParseCategory(s)
+	if err == nil {
+		return c, false, nil
+	}
+	if c, ok := toolNames[strings.ToLower(strings.TrimSpace(s))]; ok {
+		return c, true, nil
+	}
+	return "", false, err
+}
+
+func categoryIDs() string {
+	ids := make([]string, len(Categories))
+	for i, c := range Categories {
+		ids[i] = string(c.ID)
+	}
+	return strings.Join(ids, "|")
 }
 
 // Item is one cleanable (or reportable) thing found on disk.
@@ -241,6 +313,10 @@ type Item struct {
 
 	// Recommended marks items preselected by "smart select" (safe, stale, big).
 	Recommended bool `json:"recommended,omitempty"`
+	// RequireForce makes the executor refuse the item unless --force (also in
+	// dry-run), e.g. orphaned worktree folders whose uncommitted work git can
+	// no longer see.
+	RequireForce bool `json:"require_force,omitempty"`
 	// NoRecommend is a provider veto: never preselect this item, whatever its
 	// risk and age (e.g. emptying the Trash, data whose owner is uncertain).
 	NoRecommend bool `json:"-"`

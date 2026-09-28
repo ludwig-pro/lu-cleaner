@@ -303,7 +303,7 @@ func TestScanStatuses(t *testing.T) {
 		f.orphanPruned: {"codex-worktree", statusOrphan, core.RiskCaution, core.MethodDelete, false, "orphaned: git no longer tracks it", true},
 		f.orphanMain:   {"codex-worktree", statusOrphan, core.RiskCaution, core.MethodDelete, false, "orphaned: git no longer tracks it", true},
 		f.hotfix:       {"manual-worktree", statusMerged, core.RiskModerate, core.MethodWorktree, true, "", true},
-		f.pushed:       {"manual-worktree", statusClean, core.RiskModerate, core.MethodWorktree, false, "ignored .env files would be lost: .env.local", true},
+		f.pushed:       {"manual-worktree", statusClean, core.RiskCaution, core.MethodWorktree, false, "ignored secret/local files would be lost: .env.local", true},
 		f.offline:      {"codex-worktree", statusUnknown, core.RiskCaution, core.MethodReport, false, "unmounted volume lu-cleaner-test-missing-volume", false},
 	}
 	for path, w := range cases {
@@ -344,11 +344,13 @@ func TestScanStatuses(t *testing.T) {
 	if it := c.byPath(f.hotfix); it.Project != f.main {
 		t.Errorf("relative gitdir: project=%s want %s", it.Project, f.main)
 	}
-	if it := c.byPath(f.orphanMain); it.Project != f.gone || it.Meta["orphan"] != "main repository deleted" {
+	if it := c.byPath(f.orphanMain); it.Project != f.gone || it.Meta["orphan"] != orphanMainGone {
 		t.Errorf("orphan main: project=%s orphan=%q", it.Project, it.Meta["orphan"])
 	}
-	if it := c.byPath(f.orphanPruned); !strings.Contains(it.Note, "worktree repair") {
-		t.Errorf("pruned orphan note should offer repair: %s", it.Note)
+	// git worktree repair cannot restore a pruned entry ("unable to locate
+	// repository"): the note points to a new worktree instead.
+	if it := c.byPath(f.orphanPruned); strings.Contains(it.Note, "worktree repair") || !strings.Contains(it.Note, "worktree add") {
+		t.Errorf("pruned orphan note: %s", it.Note)
 	}
 	// Details.
 	if it := c.byPath(f.merged); it.Name != "app · ab12" || it.Meta["branch"] != "(detached)" || it.Meta["merged"] != "true" || it.Meta["default_branch"] != "origin/main" {
@@ -384,14 +386,18 @@ func TestScanStatuses(t *testing.T) {
 		t.Errorf("prune entries: %q", pr.Meta["entries"])
 	}
 
-	// Everything proposed passes the clean-time safety guard.
+	// Everything proposed passes the clean-time safety guard (the cleaner lets
+	// git remove worktrees, and orphans opt in: they hold a .git file).
 	g := safety.New(f.home, "", append(append([]string{}, env.Roots...), env.WorktreeRoots...), nil)
 	for _, it := range c.final {
 		if !it.CanClean() || it.Method == core.MethodCommand {
 			continue
 		}
+		if it.Method == core.MethodDelete && it.Meta["status"] == statusOrphan && (!it.AllowGitRepo || it.Recheck == nil || !it.NoRecommend) {
+			t.Errorf("%s: orphan must opt in to AllowGitRepo, with a Recheck and NoRecommend", it.Path)
+		}
 		for _, p := range it.Targets() {
-			if err := g.Check(p, safety.Options{AllowGitRepo: it.AllowGitRepo}); err != nil {
+			if err := g.Check(p, safety.Options{AllowGitRepo: it.AllowGitRepo || it.Method == core.MethodWorktree}); err != nil {
 				t.Errorf("%s: guard refuses %s: %v", it.Kind, p, err)
 			}
 		}

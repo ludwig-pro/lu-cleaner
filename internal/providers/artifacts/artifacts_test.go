@@ -79,6 +79,7 @@ func rnMonorepo(t *testing.T) *fixture {
 	f.file("src/plain/package.json", `{"name":"plain"}`)
 	f.file("src/plain/package-lock.json", "{}")
 	f.file("src/plain/build/index.html", "<html>")
+	f.file("src/plain/build/static/js/main.3f2a1b9c.js", "bundle") // CRA output: hashed bundle
 	f.file("src/plain/dist/notes.txt", "not an output")
 	f.big("src/plain/node_modules/dep/index.js", 8192)
 	f.big("store/shared.js", 65536)
@@ -707,6 +708,35 @@ func TestDecide(t *testing.T) {
 		if ok != tc.ok || !strings.Contains(why, tc.reasonC) {
 			t.Errorf("%s: got %v %q", tc.name, ok, why)
 		}
+	}
+
+	// Rules knowing generator-specific evidence: weak content outside git is
+	// accepted as "weak" (caution), strong content or git ignore is not.
+	js := &rule{Kind: "dist", Generic: true, Strong: jsStrongOut}
+	for _, tc := range []struct {
+		name     string
+		c        cand
+		ok, weak bool
+	}{
+		{"weak outside git", cand{rule: js, tracked: -1, ignored: -1, contentOK: true}, true, true},
+		{"strong outside git", cand{rule: js, tracked: -1, ignored: -1, contentOK: true, strongOK: true}, true, false},
+		{"nothing outside git", cand{rule: js, tracked: -1, ignored: -1}, false, false},
+		{"weak but ignored in git", cand{rule: js, git: g, tracked: 0, ignored: 1, contentOK: true}, true, false},
+	} {
+		ok, _ := s.decide(&tc.c)
+		if ok != tc.ok || tc.c.weak != tc.weak {
+			t.Errorf("%s: ok=%v weak=%v, want %v %v", tc.name, ok, tc.c.weak, tc.ok, tc.weak)
+		}
+	}
+	// A registered linked worktree at or below a candidate rejects it.
+	s.worktrees = []string{foldPath("/p/Site/Build/gh-pages")}
+	for _, p := range []string{"/p/site/build", "/p/site/build/gh-pages"} {
+		if ok, why := s.decide(&cand{path: p, rule: dep, tracked: -1, ignored: -1}); ok || !strings.Contains(why, "worktree") {
+			t.Errorf("%s holds a worktree (case-insensitive): got %v %q", p, ok, why)
+		}
+	}
+	if ok, _ := s.decide(&cand{path: "/p/site/build2", rule: dep, tracked: -1, ignored: -1}); !ok {
+		t.Errorf("sibling of a worktree rejected")
 	}
 }
 

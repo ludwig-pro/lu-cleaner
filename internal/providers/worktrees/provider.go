@@ -16,8 +16,16 @@
 // Worktrees are deduplicated by device/inode. Each one gets its git state
 // (dirty, unpushed, merged, locked, orphaned), the state of the tool that
 // created it (Codex thread, Claude desktop session, Conductor workspace),
-// processes whose cwd is inside, and a size breakdown (node_modules, Pods,
-// native builds...).
+// processes whose cwd is inside, ignored secrets that would be lost (.env,
+// keystores...), nested repositories, and a size breakdown (node_modules,
+// Pods, native builds...).
+//
+// Deletion safety: a worktree is an orphan (removed with rm -rf, never
+// recommended) only when its git metadata verifiably does not exist (ENOENT
+// under a readable folder). Unreadable metadata (permissions, macOS privacy
+// protection) is report-only, and so is a checkout still listed by a renamed
+// or moved main repository (it needs `git worktree repair`). Orphans, prune
+// items and worktrees are re-verified right before cleaning (Item.Recheck).
 package worktrees
 
 import (
@@ -88,6 +96,7 @@ type scan struct {
 	ordered []*worktree
 
 	tools *toolState
+	live  liveTools // tool state re-read by rechecks at clean time
 }
 
 func newScan(ctx context.Context, env *core.Env, emit core.Emit) *scan {
@@ -118,11 +127,13 @@ func (s *scan) run() error {
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
-	// 3. ask every main repository for its worktrees (repeat when new mains appear).
+	// 3. ask every main repository for its worktrees (repeat when new mains
+	// appear), then re-attach the checkouts of renamed / moved main repositories.
 	s.listAll()
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
+	s.reconcile()
 
 	wts := s.snapshot()
 	s.tools = loadToolState(s.ctx, s.env, s.home, wts)

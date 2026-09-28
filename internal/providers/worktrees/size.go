@@ -2,6 +2,7 @@ package worktrees
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,17 +67,28 @@ type measurement struct {
 	total, reclaim, files int64
 	artifacts             map[string]int64
 	newest                time.Time
+	nested                []string // repositories / worktrees found inside (not below artifacts)
 }
 
 // measure walks the worktree once, pruning artifact directories, then
-// measures each artifact directory on its own and adds everything up.
+// measures each artifact directory on its own and adds everything up. The
+// walk also notes nested git repositories and worktrees (a .git entry of any
+// type, or a bare layout): removing the worktree would delete them too.
 func measure(ctx context.Context, root string) measurement {
 	var mu sync.Mutex
 	var found []struct{ path, key string }
-	skip := func(path, _ string) bool {
+	var nested []string
+	skip := func(path, name string) bool {
 		rel := strings.TrimPrefix(path, root+"/")
 		if rel == path {
 			return false
+		}
+		// (Nothing inside a .git directory counts: its modules/ look bare.)
+		if name != ".git" && !strings.Contains("/"+rel+"/", "/.git/") &&
+			(fsx.Exists(filepath.Join(path, ".git")) || looksBare(path)) {
+			mu.Lock()
+			nested = append(nested, path)
+			mu.Unlock()
 		}
 		if k := artifactKey(rel); k != "" {
 			mu.Lock()
@@ -87,9 +99,10 @@ func measure(ctx context.Context, root string) measurement {
 		return false
 	}
 	st, _ := fsx.Size(ctx, root, &fsx.Options{Skip: skip})
+	sort.Strings(nested)
 	m := measurement{
 		total: st.Bytes, reclaim: st.Reclaim, files: st.Files,
-		artifacts: map[string]int64{}, newest: st.Newest,
+		artifacts: map[string]int64{}, newest: st.Newest, nested: nested,
 	}
 	for _, f := range found {
 		if ctx.Err() != nil {
@@ -136,6 +149,43 @@ func (s *scan) applySize(w *worktree, it *core.Item, m measurement) {
 	if w.orphan != "" && m.newest.After(it.LastUsed) && !m.newest.After(s.now.Add(24*time.Hour)) {
 		it.LastUsed = m.newest
 	}
+	s.applyNested(w, it, m.nested)
+}
+
+// applyNested flags a worktree holding other repositories or worktrees that
+// the scan had not seen (ignored clones, a gh-pages worktree in dist/...):
+// removing it would delete them too, so it is caution (the cleaner refuses it
+// without --force) and an orphan is no longer deleted with rm -rf.
+func (s *scan) applyNested(w *worktree, it *core.Item, found []string) {
+	known := map[string]bool{}
+	for _, p := range w.nested {
+		known[p] = true
+	}
+	var extra []string
+	for _, p := range found {
+		if !known[p] {
+			extra = append(extra, p)
+		}
+	}
+	if len(extra) == 0 {
+		return
+	}
+	all := append(append([]string(nil), w.nested...), extra...)
+	it.Meta["nested"] = strings.Join(all, ", ")
+	it.Risk = core.RiskCaution
+	msg := nestedWarn(s, extra)
+	if it.Warn == "" {
+		it.Warn = msg
+	} else {
+		it.Warn += " · " + msg
+	}
+	if it.Method == core.MethodDelete {
+		it.Method = core.MethodReport
+		it.Selectable = false
+		it.AllowGitRepo = false
+		it.Recheck = nil
+	}
+	s.recommend(w, it)
 }
 
 func orderOf(k string) int {

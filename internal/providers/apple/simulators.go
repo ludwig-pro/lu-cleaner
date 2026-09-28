@@ -3,11 +3,15 @@ package apple
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,6 +145,13 @@ type simScan struct {
 	rtNames   map[string]string
 	paired    map[string]bool
 	root      string
+	// imgs are the runtime disk images (`simctl runtime list`); imgsKnown is
+	// false when that listing failed, so a missing image proves nothing.
+	imgs      map[string]runtimeImage
+	imgsKnown bool
+
+	bundlesOnce sync.Once
+	bundles     map[string]string // runtime identifier -> .simruntime bundle on disk
 }
 
 // simulators covers everything that needs simctl: devices (one item each),
@@ -167,7 +178,7 @@ func (s *scan) simulators() {
 		return // no Xcode selected (CLT only), CoreSimulator broken...
 	}
 	ss := &simScan{scan: s, list: list, typeNames: map[string]string{}, rtNames: map[string]string{}, paired: map[string]bool{},
-		root: s.lib("Developer", "CoreSimulator", "Devices")}
+		root: s.lib("Developer", "CoreSimulator", "Devices"), imgs: imgs, imgsKnown: imgErr == nil}
 	for _, t := range list.DeviceTypes {
 		ss.typeNames[t.Identifier] = t.Name
 	}
@@ -190,7 +201,7 @@ func (s *scan) simulators() {
 func (ss *simScan) devices() {
 	known := map[string]bool{}
 	inRoot := 0
-	var unavailable, shutdown []simDev
+	var shutdown []simDev
 	for _, rt := range sortedKeys(ss.list.Devices) {
 		for _, d := range ss.list.Devices[rt] {
 			if d.UDID == "" {
@@ -204,9 +215,11 @@ func (ss *simScan) devices() {
 			if ss.skipPath(dv.dir) {
 				continue
 			}
+			// Recordings are listed for unavailable devices too: the device
+			// item Covers its folder, so TopLevel never counts both.
 			recordings := ss.attachments(dv)
 			if !d.IsAvailable {
-				unavailable = append(unavailable, dv)
+				ss.unavailableItem(dv, recordings)
 				continue
 			}
 			ss.deviceItem(dv, recordings)
@@ -215,7 +228,6 @@ func (ss *simScan) devices() {
 			}
 		}
 	}
-	ss.unavailableItem(unavailable)
 	ss.deviceLogs(shutdown)
 	ss.deviceCaches(shutdown)
 	// Orphan detection needs proof that simctl describes this folder.
@@ -333,12 +345,8 @@ func isTestRunner(bundle string) bool {
 	return strings.HasSuffix(bundle, ".xctrunner")
 }
 
-// ---------------------------------------------------------------- devices
-
-func (ss *simScan) deviceItem(dv simDev, recordings bool) {
-	lu, never := ss.lastUsed(dv)
-	apps := simApps(dv.dir)
-	var userApps, runners []string
+// splitApps separates user apps from UI-test runners.
+func splitApps(apps []string) (userApps, runners []string) {
 	for _, a := range apps {
 		if isTestRunner(a) {
 			runners = append(runners, a)
@@ -346,6 +354,15 @@ func (ss *simScan) deviceItem(dv simDev, recordings bool) {
 			userApps = append(userApps, a)
 		}
 	}
+	return userApps, runners
+}
+
+// ---------------------------------------------------------------- devices
+
+func (ss *simScan) deviceItem(dv simDev, recordings bool) {
+	lu, never := ss.lastUsed(dv)
+	apps := simApps(dv.dir)
+	userApps, runners := splitApps(apps)
 	rtName := ss.runtimeName(dv.runtime)
 	typeName := ss.typeNames[dv.DeviceType]
 	custom := typeName != "" && dv.Name != typeName
@@ -426,35 +443,250 @@ func shortList(xs []string, n int) string {
 	return strings.Join(xs[:n], ", ") + fmt.Sprintf(" +%d", len(xs)-n)
 }
 
-// unavailableItem groups devices whose runtime is gone: `simctl delete unavailable`.
-func (ss *simScan) unavailableItem(devs []simDev) {
-	if len(devs) == 0 {
+// unavailableItem proposes one simulator simctl reports as unavailable.
+//
+// It deletes that device only (`simctl delete <UDID>`), never `simctl delete
+// unavailable`: the latter removes whatever is unavailable when it runs,
+// including devices that are merely unusable right now (another Xcode
+// selected, runtime image not mounted after a macOS update) and come back
+// once the setup is fixed. Such devices, and devices holding user apps, are
+// caution and never preselected. The Recheck refuses when the device became
+// available again (or changed) since the scan.
+func (ss *simScan) unavailableItem(dv simDev, recordings bool) {
+	lu, _ := ss.lastUsed(dv)
+	apps := simApps(dv.dir)
+	userApps, _ := splitApps(apps)
+	rtName := ss.runtimeName(dv.runtime)
+
+	// Kind kept from the former grouped item so `-k ios-simulators-unavailable` still works.
+	it := ss.item("ios-simulators-unavailable", core.CatSimulators, dv.UDID)
+	it.Name = dv.Name + " · " + rtName + " (unavailable)"
+	it.Location = dv.dir
+	it.Method = core.MethodCommand
+	it.Command = []string{"xcrun", "simctl", "delete", dv.UDID}
+	it.Covers = dv.dir // recordings inside become redundant
+	it.Recheck = unavailableRecheck(ss.env.Runner, dv.UDID, dv.runtime)
+	it.LastUsed = lu
+	it.Size = dv.DataPathSize + dv.LogPathSize // estimate until measured
+	setMeta(it, "udid", dv.UDID)
+	setMeta(it, "runtime", rtName)
+	setMeta(it, "reason", dv.AvailabilityError)
+	if len(apps) > 0 {
+		setMeta(it, "apps", strings.Join(apps, ", "))
+	}
+
+	note := []string{"Simulator simctl reports as unavailable: it cannot boot with the current Xcode and runtimes."}
+	if why := ss.mayComeBack(dv); why != "" {
+		it.Risk = core.RiskCaution
+		it.NoRecommend = true
+		setMeta(it, "may_come_back", "true")
+		addWarn(it, why)
+		note = append(note, "It may only be unusable right now (another Xcode selected with xcode-select, runtime image not mounted after a macOS update): fixing that brings it back with its apps and data.")
+	} else {
+		it.Risk = core.RiskSafe
+		it.Recommended = len(userApps) == 0
+		note = append(note, "Its runtime "+rtName+" is no longer installed.")
+	}
+	if len(userApps) > 0 {
+		it.Risk = core.RiskCaution
+		it.Recommended = false
+		note = append(note, fmt.Sprintf("It holds %d installed app(s) and their data (%s): re-installing its runtime would bring them back, deleting it loses them.",
+			len(userApps), shortList(userApps, 3)))
+	}
+	if recordings {
+		note = append(note, "Its size includes the XCTest recordings listed separately.")
+		setMeta(it, "has_recordings", "true")
+	}
+	note = append(note, "`xcrun simctl delete "+dv.UDID+"` removes this device only.")
+	it.Note = strings.Join(note, " ")
+	if dv.State != "" && dv.State != "Shutdown" {
+		it.Selectable = false
+		addWarn(it, "simulator state: "+dv.State)
+	}
+	if !ss.applyPlace(it, dv.dir) {
 		return
 	}
-	it := ss.item("ios-simulators-unavailable", core.CatSimulators, "unavailable")
-	it.Name = fmt.Sprintf("Unavailable simulators (%d)", len(devs))
-	it.Location = ss.root
-	it.Method = core.MethodCommand
-	it.Command = []string{"xcrun", "simctl", "delete", "unavailable"}
-	it.Risk = core.RiskSafe
-	it.Recommended = true
-	var names, dirs []string
-	reason := ""
-	for _, dv := range devs {
-		names = append(names, dv.Name+" ("+ss.runtimeName(dv.runtime)+")")
-		dirs = append(dirs, dv.dir)
-		it.Size += dv.DataPathSize + dv.LogPathSize
-		if lu, _ := ss.lastUsed(dv); lu.After(it.LastUsed) {
-			it.LastUsed = lu
+	ss.sizeLater(it, []string{dv.dir}, nil)
+}
+
+// mayComeBack explains why an unavailable simulator may become usable again
+// without re-creating it, or returns "" when its runtime is provably gone:
+// not listed by `simctl list runtimes`, no bundle, registered image or
+// downloaded asset of it on disk (runtimeOnDisk), no disk image of it in
+// `simctl runtime list` (which must have succeeded), and an availability
+// error that does not hint at an unsupported or unmounted runtime.
+func (ss *simScan) mayComeBack(dv simDev) string {
+	name := ss.runtimeName(dv.runtime)
+	for _, r := range ss.list.Runtimes {
+		if r.Identifier != dv.runtime {
+			continue
 		}
-		if reason == "" {
-			reason = dv.AvailabilityError
+		if r.IsAvailable {
+			return "its runtime " + name + " is installed — the device type may just be unsupported by the selected Xcode"
+		}
+		return "its runtime " + name + " is still installed but unusable with the selected Xcode or macOS — switching Xcode may bring it back"
+	}
+	if b := ss.runtimeOnDisk(dv.runtime); b != "" {
+		if app := appBundleOf(b); app != "" {
+			return "its runtime " + name + " is bundled with " + filepath.Base(app) + " — selecting that Xcode (xcode-select) brings it back"
+		}
+		return "its runtime " + name + " is still on disk (" + b + ") — it may just be unusable with the selected Xcode"
+	}
+	if !ss.imgsKnown {
+		return "cannot verify that its runtime " + name + " was removed (`simctl runtime list` failed)"
+	}
+	for _, k := range sortedKeys(ss.imgs) {
+		if img := ss.imgs[k]; img.RuntimeIdentifier == dv.runtime {
+			state := img.State
+			if state == "" {
+				state = "unknown state"
+			}
+			return "the " + name + " runtime image is still on disk (" + state + ") — it may just be unmounted"
 		}
 	}
-	setMeta(it, "devices", strings.Join(names, ", "))
-	setMeta(it, "reason", reason)
-	it.Note = "Simulators whose runtime was removed or is not supported by the selected Xcode: they cannot boot anymore. `xcrun simctl delete unavailable` removes them."
-	ss.sizeLater(it, dirs, nil)
+	e := strings.ToLower(dv.AvailabilityError)
+	for _, hint := range []string{"not supported", "unsupported", "mount"} {
+		if strings.Contains(e, hint) {
+			return "simctl: " + dv.AvailabilityError
+		}
+	}
+	return ""
+}
+
+// runtimeOnDisk returns where runtime rid still exists on disk, wherever
+// simctl may not list it:
+//   - .simruntime bundles: inside an Xcode that is not the selected one
+//     (older Xcodes shipped their iOS runtime), legacy runtimes in
+//     /Library/Developer/CoreSimulator/Profiles/Runtimes, mounted images;
+//   - disk images registered in CoreSimulator's image database
+//     (/Library/Developer/CoreSimulator/Images/images.plist), mounted or not,
+//     read directly in case `simctl runtime list` came back incomplete;
+//   - downloaded runtime assets (/System/Library/AssetsV2/
+//     com_apple_MobileAsset_*SimulatorRuntime/*.asset), in case the image
+//     database lost them (e.g. after a macOS update).
+func (ss *simScan) runtimeOnDisk(rid string) string {
+	ss.bundlesOnce.Do(func() {
+		ss.bundles = map[string]string{}
+		const rel = "Library/Developer/CoreSimulator/Profiles/Runtimes/*.simruntime"
+		pats := []string{
+			ss.sys(filepath.Join("/", rel)),
+			ss.sys(filepath.Join("/Library/Developer/CoreSimulator/Volumes/*", rel)),
+		}
+		for _, apps := range []string{ss.sys("/Applications/Xcode*.app"), filepath.Join(ss.env.Home, "Applications", "Xcode*.app")} {
+			pats = append(pats, filepath.Join(apps, "Contents/Developer/Platforms/*.platform", rel))
+		}
+		for _, pat := range pats {
+			matches, _ := filepath.Glob(pat)
+			for _, b := range matches {
+				info, err := readPlistDict(filepath.Join(b, "Contents", "Info.plist"))
+				id := pString(info, "CFBundleIdentifier")
+				if err != nil || id == "" {
+					// Unreadable: key it by its display name ("iOS 16.4"),
+					// matched below through prettyRuntime.
+					id = strings.TrimSuffix(filepath.Base(b), ".simruntime")
+				}
+				if _, ok := ss.bundles[id]; !ok {
+					ss.bundles[id] = b
+				}
+			}
+		}
+		// After the bundles, whose "bundled with Xcode-14.3.app" says more.
+		ss.registeredImages()
+		ss.runtimeAssets()
+	})
+	if b := ss.bundles[rid]; b != "" {
+		return b
+	}
+	return ss.bundles[prettyRuntime(rid)]
+}
+
+// addRuntime records evidence that runtime key (identifier, or display name
+// such as "iOS 16.4") is on disk at where. The first evidence found wins.
+func (ss *simScan) addRuntime(key, where string) {
+	if _, ok := ss.bundles[key]; !ok && key != "" {
+		ss.bundles[key] = where
+	}
+}
+
+// registeredImages adds the runtime disk images of CoreSimulator's image
+// database whose file is still on disk (or cannot be proven gone).
+func (ss *simScan) registeredImages() {
+	db := ss.sys("/Library/Developer/CoreSimulator/Images/images.plist")
+	info, err := readPlistDict(db)
+	if err != nil {
+		return
+	}
+	imgs, _ := info["images"].([]any)
+	for _, x := range imgs {
+		img, _ := x.(map[string]any)
+		id := pString(pDict(img, "runtimeInfo"), "bundleIdentifier")
+		if id == "" {
+			continue
+		}
+		where := db
+		if u, err := url.Parse(pString(pDict(img, "path"), "relative")); err == nil && u.Scheme == "file" && filepath.IsAbs(u.Path) {
+			if _, err := os.Stat(u.Path); errors.Is(err, fs.ErrNotExist) {
+				continue // stale entry: the image file is gone
+			}
+			where = u.Path
+		}
+		ss.addRuntime(id, where)
+	}
+}
+
+// runtimeAssets adds the downloaded simulator runtime assets, keyed by
+// display name ("iOS 26.5": the asset only knows platform and version).
+func (ss *simScan) runtimeAssets() {
+	colls, _ := filepath.Glob(ss.sys("/System/Library/AssetsV2/com_apple_MobileAsset_*SimulatorRuntime"))
+	for _, coll := range colls {
+		plat := assetPlatform(filepath.Base(coll))
+		if plat == "" {
+			continue
+		}
+		assets, _ := filepath.Glob(filepath.Join(coll, "*.asset"))
+		for _, a := range assets {
+			info, err := readPlistDict(filepath.Join(a, "Info.plist"))
+			if err != nil {
+				continue
+			}
+			if v := majorMinor(pString(pDict(info, "MobileAssetProperties"), "SimulatorVersion")); v != "" {
+				ss.addRuntime(plat+" "+v, a)
+			}
+		}
+	}
+}
+
+// assetPlatform maps a MobileAsset collection
+// ("com_apple_MobileAsset_iOSSimulatorRuntime") to the platform name
+// prettyRuntime uses ("iOS"), or "" when unknown.
+func assetPlatform(coll string) string {
+	p := strings.TrimSuffix(strings.TrimPrefix(coll, "com_apple_MobileAsset_"), "SimulatorRuntime")
+	switch strings.ToLower(p) {
+	case "ios":
+		return "iOS"
+	case "watchos":
+		return "watchOS"
+	case "tvos", "appletvos":
+		return "tvOS"
+	case "xros", "visionos":
+		return "visionOS"
+	}
+	return ""
+}
+
+// majorMinor returns "17.0" for "17.0.1" or "17" (runtime identifiers only
+// carry major and minor), or "" when v is not a version.
+func majorMinor(v string) string {
+	parts := strings.Split(strings.TrimSpace(v), ".")
+	for _, p := range parts {
+		if _, err := strconv.Atoi(p); err != nil {
+			return ""
+		}
+	}
+	if len(parts) == 1 {
+		parts = append(parts, "0")
+	}
+	return parts[0] + "." + parts[1]
 }
 
 // ---------------------------------------------------------------- inside simulators

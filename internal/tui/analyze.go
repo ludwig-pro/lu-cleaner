@@ -1,8 +1,10 @@
 package tui
 
 import (
-	"bufio"
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,18 +24,17 @@ import (
 
 // anEntry is one child of a listed directory.
 type anEntry struct {
-	name     string
-	path     string
-	isDir    bool
-	isLink   bool
-	size     int64
-	files    int64
-	newest   time.Time
-	sized    bool
-	errs     int64
-	tag      string
-	worktree string // main repo of a linked worktree ("" if not a worktree)
-	gitRepo  bool
+	name   string
+	path   string
+	isDir  bool
+	isLink bool
+	size   int64
+	files  int64
+	newest time.Time
+	sized  bool
+	errs   int64
+	tag    string
+	git    gitInfo // repository / linked worktree / other checkout (directories only)
 }
 
 // anDir is a listed directory with its own cursor, so going back is instant.
@@ -91,25 +92,26 @@ type analyzeModel struct {
 	pending map[string]bool
 	pool    *sizePool
 
-	sort       anSort
-	showHidden bool
-	marked     map[string]*anEntry
-	mode       anMode
-	confirm    []*anEntry
-	confTotal  int64
-	input      lineInput
-	hint       string
-	result     *clean.Summary
-	status     string
-	statusKind statusKind
-	w, h       int
-	spin       spinner.Model
-	disk       sysx.Disk
-	diskErr    error
-	quitting   bool
-	spinning   bool
-	deleting   *deleteRun
-	pendingCmd tea.Cmd
+	sort        anSort
+	showHidden  bool
+	marked      map[string]*anEntry
+	mode        anMode
+	confirm     []*anEntry // entries the confirmation dialog deletes
+	confRefused []*anEntry // marked entries left out: git repositories and checkouts
+	confTotal   int64
+	input       lineInput
+	hint        string
+	result      *clean.Summary
+	status      string
+	statusKind  statusKind
+	w, h        int
+	spin        spinner.Model
+	disk        sysx.Disk
+	diskErr     error
+	quitting    bool
+	spinning    bool
+	deleting    *deleteRun
+	pendingCmd  tea.Cmd
 
 	diskFn   func(string) (sysx.Disk, error)
 	revealFn func(string) error
@@ -232,16 +234,7 @@ func listDir(path string) tea.Msg {
 			e.size = allocated(fi)
 		case fi.IsDir():
 			e.isDir = true
-			if gi, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
-				if gi.IsDir() {
-					e.gitRepo = true
-				} else {
-					e.worktree = worktreeMain(filepath.Join(p, ".git"))
-					if e.worktree == "" {
-						e.worktree = "?"
-					}
-				}
-			}
+			e.git = classifyGit(p)
 		default:
 			e.sized = true
 			e.size = allocated(fi)
@@ -258,40 +251,6 @@ func allocated(fi os.FileInfo) int64 {
 		return st.Blocks * 512
 	}
 	return fi.Size()
-}
-
-// worktreeMain parses a linked worktree's .git file ("gitdir: <main>/.git/worktrees/<name>")
-// and returns the main repository directory.
-func worktreeMain(gitFile string) string {
-	f, err := os.Open(gitFile)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	if !sc.Scan() {
-		return ""
-	}
-	line := strings.TrimSpace(sc.Text())
-	gitdir, ok := strings.CutPrefix(line, "gitdir:")
-	if !ok {
-		return ""
-	}
-	gitdir = strings.TrimSpace(gitdir)
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(filepath.Dir(gitFile), gitdir)
-	}
-	gitdir = filepath.Clean(gitdir)
-	// <main>/.git/worktrees/<name>
-	wt := filepath.Dir(gitdir)
-	if filepath.Base(wt) != "worktrees" {
-		return ""
-	}
-	dotgit := filepath.Dir(wt)
-	if filepath.Base(dotgit) != ".git" {
-		return ""
-	}
-	return filepath.Dir(dotgit)
 }
 
 var knownDirs = map[string]string{
@@ -334,14 +293,12 @@ func annotate(e *anEntry) string {
 	if !e.isDir {
 		return ""
 	}
-	if e.worktree != "" {
-		return "🌳 linked worktree"
+	if e.git.kind != gitNone {
+		// git first: a repository named "build" is not a build output
+		return e.git.label
 	}
 	if t, ok := knownDirs[e.name]; ok {
 		return t
-	}
-	if e.gitRepo {
-		return "git repo"
 	}
 	return ""
 }
@@ -663,9 +620,13 @@ func (m *analyzeModel) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 	case " ":
 		if e := m.curEntry(); e != nil {
-			if m.marked[e.path] != nil {
+			switch {
+			case m.marked[e.path] != nil:
 				delete(m.marked, e.path)
-			} else {
+			case e.refusal() != "":
+				m.setStatus(stWarn, fmt.Sprintf("%s is %s — the analyzer never deletes it", e.name, e.refusal()))
+				return nil
+			default:
 				m.marked[e.path] = e
 			}
 			m.move(1)
@@ -735,28 +696,62 @@ func (m *analyzeModel) rescan() tea.Cmd {
 func (m *analyzeModel) openConfirm() {
 	var targets []*anEntry
 	if len(m.marked) > 0 {
-		for _, e := range m.marked {
+		for p, e := range m.marked {
+			// a mark inside a directory deleted since then is stale
+			if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
+				delete(m.marked, p)
+				continue
+			}
 			targets = append(targets, e)
 		}
 		sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
-	} else if e := m.curEntry(); e != nil {
-		targets = []*anEntry{e}
+	}
+	if len(targets) == 0 {
+		if e := m.curEntry(); e != nil {
+			targets = []*anEntry{e}
+		}
 	}
 	if len(targets) == 0 {
 		return
 	}
-	var total int64
-	items := m.itemsFor(targets)
-	total = core.Total(items)
-	m.confirm = targets
-	m.confTotal = total
+	// Repositories, submodules and unverified checkouts are never deleted:
+	// they do not even reach the executor. The listing may be old: classify
+	// again now (a clone or `git worktree add` may have happened since).
+	var ok, refused []*anEntry
+	for _, e := range targets {
+		if e.isDir && !e.isLink {
+			e.git = classifyGit(e.path)
+			e.tag = annotate(e)
+		}
+		if e.refusal() != "" {
+			refused = append(refused, e)
+			delete(m.marked, e.path) // it can never be deleted here: do not keep it marked
+		} else {
+			ok = append(ok, e)
+		}
+	}
+	if len(ok) == 0 {
+		e := refused[0]
+		msg := fmt.Sprintf("%s is %s — the analyzer never deletes it", e.name, e.refusal())
+		if len(refused) > 1 {
+			msg = fmt.Sprintf("%s: git repositories or checkouts — the analyzer never deletes them", plural(len(refused), "marked entry"))
+		}
+		m.setStatus(stWarn, msg)
+		return
+	}
+	keep, _ := splitTrash(m.itemsFor(ok), m.opt.Clean.Trash)
+	m.confirm = ok
+	m.confRefused = refused
+	m.confTotal = core.Total(keep)
 	m.input = lineInput{active: true}
 	m.hint = ""
 	m.mode = anConfirm
 }
 
 // itemsFor builds the synthetic items handed to clean.Run: everything goes
-// through the safety guard like any other deletion.
+// through the safety guard like any other deletion. A verified linked
+// worktree is removed by git from its repository's common dir (git refuses
+// dirty or locked ones); any other entry holding git data is report-only.
 func (m *analyzeModel) itemsFor(es []*anEntry) []*core.Item {
 	items := make([]*core.Item, 0, len(es))
 	for _, e := range es {
@@ -773,11 +768,18 @@ func (m *analyzeModel) itemsFor(es []*anEntry) []*core.Item {
 			Method:     core.MethodDelete,
 			Selectable: true,
 		}
-		if e.worktree != "" && e.worktree != "?" {
-			// a linked worktree: let git remove it (refuses dirty/unpushed ones)
+		switch {
+		case e.isWorktree():
 			it.Method = core.MethodWorktree
-			it.Project = e.worktree
+			it.Project = e.git.common
 			it.Kind = "worktree"
+			if e.git.locked {
+				it.Meta = map[string]string{"locked": "true"}
+			}
+		case e.refusal() != "":
+			it.Method = core.MethodReport
+			it.Selectable = false
+			it.Note = e.refusal()
 		}
 		items = append(items, it)
 	}
@@ -806,6 +808,7 @@ func (m *analyzeModel) confirmKey(k tea.KeyMsg) tea.Cmd {
 
 func (m *analyzeModel) startDelete() tea.Cmd {
 	items := m.itemsFor(m.confirm)
+	m.confRefused = nil
 	m.mode = anDeleting
 	fn, opts, ctx := m.cleanFn, m.opt.Clean, m.ctx
 	run := &deleteRun{done: make(chan struct{})}
@@ -843,12 +846,19 @@ func (m *analyzeModel) applyDelete(sum *clean.Summary) {
 	if sum == nil {
 		return
 	}
+	trashDir := filepath.Join(m.opt.Clean.Home, ".Trash")
+	trashed := false
 	for _, r := range sum.Results {
 		if r.Status != clean.StatusDone || r.Item == nil {
 			continue
 		}
 		p := r.Item.Path
-		delete(m.marked, p)
+		// marks on the entry and on anything inside it are gone with it
+		for k := range m.marked {
+			if fsx.Within(k, p) {
+				delete(m.marked, k)
+			}
+		}
 		// drop the entry from its parent listing
 		if d := m.dirs[filepath.Dir(p)]; d != nil {
 			keep := d.entries[:0]
@@ -861,11 +871,15 @@ func (m *analyzeModel) applyDelete(sum *clean.Summary) {
 			delete(d.byName, filepath.Base(p))
 			d.dirty = true
 		}
-		// ancestors shrink by what was freed
+		// ancestors shrink by what was freed; a move to the Trash frees
+		// nothing, so the ancestors of the Trash keep their size
+		moved := movedToTrash(r, sum.Trash)
+		trashed = trashed || moved
 		freed, files := r.Item.Size, r.Item.Files
 		m.forget(p)
 		for a := filepath.Dir(p); ; a = filepath.Dir(a) {
-			if st, ok := m.sizes[a]; ok {
+			// (case/normalization-insensitive: the root may be typed as /users/x)
+			if st, ok := m.sizes[a]; ok && !(moved && safety.Within(trashDir, a)) {
 				st.Bytes = max(0, st.Bytes-freed)
 				st.Files = max(0, st.Files-files)
 				m.setSize(a, st)
@@ -874,6 +888,9 @@ func (m *analyzeModel) applyDelete(sum *clean.Summary) {
 				break
 			}
 		}
+	}
+	if trashed {
+		m.remeasure(trashDir)
 	}
 	// the current directory may have been inside a deleted path
 	if !fsx.IsDir(m.cwd) {
@@ -884,4 +901,23 @@ func (m *analyzeModel) applyDelete(sum *clean.Summary) {
 		m.pendingCmd = m.enter(p, "")
 	}
 	m.refreshDisk()
+}
+
+// remeasure drops what is cached about path (its size, its listing) and
+// measures it again if it is shown in a listed directory.
+func (m *analyzeModel) remeasure(path string) {
+	m.forget(path)
+	delete(m.pending, path)
+	d := m.dirs[filepath.Dir(path)]
+	if d == nil || d.byName == nil {
+		return
+	}
+	e := d.byName[filepath.Base(path)]
+	if e == nil || !e.isDir || e.isLink || e.path != path {
+		return
+	}
+	e.sized = false
+	d.dirty = true
+	m.pending[path] = true
+	m.pool.push(path)
 }

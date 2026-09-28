@@ -51,7 +51,8 @@ type Entry struct {
 	Mode         Mode
 	// OlderThan only keeps matches whose mtime is older than this.
 	OlderThan time.Duration
-	// KeepLatest (Each mode) keeps the N most recently modified matches out.
+	// KeepLatest (Each mode) keeps the N most recently modified matches out
+	// (raised to config keep_latest when that is higher).
 	KeepLatest int
 	// AllowGitRepo lets the guard remove a match that is a git repository.
 	AllowGitRepo bool
@@ -164,15 +165,25 @@ func (e *Entry) Expand(env *core.Env) []match {
 			out = append(out, match{path: m, mtime: fi.ModTime(), external: ext})
 		}
 	}
-	if e.Mode == Each && e.KeepLatest > 0 && len(out) > 0 {
+	if keep := e.keepLatest(env); e.Mode == Each && keep > 0 && len(out) > 0 {
 		sort.Slice(out, func(i, j int) bool { return out[i].mtime.After(out[j].mtime) })
-		if len(out) <= e.KeepLatest {
+		if len(out) <= keep {
 			return nil
 		}
-		out = out[e.KeepLatest:]
+		out = out[keep:]
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
 	return out
+}
+
+// keepLatest is how many of the newest matches an Each entry keeps out: the
+// entry's own KeepLatest, raised to config keep_latest (env.KeepLatest).
+// Entries without KeepLatest keep nothing.
+func (e *Entry) keepLatest(env *core.Env) int {
+	if e.KeepLatest <= 0 {
+		return 0
+	}
+	return max(e.KeepLatest, env.KeepLatest)
 }
 
 // onOtherVolume reports whether p really lives on another device than home
@@ -182,11 +193,21 @@ func onOtherVolume(home, p string) (external, ok bool) {
 	if err != nil {
 		return false, false
 	}
-	var hs, ps unix.Stat_t
-	if unix.Stat(home, &hs) != nil || unix.Stat(real, &ps) != nil {
+	hd, err1 := devOf(home)
+	pd, err2 := devOf(real)
+	if err1 != nil || err2 != nil {
 		return false, false
 	}
-	return hs.Dev != ps.Dev, true
+	return hd != pd, true
+}
+
+// devOf returns the device of a path, following symlinks (test seam).
+var devOf = func(p string) (uint64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(p, &st); err != nil {
+		return 0, err
+	}
+	return uint64(st.Dev), nil
 }
 
 func excludedName(base string, globs []string) bool {
@@ -213,8 +234,24 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 		it.Method = core.MethodReport
 		it.Command = nil
 		it.Selectable = false
+		it.Recommended = false
 		it.LastUsed = m.mtime
 		it.Warn = "on external volume — no internal gain"
+		// Measure it where it really lives (the match may be a symlink to
+		// the other volume): an unmeasured report item (size 0) is hidden
+		// by the scan table and the dashboard.
+		it.Sizing = true
+		emit(it.Clone())
+		real := m.path
+		if r, err := filepath.EvalSymlinks(m.path); err == nil {
+			real = r
+		}
+		st, _ := fsx.Size(ctx, real, &fsx.Options{CrossDevice: true})
+		if ctx.Err() != nil {
+			return
+		}
+		it.Sizing = false
+		it.Size, it.Files = st.Bytes, st.Files
 		emit(it)
 	}
 	if len(ms) == 0 {

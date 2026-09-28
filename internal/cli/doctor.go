@@ -54,6 +54,9 @@ type doctorCategory struct {
 	Size        int64  `json:"size"`
 	Recommended int64  `json:"recommended"`
 	Items       int    `json:"items"`
+	// Shared is the part of Size inside items of another category (counted
+	// once in the total).
+	Shared int64 `json:"shared,omitempty"`
 }
 
 type doctorReport struct {
@@ -155,7 +158,7 @@ func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
 		groups := groupByCategory(displayItems(res.Items, f, env.Now), env.Now, s.staleAfter, "size")
 		for _, g := range groups {
 			r.Categories = append(r.Categories, doctorCategory{
-				ID: string(g.info.ID), Title: g.info.Title, Size: g.total, Recommended: g.recoB, Items: len(g.items),
+				ID: string(g.info.ID), Title: g.info.Title, Size: g.total, Recommended: g.recoB, Items: len(g.items), Shared: g.shared,
 			})
 		}
 		all, rec := cleanableAndRecommended(groups)
@@ -234,25 +237,25 @@ func (c *cli) printDoctor(r *doctorReport) {
 		o.println("  none " + o.paint(o.faint, "— deleted files free their space right away"))
 	} else {
 		for _, sn := range r.Snapshots {
-			o.println("  " + o.paint(o.faint, sn))
+			o.println("  " + o.paint(o.faint, sanitize(sn)))
 		}
 		o.println("  They pin the blocks of deleted files: that space comes back only when they")
 		o.println("  expire (about 24h) or are thinned. To reclaim it now (lu-cleaner never runs these):")
 		o.println("    " + o.paint(o.bold, "tmutil thinlocalsnapshots / 999999999999 4"))
-		o.println("    " + o.paint(o.bold, "sudo tmutil deletelocalsnapshots "+snapshotDate(r.Snapshots[0])))
+		o.println("    " + o.paint(o.bold, "sudo tmutil deletelocalsnapshots "+sanitize(snapshotDate(r.Snapshots[0]))))
 	}
 
 	// Trash
 	section("Trash")
 	switch {
 	case !r.Trash.Readable && r.Trash.Size == 0:
-		o.println("  unknown " + o.paint(o.faint, "— "+r.Trash.Note))
+		o.println("  unknown " + o.paint(o.faint, "— "+sanitize(r.Trash.Note)))
 	case r.Trash.Size == 0:
 		o.println("  empty")
 	default:
 		o.printf("  %s in %s — empty it to free the space\n", o.sizeText(r.Trash.Size), plural(int(r.Trash.Files), "file", "files"))
 		if r.Trash.Note != "" {
-			o.println("  " + o.paint(o.faint, r.Trash.Note))
+			o.println("  " + o.paint(o.faint, sanitize(r.Trash.Note)))
 		}
 	}
 
@@ -300,6 +303,12 @@ func (c *cli) printDoctor(r *doctorReport) {
 			}
 			t.render(o, "  ", true)
 			o.printf("  %s %s · %s recommended\n", o.paint(o.bold, "Total"), o.sizeText(r.Total), o.paint(o.accent, fsx.Bytes(r.Recommended)))
+			for _, cat := range r.Categories {
+				if cat.Shared > 0 {
+					o.println(o.paint(o.faint, "  Category sizes overlap (items inside items of another category): the total counts those bytes once."))
+					break
+				}
+			}
 			if r.Recommended > 0 {
 				o.println("  → run: " + o.paint(o.bold, "lu-cleaner clean --smart"))
 			}
@@ -310,7 +319,7 @@ func (c *cli) printDoctor(r *doctorReport) {
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			o.println("  " + o.paint(o.warn, "warning: provider "+id+": "+r.Errors[id]))
+			o.println("  " + o.paint(o.warn, "warning: provider "+sanitize(id)+": "+sanitize(r.Errors[id])))
 		}
 	}
 

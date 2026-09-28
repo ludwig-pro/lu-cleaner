@@ -63,6 +63,12 @@ func TestLeftoversOfUninstalledApps(t *testing.T) {
 				t.Errorf("installed=%v %s: got %d items, want %d", installed, kind, got, n)
 			}
 		}
+		if !installed {
+			prof := r.one(t, "antigravity-browser-profile")
+			if prof.Risk != core.RiskCaution || !prof.NoRecommend || core.Recommend(prof, f.now, 14*day) {
+				t.Errorf("a browser profile with logins is caution, never preselected: %v %v", prof.Risk, prof.NoRecommend)
+			}
+		}
 		rec := r.one(t, "antigravity-browser-recordings")
 		if rec.Risk != core.RiskCaution {
 			t.Errorf("recordings risk = %v", rec.Risk)
@@ -210,5 +216,24 @@ func TestProviderMetadata(t *testing.T) {
 	cats := p.Categories()
 	if len(cats) != 2 || cats[0] != core.CatAI || cats[1] != core.CatIDE {
 		t.Errorf("categories = %v", cats)
+	}
+}
+
+// Apps installed outside the usual folders are found through Spotlight: their
+// data is not "left over".
+func TestFindAppThroughSpotlight(t *testing.T) {
+	f := newFixture(t)
+	app := f.dir("Tools/Antigravity.app", 0)
+	trashed := f.dir(".Trash/ChatGPT Atlas.app", 0)
+	f.runner.out["mdfind kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == 'Antigravity.app'"] = app + "\n"
+	f.runner.out["mdfind kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == 'ChatGPT Atlas.app'"] = trashed + "\n"
+	f.file(".gemini/antigravity-browser-profile/Default/Login Data", 5000, 0)
+	f.file("Library/Application Support/com.openai.atlas/browser-data/x", 5000, 0)
+	r := f.scan()
+	if n := len(r.byKind("antigravity-browser-profile")); n != 0 {
+		t.Errorf("Antigravity is installed in ~/Tools: its profile is not a leftover")
+	}
+	if n := len(r.byKind("chatgpt-atlas-leftover")); n != 1 {
+		t.Errorf("an app in the Trash is not installed: %d leftover items", n)
 	}
 }

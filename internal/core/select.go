@@ -65,6 +65,8 @@ func (f *Filter) Match(it *Item, now time.Time) bool {
 // Recommend is the "smart select" policy: what a sensible user would clean
 // without thinking twice.
 //   - never: caution/never items, items with a warning (Warn), items being sized
+//   - provider veto (Item.NoRecommend): never, whatever the risk and age
+//     (Item.Recommended=false only means "no opinion": it cannot veto)
 //   - project artifacts of a project active in the last 24 hours: never
 //   - provider-forced (Item.Recommended): yes
 //   - safe items: yes, if not tiny
@@ -108,9 +110,13 @@ func TopLevel(items []*Item) []*Item {
 			targets = append(targets, target{it.Covers, i})
 		}
 	}
+	// Sort by path components: with a plain string order, siblings such as
+	// "/a/app-web" or "/a/app 2" ('-' and ' ' sort before '/') would land
+	// between "/a/app" and "/a/app/node_modules" and pop the parent off the
+	// ancestor stack below, keeping both parent and child.
 	sort.SliceStable(targets, func(a, b int) bool {
 		if targets[a].path != targets[b].path {
-			return targets[a].path < targets[b].path
+			return pathLess(targets[a].path, targets[b].path)
 		}
 		return targets[a].idx < targets[b].idx
 	})
@@ -126,7 +132,7 @@ func TopLevel(items []*Item) []*Item {
 	for _, t := range targets {
 		for len(stack) > 0 {
 			top := stack[len(stack)-1].path
-			if t.path == top || strings.HasPrefix(t.path, top+"/") {
+			if within(t.path, top) {
 				break
 			}
 			stack = stack[:len(stack)-1]
@@ -164,17 +170,49 @@ func TopLevel(items []*Item) []*Item {
 		}
 		if uncovered[i] > 0 {
 			withTargets = append(withTargets, it)
-			min := ts[0]
+			first := ts[0]
 			for _, p := range ts[1:] {
-				if p < min {
-					min = p
+				if pathLess(p, first) {
+					first = p
 				}
 			}
-			firstPath[it] = min
+			firstPath[it] = first
 		}
 	}
-	sort.SliceStable(withTargets, func(a, b int) bool { return firstPath[withTargets[a]] < firstPath[withTargets[b]] })
+	sort.SliceStable(withTargets, func(a, b int) bool { return pathLess(firstPath[withTargets[a]], firstPath[withTargets[b]]) })
 	return append(withTargets, commands...)
+}
+
+// pathLess orders paths component by component ('/' sorts before every other
+// byte), so that a directory is always immediately followed by its
+// descendants: "/a/app" < "/a/app/x" < "/a/app-web" < "/a/app.old".
+func pathLess(a, b string) bool {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		ca, cb := a[i], b[i]
+		if ca == cb {
+			continue
+		}
+		if ca == '/' {
+			return true
+		}
+		if cb == '/' {
+			return false
+		}
+		return ca < cb
+	}
+	return len(a) < len(b)
+}
+
+// within reports whether p equals dir or is below it.
+func within(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	if dir == "/" {
+		return strings.HasPrefix(p, "/")
+	}
+	return strings.HasPrefix(p, dir+"/")
 }
 
 // Total sums Freed() over the cleanable top-level items (no double counting

@@ -2,7 +2,10 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,21 +17,30 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 )
 
 // confirmState backs the "Clean N items — X GB?" modal.
 type confirmState struct {
 	items    []*core.Item // top-level selected items (what clean.Run will process)
+	all      []*core.Item // the whole selection, handed to clean.Run (it plans nested items itself)
 	total    int64
 	byRisk   [4]riskCount
 	commands []string
 	guards   []string
 	running  []string
 	checking bool
-	caution  int
+	caution  int          // caution items selected or inside a selected item: "type yes" needed
+	nested   []*core.Item // caution items inside a selected item (not selected themselves)
+	selected int          // selected items (top-level ones plus those nested in them)
+	hidden   int          // selected items hidden by the text filter
+	trashN   int          // items skipped because Trash mode cannot handle them
 	largest  []*core.Item
 	input    lineInput
 	hint     string
+	// sig identifies what the dialog promised to clean; startClean refuses to
+	// run when the selection no longer matches it (scan upserts, rejections).
+	sig string
 }
 
 type riskCount struct {
@@ -47,7 +59,9 @@ type cleanRun struct {
 	totalBytes int64
 	processed  int
 	procBytes  int64
-	freed      int64
+	freed      int64 // really freed
+	trashed    int64 // moved to the Trash (freed once it is emptied)
+	trash      bool
 	results    []clean.Result
 	start      time.Time
 	finished   bool
@@ -98,12 +112,32 @@ func waitClean(ch <-chan tea.Msg) tea.Cmd {
 
 func (m *pickerModel) openConfirm() tea.Cmd {
 	m.refresh()
-	if len(m.selItems) == 0 {
+	c := m.buildConfirm()
+	if c == nil {
 		m.setStatus(stInfo, "Nothing selected — space selects an item, a does a smart selection")
 		return nil
 	}
-	top := core.TopLevel(m.selItems)
-	c := &confirmState{items: top, total: core.Total(m.selItems)}
+	m.confirm = c
+	m.mode = modeConfirm
+	if len(c.guards) == 0 || m.runningFn == nil {
+		return nil
+	}
+	c.checking = true
+	guards, fn := append([]string(nil), c.guards...), m.runningFn
+	return func() tea.Msg { return runningMsg{names: fn(guards...)} }
+}
+
+// buildConfirm computes the confirmation dialog for the current selection
+// (nil when nothing is selected). It has no side effect, so startClean can
+// rebuild it to check that nothing changed while the dialog was open.
+func (m *pickerModel) buildConfirm() *confirmState {
+	if len(m.selItems) == 0 {
+		return nil
+	}
+	keep, skip := splitTrash(m.selItems, m.trash)
+	top := core.TopLevel(keep)
+	c := &confirmState{items: top, all: append([]*core.Item(nil), m.selItems...),
+		total: core.Total(keep), selected: len(m.selItems), trashN: len(skip)}
 	seenCmd := map[string]bool{}
 	seenGuard := map[string]bool{}
 	addCmd := func(argv []string) {
@@ -120,9 +154,6 @@ func (m *pickerModel) openConfirm() tea.Cmd {
 		r := min(max(it.Risk, core.RiskSafe), core.RiskNever)
 		c.byRisk[r].n++
 		c.byRisk[r].size += it.Freed()
-		if it.Risk >= core.RiskCaution {
-			c.caution++
-		}
 		switch it.Method {
 		case core.MethodCommand:
 			addCmd(it.Command)
@@ -139,20 +170,92 @@ func (m *pickerModel) openConfirm() tea.Cmd {
 			}
 		}
 	}
+
+	// Caution content: every selected caution item, and every known caution
+	// item lying inside a selected item (cleaning the parent wipes it too).
+	caution := map[string]bool{}
+	for _, it := range keep {
+		if it.Risk >= core.RiskCaution {
+			caution[it.ID] = true
+		}
+	}
+	var roots []string
+	for _, it := range top {
+		roots = append(roots, it.Targets()...)
+		if len(it.Targets()) == 0 && it.Covers != "" {
+			roots = append(roots, it.Covers)
+		}
+	}
+	if len(roots) > 0 {
+		keys := make([]string, len(roots))
+		for i, r := range roots {
+			keys[i] = safety.Key(r)
+		}
+		for _, id := range m.order {
+			it := m.items[id]
+			if it == nil || it.Risk < core.RiskCaution || caution[id] || !allWithin(it.Targets(), keys) {
+				continue
+			}
+			caution[id] = true
+			c.nested = append(c.nested, it)
+		}
+	}
+	sort.SliceStable(c.nested, func(i, j int) bool { return c.nested[i].Freed() > c.nested[j].Freed() })
+	c.caution = len(caution)
+
+	vis := make(map[string]bool, len(m.visible))
+	for _, it := range m.visible {
+		vis[it.ID] = true
+	}
+	for _, it := range m.selItems {
+		if !vis[it.ID] {
+			c.hidden++
+		}
+	}
+
 	c.largest = append([]*core.Item(nil), top...)
 	sort.SliceStable(c.largest, func(i, j int) bool { return c.largest[i].Freed() > c.largest[j].Freed() })
 	if len(c.largest) > 5 {
 		c.largest = c.largest[:5]
 	}
 	c.input.active = c.caution > 0
-	m.confirm = c
-	m.mode = modeConfirm
-	if len(c.guards) == 0 || m.runningFn == nil {
-		return nil
+
+	// signature: what is cleaned, how, and what needs typing yes
+	var sig []string
+	for _, it := range append(append([]*core.Item(nil), top...), skip...) {
+		sig = append(sig, strings.Join([]string{it.ID, it.Risk.String(), it.Method.String(),
+			strings.Join(it.Targets(), "\x00"), it.Covers, strings.Join(it.Command, "\x00")}, "\x01"))
 	}
-	c.checking = true
-	guards, fn := append([]string(nil), c.guards...), m.runningFn
-	return func() tea.Msg { return runningMsg{names: fn(guards...)} }
+	ids := make([]string, 0, len(caution))
+	for id := range caution {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	sig = append(sig, "caution:"+strings.Join(ids, ","), fmt.Sprintf("trash:%v", m.trash))
+	c.sig = strings.Join(sig, "\n")
+	return c
+}
+
+// allWithin reports whether ts is not empty and each path lies inside (or
+// is) one of rootKeys (safety.Key forms), comparing paths the way APFS does
+// (case and Unicode normalization insensitive).
+func allWithin(ts, rootKeys []string) bool {
+	if len(ts) == 0 {
+		return false
+	}
+	for _, p := range ts {
+		k, in := safety.Key(p), false
+		for _, r := range rootKeys {
+			if k == r || strings.HasPrefix(k, r+"/") || r == "/" {
+				in = true
+				break
+			}
+		}
+		if !in {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *pickerModel) confirmKey(k tea.KeyMsg) tea.Cmd {
@@ -198,17 +301,28 @@ func (m *pickerModel) cleanOptions() clean.Options {
 }
 
 func (m *pickerModel) startClean() tea.Cmd {
-	c := m.confirm
-	items := c.items
+	// The scan keeps running behind the dialog: an item may have been
+	// rejected, re-classified or removed since it opened. Rebuild the dialog
+	// from the current items and only clean what the user saw.
+	m.refresh()
+	c := m.buildConfirm()
+	if c == nil || c.sig != m.confirm.sig {
+		m.confirm = nil
+		m.mode = modeBrowse
+		m.setStatus(stWarn, "Selection changed while confirming — nothing was touched; review it and press d again")
+		return nil
+	}
+	items := c.all // current values (fresh inode snapshots)
 	opts := m.cleanOptions()
 	ctx, cancel := context.WithCancel(m.ctx)
 	run := &cleanRun{
 		cancel:     cancel,
-		ch:         make(chan tea.Msg, len(items)+2), // one result per top-level item: never blocks
+		ch:         make(chan tea.Msg, len(items)+2), // at most one result per item: never blocks
 		done:       make(chan struct{}),
-		total:      len(items),
+		total:      len(c.items) + c.trashN,
 		totalBytes: c.total,
 		start:      time.Now(),
+		trash:      opts.Trash,
 	}
 	m.run = run
 	m.confirm = nil
@@ -232,10 +346,14 @@ func (m *pickerModel) applyClean(b cleanBatchMsg) tea.Cmd {
 	}
 	for _, r := range b.results {
 		run.processed++
-		if r.Item != nil {
-			run.procBytes += r.Item.Freed()
+		run.total = max(run.total, run.processed) // nested worktrees get their own result
+		if r.Item != nil && !(r.Status == clean.StatusSkipped && r.Message == trashSkipMsg) {
+			run.procBytes += r.Item.Freed() // Trash-mode skips are not part of totalBytes
 		}
-		if r.Status == clean.StatusDone {
+		switch {
+		case movedToTrash(r, run.trash):
+			run.trashed += max(r.Trashed, r.Freed)
+		case r.Status == clean.StatusDone:
 			run.freed += r.Freed
 		}
 		run.results = append(run.results, r)
@@ -278,6 +396,13 @@ func (m *pickerModel) finishClean() {
 		for _, p := range r.Item.Targets() {
 			gone[p] = true
 		}
+		// a command that removes a whole directory (simctl delete <udid>)
+		// takes the items inside it along
+		if r.Item.Method == core.MethodCommand && r.Item.Covers != "" {
+			if _, err := os.Lstat(r.Item.Covers); errors.Is(err, fs.ErrNotExist) {
+				gone[r.Item.Covers] = true
+			}
+		}
 	}
 	if len(doneIDs) > 0 {
 		keep := m.order[:0]
@@ -302,7 +427,15 @@ func (m *pickerModel) finishClean() {
 	case m.lastSummary != nil && m.lastSummary.DryRun:
 		m.setStatus(stInfo, "Dry-run finished: %d item(s) would be cleaned — nothing was touched", st[clean.StatusDryRun])
 	case st[clean.StatusFailed]+st[clean.StatusSkipped] > 0:
-		m.setStatus(stWarn, "%d cleaned, %d skipped, %d failed — remaining items are still listed", st[clean.StatusDone], st[clean.StatusSkipped], st[clean.StatusFailed])
+		done := "cleaned"
+		if run.trash {
+			done = "moved to the Trash" // Trash mode only ever moves: nothing freed
+		}
+		m.setStatus(stWarn, "%d %s, %d skipped, %d failed — remaining items are still listed", st[clean.StatusDone], done, st[clean.StatusSkipped], st[clean.StatusFailed])
+	case run.trashed > 0 && run.freed > 0:
+		m.setStatus(stOK, "%d cleaned · %s freed · %s moved to the Trash (not freed until you empty it)", st[clean.StatusDone], fsx.Bytes(run.freed), fsx.Bytes(run.trashed))
+	case run.trashed > 0:
+		m.setStatus(stOK, "%d moved to the Trash · %s (not freed until you empty it)", st[clean.StatusDone], fsx.Bytes(run.trashed))
 	default:
 		m.setStatus(stOK, "%d cleaned · %s freed", st[clean.StatusDone], fsx.Bytes(run.freed))
 	}
@@ -345,11 +478,58 @@ func (m *pickerModel) waitCleanFinished() {
 	}
 }
 
+// trashSkipMsg is why Trash mode leaves worktree and command items alone.
+const trashSkipMsg = "not possible in Trash mode (it would delete permanently)"
+
+// splitTrash separates, in Trash mode, the items that cannot be moved to the
+// Trash: `git worktree remove` and commands delete permanently, so they are
+// skipped rather than run behind a "move to Trash" promise.
+func splitTrash(items []*core.Item, trash bool) (keep, skip []*core.Item) {
+	if !trash {
+		return items, nil
+	}
+	for _, it := range items {
+		if it.Method == core.MethodWorktree || it.Method == core.MethodCommand {
+			skip = append(skip, it)
+		} else {
+			keep = append(keep, it)
+		}
+	}
+	return keep, skip
+}
+
+// movedToTrash reports a done result whose item went to the Trash, which
+// frees nothing until the Trash is emptied.
+func movedToTrash(r clean.Result, trash bool) bool {
+	if r.Status != clean.StatusDone || r.Item == nil {
+		return false
+	}
+	return r.Method == core.MethodTrash || r.Trashed > 0 || r.Item.Method == core.MethodTrash ||
+		trash && r.Item.Method == core.MethodDelete
+}
+
+// trashSplit sums the done results of s: bytes really freed, and bytes only
+// moved to the Trash (never reported as freed).
+func trashSplit(s *clean.Summary) (freed, moved int64, nMoved int) {
+	for _, r := range s.Results {
+		switch {
+		case movedToTrash(r, s.Trash):
+			moved += max(r.Trashed, r.Freed)
+			nMoved++
+		case r.Status == clean.StatusDone:
+			freed += r.Freed
+		}
+	}
+	return freed, moved, nMoved
+}
+
 // safeClean runs fn and turns a panic into failed results, so that a bug in
 // the executor never leaves the terminal in raw mode. progress is only called
-// for items that were not reported yet.
+// for items that were not reported yet. In Trash mode, worktree and command
+// items are not handed to fn: they are reported as skipped (trashSkipMsg).
 func safeClean(fn func(context.Context, []*core.Item, clean.Options, func(clean.Result)) *clean.Summary,
 	ctx context.Context, items []*core.Item, opt clean.Options, progress func(clean.Result)) (sum *clean.Summary) {
+	items, skipped := splitTrash(items, opt.Trash)
 	var mu sync.Mutex
 	reported := map[*core.Item]bool{}
 	report := func(r clean.Result) {
@@ -371,6 +551,16 @@ func safeClean(fn func(context.Context, []*core.Item, clean.Options, func(clean.
 				if !reported[it] && progress != nil {
 					progress(r)
 				}
+			}
+		}
+		if sum == nil {
+			sum = &clean.Summary{Trash: opt.Trash, DryRun: opt.DryRun}
+		}
+		for _, it := range skipped {
+			r := clean.Result{Item: it, Status: clean.StatusSkipped, Message: trashSkipMsg}
+			sum.Results = append(sum.Results, r)
+			if progress != nil {
+				progress(r)
 			}
 		}
 	}()

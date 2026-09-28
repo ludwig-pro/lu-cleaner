@@ -36,6 +36,7 @@ func (c *cli) runPicker(ctx context.Context, spec pickerSpec) error {
 	if len(provs) == 0 {
 		return errors.New("no scanner handles these categories")
 	}
+	provs = scopeProviders(s, provs)
 	c.propagateNoColor()
 	sum, err := c.Picker(ctx, tui.PickerOptions{
 		Env:        s.env,
@@ -91,11 +92,20 @@ func (c *cli) artifactsCmd() *cobra.Command {
 		Short: "npkill-like: node_modules, Pods, iOS/Android builds, .expo… per project",
 		Long: `Find project artifacts (node_modules, ios/Pods, ios/build, android/build,
 android/.gradle, .expo, dist…) below the project roots and pick what to delete.
-Roots default to the config "roots" or auto-detected folders (~/dev, ~/Projects…).
-With --yes, cleans without the picker (same rules as 'clean --yes').`,
+Roots default to the config "roots" or auto-detected folders (~/dev, ~/Projects…)
+plus the AI worktree folders. Roots given as arguments (or with --root) are the
+only folders scanned.
+With --yes, cleans without the picker (same rules as 'clean --yes').
+
+Kinds for --target: node_modules, ios-pods (or pods), ios-build, android-build,
+android-gradle, android-kotlin, android-cxx, expo, next, turbo, js-build, dist…
+(see the "kind" of items in 'lu-cleaner scan --json'). Outside an Android or iOS
+project, android-build is reported as gradle-build, ios-build as xcode-build,
+android-gradle as gradle-cache and android-kotlin as gradle-kotlin: either name
+matches both.`,
 		Example: `  lu-cleaner artifacts
   lu-cleaner artifacts ~/local_sources ~/conductor/repos
-  lu-cleaner artifacts -t node_modules -t pods --older-than 30d
+  lu-cleaner artifacts -t node_modules -t ios-pods --older-than 30d
   lu-cleaner artifacts --list --all
   lu-cleaner artifacts -y -t node_modules --older-than 60d -n`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -110,7 +120,7 @@ With --yes, cleans without the picker (same rules as 'clean --yes').`,
 			return c.listOrPick(cmd.Context(), list, spec, reportSpec{top: -1})
 		},
 	}
-	cmd.Flags().StringSliceVarP(&targets, "target", "t", nil, "artifact kinds to look for, e.g. node_modules, pods, android-build (repeatable)")
+	cmd.Flags().StringSliceVarP(&targets, "target", "t", nil, "artifact kinds to look for, e.g. node_modules, ios-pods (pods), android-build (repeatable)")
 	cmd.Flags().BoolVarP(&list, "list", "l", false, "print the list instead of opening the picker")
 	return cmd
 }
@@ -123,9 +133,15 @@ func (c *cli) worktreesCmd() *cobra.Command {
 		Short:   "Git worktrees left by Codex, Cursor, Conductor, Claude Code…",
 		Long: `List the git worktrees created by AI agents and by hand, with their tool,
 branch and status (clean, dirty, unpushed, orphan, merged), and pick what to
-remove. Removal uses 'git worktree remove' and refuses dirty, unpushed or
-locked worktrees unless --force. With --yes (no picker), worktrees of risk
-"caution" also need --risk caution.`,
+remove. Removal uses 'git worktree remove' and keeps the branch, so commits on
+a branch (pushed or not) stay in the main repository. Without --force it
+refuses a worktree that is locked, has uncommitted or untracked changes, has
+commits on no branch (detached HEAD), or contains another worktree or
+repository; --dry-run runs the same checks.
+
+With --yes (no picker), worktrees of risk "caution" and worktrees with a
+warning (ignored .env files that would be lost…) also need --risk caution.
+Worktrees are never moved to the Trash: with --trash they are skipped.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec := pickerSpec{

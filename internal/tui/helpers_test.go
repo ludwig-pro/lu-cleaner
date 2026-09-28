@@ -239,3 +239,30 @@ func checkFrame(t *testing.T, name, view string, w, h int) {
 		}
 	}
 }
+
+// fakeWorktree lays out, without git, a linked worktree wt of the repository
+// main as git does: main/.git/worktrees/<name>/{gitdir,commondir,HEAD} and a
+// wt/.git file pointing to that admin dir. It returns the admin dir.
+func fakeWorktree(t *testing.T, main, wt string) string {
+	t.Helper()
+	common := filepath.Join(main, ".git")
+	admin := filepath.Join(common, "worktrees", filepath.Base(wt))
+	for _, d := range []string{filepath.Join(common, "objects"), filepath.Join(common, "refs", "heads"), admin, wt} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(common, "HEAD"):     "ref: refs/heads/main\n",
+		filepath.Join(admin, "HEAD"):      "ref: refs/heads/" + filepath.Base(wt) + "\n",
+		filepath.Join(admin, "commondir"): "../..\n",
+		filepath.Join(admin, "gitdir"):    filepath.Join(wt, ".git") + "\n",
+		filepath.Join(wt, ".git"):         "gitdir: " + admin + "\n",
+	}
+	for p, content := range files {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return admin
+}

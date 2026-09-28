@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,12 @@ type fakeRepo struct {
 	tracked []string // tracked files (rel)
 	listErr bool     // ls-files --others fails (check-ignore fallback)
 	broken  bool     // every git command fails
+	// modified is what `git diff-files --name-only` lists; nil makes the
+	// command fail (activity from the source walk only).
+	modified []string
+	// untracked is what `git ls-files --others --exclude-standard
+	// --directory` lists ("new/" for a folder).
+	untracked []string
 }
 
 // fakeRunner simulates git per work tree (keyed by absolute path).
@@ -63,7 +70,7 @@ func (f *fakeRunner) Output(ctx context.Context, dir, name string, args ...strin
 	sub := ""
 	for i, a := range args {
 		switch a {
-		case "ls-files", "check-ignore":
+		case "ls-files", "check-ignore", "diff-files":
 			if sub == "" {
 				sub = a
 			}
@@ -80,9 +87,20 @@ func (f *fakeRunner) Output(ctx context.Context, dir, name string, args ...strin
 		return false
 	}
 	switch {
+	case sub == "diff-files":
+		if r.modified == nil {
+			return nil, exit1()
+		}
+		if len(r.modified) == 0 {
+			return nil, nil
+		}
+		return []byte(strings.Join(r.modified, "\x00") + "\x00"), nil
 	case sub == "ls-files" && has("--others"):
 		if r.listErr {
 			return nil, exit1()
+		}
+		if !has("--ignored") {
+			return []byte(strings.Join(r.untracked, "\x00") + "\x00"), nil
 		}
 		return []byte(strings.Join(r.ignored, "\x00") + "\x00"), nil
 	case sub == "check-ignore":
@@ -133,6 +151,7 @@ type fixture struct {
 	guard   *safety.Guard
 	prov    *Provider
 	inUse   map[string]string // dir -> pids
+	running []string          // processes running now (ProcessGuard)
 	devs    map[string]uint64 // overridden devices (external volumes)
 	extra   []string
 	emitted []*core.Item // emission order
@@ -163,6 +182,15 @@ func newFixture(t *testing.T) *fixture {
 		}
 		sort.Strings(pids)
 		return strings.Join(pids, ",")
+	}
+	f.prov.running = func(names ...string) []string {
+		var hit []string
+		for _, n := range names {
+			if slices.Contains(f.running, n) {
+				hit = append(hit, n)
+			}
+		}
+		return hit
 	}
 	f.prov.devOf = func(p string) (uint64, bool) {
 		for d, dev := range f.devs {
@@ -220,6 +248,10 @@ func (f *fixture) worktree(rel, main string, r *fakeRepo) {
 	f.mkdir(main + "/.git/worktrees/" + name)
 	f.file(main+"/.git/worktrees/"+name+"/HEAD", "ref: refs/heads/wt\n")
 	f.file(main+"/.git/worktrees/"+name+"/index", "")
+	// What `git worktree add` writes: the registry entry points back to the
+	// checkout's .git file.
+	f.file(main+"/.git/worktrees/"+name+"/gitdir", f.path(rel)+"/.git\n")
+	f.file(main+"/.git/worktrees/"+name+"/commondir", "../..\n")
 	f.file(rel+"/.git", "gitdir: "+admin+"\n")
 	f.runner.repos[f.path(rel)] = r
 }

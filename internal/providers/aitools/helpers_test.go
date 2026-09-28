@@ -82,6 +82,8 @@ func newFixture(t *testing.T) *fixture {
 		running:      func(names ...string) []string { return f.hit(names) },
 		appDirs:      []string{"~/Applications"},
 		resolverRoot: home,
+		// hermetic: the host's process table is only read by the tests that ask for it
+		execInside: func(string) bool { return false },
 	}
 	f.env = &core.Env{
 		Home:      home,

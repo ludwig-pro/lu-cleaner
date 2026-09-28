@@ -25,11 +25,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// keepLatest is the number of newest versions always kept for versioned SDK
-// packages (build-tools, platforms, cmake, NDK). Mirrors config.KeepLatest
-// (default 1), which is not passed to providers yet.
-const keepLatest = 1
-
 // Provider implements core.Provider.
 //
 // The unexported fields are seams for tests; New leaves them nil and Scan
@@ -170,6 +165,11 @@ func (s *scan) now() time.Time {
 	return s.env.Now
 }
 
+// keepLatest is the number of newest versions always kept for versioned SDK
+// packages (NDK, build-tools, platforms, cmake, sources) and Android Studio
+// settings: config keep_latest (env.KeepLatest), at least 1.
+func (s *scan) keepLatest() int { return max(1, s.env.KeepLatest) }
+
 // isStudioRunning reports (once per scan) whether Android Studio runs.
 func (s *scan) isStudioRunning() bool {
 	s.studioOnce.Do(func() { s.studioRunning = len(s.p.running(studioProcess)) > 0 })
@@ -255,9 +255,7 @@ func (s *scan) add(it *core.Item, measure []string, opt sizeOpt) {
 		}
 		it.Sizing = false
 		it.Size, it.Files = size, files
-		if reclaim < size {
-			it.Reclaim = reclaim
-		}
+		it.SetReclaim(reclaim) // 0 would mean "same as Size"
 		if opt.lastUsedFromNewest && newest.After(it.LastUsed) {
 			it.LastUsed = newest
 		}

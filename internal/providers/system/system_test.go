@@ -221,13 +221,13 @@ func TestDocker(t *testing.T) {
 	f := newFixture(t, "docker")
 	f.runner.bins["docker"] = true
 	f.runner.bins["colima"] = true
-	f.runner.out["docker version --format {{.Server.Version}}"] = "27.3.1\n"
-	f.runner.out["docker system df --format json"] = dockerDFOut
+	f.runner.out["docker --context colima-work version --format {{.Server.Version}}"] = "27.3.1\n"
+	f.runner.out["docker --context colima-work system df --format json"] = dockerDFOut
 	f.runner.out["docker context show"] = "colima-work\n"
 	items := f.scan()
 
 	bc := one(t, items, "docker-build-cache")
-	if bc.Method != core.MethodCommand || strings.Join(bc.Command, " ") != "docker builder prune -a -f" ||
+	if bc.Method != core.MethodCommand || strings.Join(bc.Command, " ") != "docker --context colima-work builder prune -a -f" ||
 		bc.Size != 512_500_000 || bc.Risk != core.RiskSafe || !core.Recommend(bc, f.now, 14*day) {
 		t.Errorf("build cache = %+v", bc)
 	}
@@ -235,7 +235,7 @@ func TestDocker(t *testing.T) {
 		t.Errorf("colima fstrim post command missing: %v", bc.PostCommands)
 	}
 	img := one(t, items, "docker-unused-images")
-	if strings.Join(img.Command, " ") != "docker image prune -a -f" || img.Size != 1_200_000_000 || img.Risk != core.RiskModerate {
+	if strings.Join(img.Command, " ") != "docker --context colima-work image prune -a -f" || img.Size != 1_200_000_000 || img.Risk != core.RiskModerate {
 		t.Errorf("images = %+v", img)
 	}
 	if core.Recommend(img, f.now, 14*day) {
@@ -391,16 +391,16 @@ func TestHomebrewCleanupTimeout(t *testing.T) {
 func TestGo(t *testing.T) {
 	f := newFixture(t, "go")
 	f.runner.bins["go"] = true
-	f.runner.out["go env GOCACHE GOMODCACHE"] = f.abs("Library/Caches/go-build") + "\n" + f.abs("go/pkg/mod") + "\n"
+	f.runner.out["env GOTOOLCHAIN=local go env GOCACHE GOMODCACHE"] = f.abs("Library/Caches/go-build") + "\n" + f.abs("go/pkg/mod") + "\n"
 	f.file("Library/Caches/go-build/00/abc-d", 20_000, 0)
 	f.file("go/pkg/mod/golang.org/x/sys@v0.1.0/unix/a.go", 20_000, 0)
 	items := f.scan()
 	bc := one(t, items, "go-build-cache")
-	if bc.Method != core.MethodCommand || strings.Join(bc.Command, " ") != "go clean -cache" || bc.Risk != core.RiskSafe || bc.Size < 20_000 {
+	if bc.Method != core.MethodCommand || strings.Join(bc.Command, " ") != "env GOTOOLCHAIN=local go clean -cache" || bc.Risk != core.RiskSafe || bc.Size < 20_000 {
 		t.Errorf("build cache = %+v", bc)
 	}
 	mc := one(t, items, "go-module-cache")
-	if strings.Join(mc.Command, " ") != "go clean -modcache" || mc.Risk != core.RiskModerate {
+	if strings.Join(mc.Command, " ") != "env GOTOOLCHAIN=local go clean -modcache" || mc.Risk != core.RiskModerate {
 		t.Errorf("mod cache = %+v", mc)
 	}
 
@@ -420,7 +420,7 @@ func TestGoModCacheOnExternalVolume(t *testing.T) {
 	f.file("ext/mod/cache/x", 10_000, 0)
 	f.file("Library/Caches/go-build/00/x", 10_000, 0)
 	f.runner.bins["go"] = true
-	f.runner.out["go env GOCACHE GOMODCACHE"] = f.abs("Library/Caches/go-build") + "\n" + ext + "\n"
+	f.runner.out["env GOTOOLCHAIN=local go env GOCACHE GOMODCACHE"] = f.abs("Library/Caches/go-build") + "\n" + ext + "\n"
 	f.p.devOf = func(p string) (uint64, error) {
 		if strings.HasPrefix(p, ext) {
 			return 999, nil

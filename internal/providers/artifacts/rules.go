@@ -1,6 +1,8 @@
 package artifacts
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +45,22 @@ type rule struct {
 	// FreeOutsideGit: outside a git work tree no Content is needed (config
 	// extra_artifacts).
 	FreeOutsideGit bool
+	// Strong lists the Content globs that prove generator output on their own
+	// (asset-manifest.json, source maps, _next...); hashed bundle names
+	// (main.3f2a1b9c.js, index-B1a2C3d4.js) count too. When set, a Generic
+	// match outside git whose content is only weak (*.js, index.html, assets —
+	// what hand-written sources also hold) becomes a caution item that is
+	// never preselected.
+	Strong []string
+	// NestedGitOK: the artifact legitimately holds git clones (SwiftPM
+	// checkouts in DerivedData, pip editable installs, Mix/Bundler git
+	// dependencies). Other Generic artifacts holding a checkout (a folder
+	// with a .git entry of any type) are report-only.
+	NestedGitOK bool
+	// NestedGitUnder lists the first-level folders (globs) of the artifact
+	// where clones are expected even without NestedGitOK: CMake FetchContent
+	// (_deps/<name>-src) and ExternalProject (<name>-prefix/src/<name>).
+	NestedGitUnder []string
 	// Group: every match of a project forms one group item (python caches).
 	Group bool
 	// ExtraRoots: also applied in the extra roots (Codex chat folders,
@@ -62,6 +80,12 @@ var (
 	xcodeBuildOut  = []string{"XCBuildData", "Build", "*-iphonesimulator", "*-iphoneos", "*-maccatalyst", "*-appletvsimulator", "*-xrsimulator", "Debug", "Release", "Debug-*", "Release-*", "Intermediates.noindex", "Products", "DerivedData", "*.build", "info.plist", "Logs", "ModuleCache.noindex", "SourcePackages", "Index.noindex", "generated", "EagerLinkingTBDs"}
 	gradleBuildOut = []string{"intermediates", "outputs", "generated", "tmp", "kotlin", "reports", "classes", "libs", ".transforms", "snapshot", "cxx", "test-results", "resources", "kspCaches", "kotlinToolingMetadata"}
 	jsBuildOut     = []string{"index.html", "*.html", "static", "*.js", "*.mjs", "*.cjs", "*.css", "*.map", "asset-manifest.json", "assets", "_expo", "bundles", "metadata.json", "*.d.ts", "aarch64-*", "armv7-*", "x86_64-*", "*.apk", "*.aab", "*.ipa", "_next", "server", "client"}
+	// jsStrongOut is the part of jsBuildOut (plus a few generator-specific
+	// names) that only a bundler / exporter writes. The rest (*.js, *.html,
+	// static, assets, server, client...) is also what hand-written sources
+	// look like: a vue-cli 2 build/ folder of webpack configs, an Electron
+	// buildResources folder, a webpack starter's hand-written dist/index.html.
+	jsStrongOut = []string{"asset-manifest.json", "_next", "_expo", "_astro", "_app", ".vite", "*.map", "*.LICENSE.txt", "*.apk", "*.aab", "*.ipa", "aarch64-*", "armv7-*", "x86_64-*", "builder-effective-config.yaml"}
 )
 
 // rules is the ordered rule table: for a given directory name, the first
@@ -82,12 +106,12 @@ var rules = []*rule{
 	{
 		Kind: "cmake-build", Label: "CMake build tree", Names: []string{"build", "build-*", "build_*", "cmake-build-*", "out"},
 		Markers: []string{"CMakeLists.txt"}, Content: []string{"CMakeCache.txt"}, NeedContent: true,
-		Generic: true, ContentBeatsIgnore: true, Risk: core.RiskModerate, ExtraRoots: true,
+		Generic: true, ContentBeatsIgnore: true, NestedGitUnder: []string{"_deps", "*-prefix"}, Risk: core.RiskModerate, ExtraRoots: true,
 		Note: "CMake build tree (CMakeCache.txt); re-created by running cmake and the build again (can take minutes).",
 	},
 	{
 		Kind: "ios-build", AltKind: "xcode-build", Label: "Xcode build folder", Names: []string{"build"},
-		Markers: xcodeMarkers, Content: xcodeBuildOut, Generic: true, ContentBeatsIgnore: true,
+		Markers: xcodeMarkers, Content: xcodeBuildOut, Generic: true, ContentBeatsIgnore: true, NestedGitOK: true,
 		Risk: core.RiskSafe, ProcessGuard: []string{"xcodebuild"}, ExtraRoots: true,
 		Note: "Xcode build products; rebuilt by the next Xcode / `expo run:ios` build.",
 	},
@@ -105,7 +129,7 @@ var rules = []*rule{
 	},
 	{
 		Kind: "js-build", Label: "JS build output", Names: []string{"build"},
-		Markers: []string{"package.json"}, Content: jsBuildOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true,
+		Markers: []string{"package.json"}, Content: jsBuildOut, Strong: jsStrongOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true,
 		Note: "JS build output; rebuilt by the project's build script.",
 	},
 	{
@@ -159,11 +183,11 @@ var rules = []*rule{
 	{Kind: "wrangler-tmp", Label: "Wrangler temp build", Names: []string{".wrangler"}, Sub: "tmp", Markers: []string{"package.json", "wrangler.toml", "wrangler.json", "wrangler.jsonc"}, Risk: core.RiskSafe, Note: "Wrangler bundling scratch space (.wrangler/state, the local D1/KV data, is kept); recreated by `wrangler dev`."},
 	{
 		Kind: "dist", Label: "dist build output", Names: []string{"dist"},
-		Markers: []string{"package.json"}, Content: jsBuildOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true,
+		Markers: []string{"package.json"}, Content: jsBuildOut, Strong: jsStrongOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true,
 		Note: "Build output; rebuilt by the project's build script.",
 	},
-	{Kind: "web-build", Label: "Expo web build", Names: []string{"web-build"}, Markers: []string{"package.json"}, Content: jsBuildOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true, Note: "Expo web export; rebuilt by `expo export`."},
-	{Kind: "out", Label: "static export", Names: []string{"out"}, Markers: []string{"package.json", "next.config.*", "electron.vite.config.*"}, Content: append([]string{"main", "renderer", "preload"}, jsBuildOut...), Generic: true, Risk: core.RiskSafe, Note: "Static export / Electron build output; rebuilt by the build script."},
+	{Kind: "web-build", Label: "Expo web build", Names: []string{"web-build"}, Markers: []string{"package.json"}, Content: jsBuildOut, Strong: jsStrongOut, Generic: true, Risk: core.RiskSafe, ExtraRoots: true, Note: "Expo web export; rebuilt by `expo export`."},
+	{Kind: "out", Label: "static export", Names: []string{"out"}, Markers: []string{"package.json", "next.config.*", "electron.vite.config.*"}, Content: append([]string{"main", "renderer", "preload"}, jsBuildOut...), Strong: jsStrongOut, Generic: true, Risk: core.RiskSafe, Note: "Static export / Electron build output; rebuilt by the build script."},
 	{
 		Kind: "coverage", Label: "coverage report", Names: []string{"coverage"},
 		Markers: append([]string{"package.json"}, pyMarkers...), Content: []string{"lcov.info", "lcov-report", "coverage-final.json", "clover.xml", "coverage-summary.json", "cobertura-coverage.xml", "coverage.xml"},
@@ -197,7 +221,7 @@ var rules = []*rule{
 	{
 		Kind: "project-derived-data", Label: "project DerivedData", Names: []string{"DerivedData", "DerivedData-*", ".derived-data*", "derived-data", "derivedData"},
 		Markers: []string{"*.xcodeproj", "*.xcworkspace", "Podfile", "Package.swift"}, Content: []string{"info.plist", "Build", "ModuleCache.noindex", "Logs", "SourcePackages", "Index.noindex", "CompilationCache.noindex"},
-		NeedContent: true, Generic: true, ContentBeatsIgnore: true, Risk: core.RiskSafe, ProcessGuard: []string{"xcodebuild"}, ExtraRoots: true,
+		NeedContent: true, Generic: true, ContentBeatsIgnore: true, NestedGitOK: true, Risk: core.RiskSafe, ProcessGuard: []string{"xcodebuild"}, ExtraRoots: true,
 		Note: "Project-local DerivedData (xcodebuild -derivedDataPath); rebuilt by the next build.",
 	},
 	{Kind: "swiftpm-build", Label: "SwiftPM .build", Names: []string{".build"}, Markers: []string{"Package.swift"}, Risk: core.RiskSafe, ExtraRoots: true, Note: "Swift Package Manager build folder and checkouts; recreated by `swift build`."},
@@ -219,7 +243,7 @@ var rules = []*rule{
 	{Kind: "dart-tool", Label: "Dart tool state", Names: []string{".dart_tool"}, Markers: []string{"pubspec.yaml"}, Risk: core.RiskSafe, ExtraRoots: true, Note: "Dart/Flutter package config and build cache; recreated by `flutter pub get`."},
 	{
 		Kind: "python-venv", Label: "Python virtualenv", Names: []string{".venv", "venv"},
-		Markers: pyMarkers, Content: []string{"pyvenv.cfg"}, NeedContent: true, Generic: true, ContentBeatsIgnore: true,
+		Markers: pyMarkers, Content: []string{"pyvenv.cfg"}, NeedContent: true, Generic: true, ContentBeatsIgnore: true, NestedGitOK: true,
 		Risk: core.RiskModerate, ExtraRoots: true,
 		Note: "Python virtualenv; recreated by `uv sync` or `python -m venv .venv && pip install -r requirements.txt` (packages installed by hand are lost).",
 	},
@@ -238,11 +262,11 @@ var rules = []*rule{
 	},
 	{
 		Kind: "ruby-vendor-bundle", Label: "Bundler vendored gems", Names: []string{"vendor"}, Sub: "bundle",
-		Markers: []string{"Gemfile"}, Content: []string{"ruby", "jruby"}, Generic: true, ContentBeatsIgnore: true, Risk: core.RiskModerate,
+		Markers: []string{"Gemfile"}, Content: []string{"ruby", "jruby"}, Generic: true, ContentBeatsIgnore: true, NestedGitOK: true, Risk: core.RiskModerate,
 		Note: "Gems installed by Bundler into vendor/bundle (CocoaPods, fastlane); reinstalled by `bundle install`.",
 	},
 	{Kind: "elixir-build", Label: "Mix _build", Names: []string{"_build"}, Markers: []string{"mix.exs"}, Generic: true, Risk: core.RiskSafe, Note: "Elixir compiled output; rebuilt by `mix compile`."},
-	{Kind: "elixir-deps", Label: "Mix deps", Names: []string{"deps"}, Markers: []string{"mix.exs"}, Generic: true, Risk: core.RiskModerate, Note: "Elixir dependencies; refetched by `mix deps.get`."},
+	{Kind: "elixir-deps", Label: "Mix deps", Names: []string{"deps"}, Markers: []string{"mix.exs"}, Generic: true, NestedGitOK: true, Risk: core.RiskModerate, Note: "Elixir dependencies; refetched by `mix deps.get`."},
 	{Kind: "zig-cache", Label: "Zig cache/output", Names: []string{"zig-cache", ".zig-cache", "zig-out"}, Markers: []string{"build.zig"}, Generic: true, Risk: core.RiskSafe, Note: "Zig build cache and output; rebuilt by `zig build`."},
 	{Kind: "haskell-stack-work", Label: "Stack work dir", Names: []string{".stack-work"}, Markers: []string{"stack.yaml"}, Risk: core.RiskSafe, Note: "Haskell Stack build output; rebuilt by `stack build`."},
 	{Kind: "cabal-dist", Label: "Cabal dist-newstyle", Names: []string{"dist-newstyle"}, Markers: []string{"cabal.project", "*.cabal"}, Risk: core.RiskSafe, Note: "Cabal build output; rebuilt by `cabal build`."},
@@ -450,6 +474,103 @@ func (r *rule) kindFor(path string) string {
 		}
 		return r.AltKind
 	}
+}
+
+// strongOutput reports whether the entries of an artifact (dir) prove that a
+// generator wrote it: one of r.Strong, or bundles with content-hashed names
+// at the top or in the usual asset folders.
+func (r *rule) strongOutput(dir string, content map[string]bool) bool {
+	if _, ok := matchAny(r.Strong, content); ok {
+		return true
+	}
+	if hashedAssetIn(content) {
+		return true
+	}
+	for _, sub := range []string{"assets", "static/js", "static/css", "js", "css"} {
+		if first, _, _ := strings.Cut(sub, "/"); !content[first] {
+			continue
+		}
+		if hashedAssetIn(dirNames(filepath.Join(dir, sub))) {
+			return true
+		}
+	}
+	return false
+}
+
+func hashedAssetIn(names map[string]bool) bool {
+	for n := range names {
+		if hashedAsset(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// hashedAsset reports whether name looks like a bundle with a content hash:
+// webpack / CRA ("main.3f2a1b9c.js", "787.a1b2c3d4.chunk.js": hex after a
+// dot) or Rollup / Vite ("index-B1a2C3d4.js": 8 base64url characters after a
+// dash). Both hashes must mix digits and letters, which keeps hand-written
+// names such as "app-settings.js" or "jquery.min.js" out, and date or
+// timestamp stamped ones too ("release-20240101.js", "notes-24-01-01.js",
+// "app.1700000000.js"). A real hash has no letter only by chance: such a
+// bundle alone then leaves the folder "weak" (caution), the safe side.
+func hashedAsset(name string) bool {
+	ext := filepath.Ext(name)
+	switch ext {
+	case ".js", ".mjs", ".cjs", ".css":
+	default:
+		return false
+	}
+	stem := strings.TrimSuffix(strings.TrimSuffix(name, ext), ".chunk")
+	mixed := func(h string) bool {
+		return strings.ContainsAny(h, "0123456789") &&
+			strings.ContainsFunc(h, func(c rune) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' })
+	}
+	// webpack: <name>.<hex>
+	if i := strings.LastIndexByte(stem, '.'); i > 0 {
+		h := stem[i+1:]
+		if len(h) >= 8 && len(h) <= 32 && mixed(h) && strings.Trim(h, "0123456789abcdef") == "" {
+			return true
+		}
+	}
+	// Rollup: <name>-<8 base64url chars> (the hash itself may hold '-' or '_').
+	if len(stem) > 9 && stem[len(stem)-9] == '-' {
+		h := stem[len(stem)-8:]
+		ok := mixed(h)
+		for _, c := range h {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				ok = false
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGitEntry reports whether dir holds a .git entry of any type: a git
+// repository, a linked worktree or a submodule (a .git file), or a symlink;
+// or whether dir is itself a bare repository (what safety.Guard refuses
+// too). Such a directory is a checkout, never an artifact. An unreadable dir
+// counts as one (nothing proves it is not).
+func hasGitEntry(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil || !errors.Is(err, fs.ErrNotExist) || isBareRepo(dir)
+}
+
+// isBareRepo reports a bare repository layout: HEAD file, objects/ and refs/.
+func isBareRepo(dir string) bool {
+	h, err := os.Lstat(filepath.Join(dir, "HEAD"))
+	if err != nil || !h.Mode().IsRegular() {
+		return false
+	}
+	for _, sub := range []string{"objects", "refs"} {
+		if fi, err := os.Lstat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // dirNames lists the entries of dir as a set (nil on error).

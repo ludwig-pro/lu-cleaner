@@ -54,8 +54,15 @@ func readPlistDict(path string) (map[string]any, error) {
 	return m, nil
 }
 
-// parsePlist decodes a binary or XML property list.
-func parsePlist(data []byte) (any, error) {
+// parsePlist decodes a binary or XML property list. The input is untrusted
+// (simulator containers, archives, truncated writes): a decoder bug must fail
+// this one file, never abort the whole scan part through a panic.
+func parsePlist(data []byte) (v any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			v, err = nil, fmt.Errorf("plist: malformed input (%v)", r)
+		}
+	}()
 	if bytes.HasPrefix(data, []byte("bplist00")) {
 		return parseBinaryPlist(data)
 	}
@@ -237,11 +244,19 @@ func xmlText(d *xml.Decoder) (string, error) {
 // ---------------------------------------------------------------- binary
 
 type bplist struct {
-	data       []byte
-	offsets    []uint64
-	refSize    int
-	visiting   map[uint64]bool
-	numObjects uint64
+	data     []byte
+	offsets  []uint64
+	refSize  int
+	visiting map[uint64]bool
+
+	// Work budgets (see parseBinaryPlist): object references still allowed
+	// to be followed, and string/data payload bytes still allowed to be copied.
+	refsLeft  uint64
+	bytesLeft uint64
+	// strCache holds decoded strings and data by object offset, so a value
+	// referenced many times (Apple's writer stores equal strings once) is
+	// decoded and charged once. Cached []byte values are shared: read only.
+	strCache map[uint64]any
 }
 
 // appleEpoch is the reference date of binary plist dates (2001-01-01 UTC).
@@ -267,7 +282,19 @@ func parseBinaryPlist(data []byte) (any, error) {
 	if tableOff < 8 || end > uint64(len(data)-32) || end < tableOff {
 		return nil, errors.New("bplist: bad offset table")
 	}
-	p := &bplist{data: data, refSize: refSize, visiting: map[uint64]bool{}, numObjects: numObjects}
+	// Objects are decoded once per reference, so a crafted file can make a
+	// tiny input expand exponentially (arrays each referencing the next one
+	// twice: 130 bytes already take seconds, 200 bytes never finish and end
+	// in an out-of-memory crash that recover cannot catch). Apple's writer
+	// never shares containers and each reference occupies refSize bytes of
+	// its own, so a genuine file follows at most len/refSize references and
+	// copies at most len payload bytes (equal strings are stored once and
+	// cached below): these budgets never reject a well-formed file.
+	p := &bplist{data: data, refSize: refSize, visiting: map[uint64]bool{},
+		refsLeft:  uint64(len(data))/uint64(refSize) + 16,
+		bytesLeft: uint64(len(data)),
+		strCache:  map[uint64]any{},
+	}
 	p.offsets = make([]uint64, numObjects)
 	for i := uint64(0); i < numObjects; i++ {
 		o := tableOff + i*uint64(offSize)
@@ -295,6 +322,16 @@ func (p *bplist) span(off, n uint64) ([]byte, error) {
 	return p.data[off : off+n], nil
 }
 
+// spanN returns the n elements of size bytes starting at off. n is checked
+// before multiplying: a corrupted length (up to 2^64-1) must not wrap n*size
+// around to a small value that passes the bounds check.
+func (p *bplist) spanN(off, n, size uint64) ([]byte, error) {
+	if size == 0 || n > uint64(len(p.data))/size {
+		return nil, errors.New("bplist: truncated object")
+	}
+	return p.span(off, n*size)
+}
+
 // count decodes the length of a data/string/array/dict object starting at
 // off (marker included) and returns it with the offset of its payload.
 func (p *bplist) count(off uint64, info byte) (uint64, uint64, error) {
@@ -319,14 +356,18 @@ func (p *bplist) count(off uint64, info byte) (uint64, uint64, error) {
 	return readUint(b), off + 2 + n, nil
 }
 
+// refs reads the n object references of a container at off. They are
+// charged to the reference budget before anything is allocated, so nested
+// containers cannot each pre-allocate a huge slice either.
 func (p *bplist) refs(off, n uint64) ([]uint64, error) {
-	if n > p.numObjects*2+16 {
-		return nil, errors.New("bplist: too many references")
+	if n > p.refsLeft {
+		return nil, errors.New("bplist: too many object references")
 	}
-	b, err := p.span(off, n*uint64(p.refSize))
+	b, err := p.spanN(off, n, uint64(p.refSize))
 	if err != nil {
 		return nil, err
 	}
+	p.refsLeft -= n
 	out := make([]uint64, n)
 	for i := range out {
 		out[i] = readUint(b[uint64(i)*uint64(p.refSize) : uint64(i+1)*uint64(p.refSize)])
@@ -393,29 +434,41 @@ func (p *bplist) object(ref uint64, depth int) (any, error) {
 		}
 		return appleEpoch.Add(time.Duration(secs * float64(time.Second))), nil
 	case 0x4, 0x5, 0x6:
+		if v, ok := p.strCache[off]; ok {
+			return v, nil
+		}
 		n, start, err := p.count(off, info)
 		if err != nil {
 			return nil, err
 		}
+		size := uint64(1)
 		if typ == 0x6 {
-			b, err := p.span(start, n*2)
-			if err != nil {
-				return nil, err
-			}
+			size = 2
+		}
+		b, err := p.spanN(start, n, size)
+		if err != nil {
+			return nil, err
+		}
+		// Distinct objects may overlap in a crafted file: bound the copies.
+		if uint64(len(b)) > p.bytesLeft {
+			return nil, errors.New("bplist: too much string data")
+		}
+		p.bytesLeft -= uint64(len(b))
+		var v any
+		switch typ {
+		case 0x6:
 			u := make([]uint16, n)
 			for i := range u {
 				u[i] = binary.BigEndian.Uint16(b[i*2:])
 			}
-			return string(utf16.Decode(u)), nil
+			v = string(utf16.Decode(u))
+		case 0x5:
+			v = string(b)
+		default:
+			v = append([]byte(nil), b...)
 		}
-		b, err := p.span(start, n)
-		if err != nil {
-			return nil, err
-		}
-		if typ == 0x5 {
-			return string(b), nil
-		}
-		return append([]byte(nil), b...), nil
+		p.strCache[off] = v
+		return v, nil
 	case 0x8:
 		b, err := p.span(off+1, uint64(info)+1)
 		if err != nil {

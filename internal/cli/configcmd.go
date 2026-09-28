@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -33,7 +34,7 @@ for a commented sample.`,
 			Short: "Print the config file path",
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
-				fmt.Fprintln(c.Stdout, config.Path())
+				fmt.Fprintln(c.Stdout, sanitize(config.Path()))
 				return nil
 			},
 		},
@@ -46,7 +47,7 @@ for a commented sample.`,
 				if err != nil {
 					return err
 				}
-				c.out.printf("Wrote %s\n", p)
+				c.out.printf("Wrote %s\n", sanitize(p))
 				return nil
 			},
 		},
@@ -79,6 +80,7 @@ type configView struct {
 	WorktreeRoots []string        `json:"worktree_roots"`
 	Exclude       []string        `json:"exclude"`
 	Protect       []string        `json:"protect"`
+	Missing       []string        `json:"missing"` // exclude / protect entries that do not exist
 	StaleAfter    string          `json:"stale_after"`
 	MinSize       int64           `json:"min_size"`
 	Disabled      []string        `json:"disabled_categories"`
@@ -106,6 +108,7 @@ func (c *cli) configShow() error {
 		WorktreeRoots: nonNil(s.env.WorktreeRoots),
 		Exclude:       nonNil(s.env.Exclude),
 		Protect:       nonNil(s.protect),
+		Missing:       nonNil(s.missing),
 		StaleAfter:    s.cfg.StaleAfter,
 		MinSize:       s.minSize,
 		Disabled:      []string{},
@@ -127,9 +130,9 @@ func (c *cli) configShow() error {
 	if !v.Exists {
 		state = "not found — defaults in use ('lu-cleaner config init' writes a sample)"
 	}
-	o.printf("%s %s %s\n\n", o.paint(o.title, "Config file:"), v.Path, o.paint(o.faint, "("+state+")"))
+	o.printf("%s %s %s\n\n", o.paint(o.title, "Config file:"), sanitize(v.Path), o.paint(o.faint, "("+state+")"))
 	o.println(o.paint(o.dim, "# effective values"))
-	o.println(strings.TrimRight(s.cfg.Dump(), "\n"))
+	o.println(sanitizeLines(s.cfg.Dump(), ""))
 	o.println()
 	o.println(o.paint(o.title, "Resolved"))
 	list := func(label string, paths []string, note string) {
@@ -142,7 +145,11 @@ func (c *cli) configShow() error {
 			o.println("    " + o.paint(o.faint, "none"))
 		}
 		for _, p := range paths {
-			o.println("    " + s.env.Pretty(p))
+			line := "    " + sanitize(s.env.Pretty(p))
+			if slices.Contains(v.Missing, p) {
+				line += " " + o.paint(o.warn, "(does not exist)")
+			}
+			o.println(line)
 		}
 	}
 	list("Project roots", v.Roots, v.RootsSource)
@@ -153,7 +160,7 @@ func (c *cli) configShow() error {
 		o.paint(o.bold, "Stale after:"), v.StaleAfter,
 		o.paint(o.bold, "Min size:"), fsx.Bytes(v.MinSize),
 		o.paint(o.bold, "Use Trash:"), v.Clean.Trash)
-	o.printf("  %s %s\n", o.paint(o.bold, "History:"), s.env.Pretty(v.HistoryFile))
+	o.printf("  %s %s\n", o.paint(o.bold, "History:"), sanitize(s.env.Pretty(v.HistoryFile)))
 	return nil
 }
 
@@ -170,7 +177,7 @@ func (c *cli) configEdit() error {
 		if _, err := config.WriteSample(); err != nil {
 			return err
 		}
-		c.out.printf("Created %s\n", p)
+		c.out.printf("Created %s\n", sanitize(p))
 	}
 	editor := c.Getenv("VISUAL")
 	if editor == "" {

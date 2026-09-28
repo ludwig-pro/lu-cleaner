@@ -513,7 +513,8 @@ func TestPackageManagers(t *testing.T) {
 	}
 	prune := byKind(items, "pnpm-store-prune")
 	if len(prune) != 1 || prune[0].Method != core.MethodCommand || strings.Join(prune[0].Command, " ") != "pnpm store prune" ||
-		!prune[0].Recommended || prune[0].Risk != core.RiskSafe || prune[0].Size == 0 || !strings.HasSuffix(prune[0].Location, "v10") {
+		!prune[0].Recommended || prune[0].Risk != core.RiskSafe || prune[0].Size != 0 || !strings.HasSuffix(prune[0].Location, "v10") ||
+		prune[0].Covers != filepath.Join(prune[0].Location, "files") {
 		t.Errorf("prune = %+v", prune)
 	}
 	for _, st := range stores {
@@ -522,9 +523,10 @@ func TestPackageManagers(t *testing.T) {
 		}
 	}
 
-	// Yarn Berry: a PnP project makes the global cache moderate.
+	// Yarn Berry: a PnP project reads the global cache at runtime.
 	cache := byKind(items, "yarn-berry-cache")
-	if len(cache) != 1 || cache[0].Risk != core.RiskModerate || cache[0].Meta["pnp_projects"] == "" {
+	if len(cache) != 1 || cache[0].Risk != core.RiskCaution || !cache[0].NoRecommend || cache[0].Warn == "" ||
+		cache[0].Meta["pnp_projects"] == "" {
 		t.Errorf("berry cache = %+v", cache)
 	}
 	if m := byKind(items, "yarn-berry-metadata"); len(m) != 1 || m[0].Risk != core.RiskSafe {
@@ -536,7 +538,8 @@ func TestPackageManagers(t *testing.T) {
 
 	// watchman: one stale root.
 	if wm := byKind(items, "watchman-stale-watches"); len(wm) != 1 || wm[0].Method != core.MethodCommand ||
-		!strings.Contains(wm[0].Name, "1 watch") {
+		!strings.Contains(wm[0].Name, "1 watch") ||
+		strings.Join(wm[0].Command, " ") != "watchman --no-spawn watch-del "+filepath.Join(w.home, "deleted-worktree") {
 		t.Errorf("watchman = %+v", wm)
 	}
 }

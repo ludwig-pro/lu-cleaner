@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -14,6 +15,72 @@ import (
 )
 
 const resetSeq = "\x1b[0m"
+
+// safeText makes a string coming from the filesystem, a provider or the user
+// safe to print: C0 controls (ESC, BEL, newlines…), DEL, C1 controls, the
+// Unicode line/paragraph separators and the bidirectional overrides are
+// escaped Go-style (\x1b, \n, \u202e…), and invalid UTF-8 bytes become \xHH.
+// A name like "x\x1b]52;c;…\a" can then never drive the terminal (clipboard,
+// title, cursor moves) nor break or spoof a row. Apply it at render time only,
+// before measuring or padding: never to paths used for deletion.
+func safeText(s string) string {
+	clean := true
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if (r == utf8.RuneError && n == 1) || unsafeRune(r) {
+			clean = false
+			break
+		}
+		i += n
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && n == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case !unsafeRune(r):
+			b.WriteString(s[i : i+n])
+		case r == '\a':
+			b.WriteString(`\a`)
+		case r == '\b':
+			b.WriteString(`\b`)
+		case r == '\f':
+			b.WriteString(`\f`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\v':
+			b.WriteString(`\v`)
+		case r < 0x100:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// unsafeRune reports runes that must never reach the terminal raw.
+func unsafeRune(r rune) bool {
+	switch {
+	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f: // C0, DEL, C1
+		return true
+	case r == 0x2028, r == 0x2029: // line / paragraph separators
+		return true
+	case r == 0x061c, r == 0x200e, r == 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true // bidi marks and overrides: they reorder what is displayed
+	}
+	return false
+}
 
 var eighths = []string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
 
@@ -126,9 +193,9 @@ func (in *lineInput) deleteWord() bool {
 // view renders the value with a block cursor when active.
 func (in *lineInput) view() string {
 	if in.active {
-		return string(in.value) + sAccent.Render("▏")
+		return safeText(string(in.value)) + sAccent.Render("▏")
 	}
-	return string(in.value)
+	return safeText(string(in.value))
 }
 
 // splitRunes replays a burst of runes delivered as one key message (fast

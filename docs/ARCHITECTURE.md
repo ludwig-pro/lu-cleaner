@@ -45,12 +45,56 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
 * `Item.LastUsed` drives ages, `--older-than`, and smart selection of moderate items.
 * Risk: `safe` (pure cache) → `moderate` (regenerable, costs time/bandwidth) → `caution`
   (user data/state) → `never` (report only).
+* `Item.NoRecommend` is a provider veto: `core.Recommend` (smart select) never preselects the
+  item (emptying the Trash, orphan data whose origin is uncertain…). Items with a `Warn` are
+  never recommended either, and `clean --yes` treats them like `caution` items: they need an
+  explicit `--risk caution` (they are listed as "held back" otherwise).
 * Methods: `delete` (default, frees space now), `trash` (does NOT free space until the Trash is
   emptied), `command` (tool's own cleanup: `xcrun simctl delete unavailable`…), `worktree`
-  (`git worktree remove` + `prune`, refuses dirty/unpushed/locked unless `--force`), `report`.
+  (`git worktree remove` + `prune`), `report`.
+* Worktree removal keeps the branch: commits on a branch (pushed or not) stay in the main
+  repository. Without `--force` it refuses a worktree that is locked, has uncommitted or untracked
+  changes (measured with explicit git flags that ignore the user's config), has commits on no
+  branch (detached HEAD), or contains another registered worktree or repository. `--dry-run` runs
+  the same checks (the status check included) and reports the same refusals.
+* Trash mode (`--trash`, `use_trash`, `t` in the TUI; `--trash=false` overrides `use_trash`) only
+  moves filesystem paths to the Trash. Worktree and command items are skipped ("not possible in
+  Trash mode (it would delete permanently)"), items already in `~/.Trash` too ("already in the
+  Trash"). Summaries and history report Trash moves (`Result.Trashed`, `Summary.Trashed`) apart
+  from freed space.
+* Orphans: a worktree or main repository is "missing" only on ENOENT with a readable nearest
+  existing ancestor. Any other error (EACCES, EPERM/TCC, unmounted volume) makes it
+  "unreadable": report only, never deleted (and never pruned by `git worktree prune`).
 * Every filesystem target is re-validated by `safety.Guard` right before removal: absolute clean
   path, inside `$HOME` or the per-user temp dir, not a protected path (credentials, AI tool
-  configs, keystores, ssh…), not containing one, not a git repository (unless `AllowGitRepo`),
-  symlinked parents resolved, not the current directory. Items may also require a marker file
-  next to them (`RequireSibling`, e.g. `package.json` next to `node_modules`) and may refuse to
-  run while a process is alive (`ProcessGuard`, e.g. Xcode, Simulator).
+  configs, keystores, ssh…), not containing one, not a git repository — any `.git` entry (dir,
+  file or symlink) or a bare repository (`HEAD` + `objects` + `refs`) — unless `AllowGitRepo`
+  (set by the executor for `worktree` items, which git removes itself, and by items that opt in:
+  `~/.cocoapods/repos`, verified orphan worktree dirs), symlinked parents resolved, not the
+  current directory. Items may also require a marker file next to them (`RequireSibling`, e.g.
+  `package.json` next to `node_modules`) and may refuse to run while a process is alive
+  (`ProcessGuard`, e.g. Xcode, Simulator).
+* Path comparisons (protect, exclude, roots, busy detection) are case-insensitive and
+  Unicode-normalization-insensitive (`safety.Key`: NFC + lower case), like APFS. Config
+  `exclude` / `protect` entries have `~` and `$VARS` expanded (an undefined variable is an error)
+  and also match through symlinks (the resolved form of each entry is added). Roots are stored
+  with their on-disk spelling (`~/code` typed for `~/Code`), so paths derived from them match the
+  paths the kernel reports for processes (cwd, executables) in the in-use checks.
+* Roots given on the command line (`lu-cleaner artifacts <root>`, `--root`) set
+  `Env.ExplicitRoots`: the artifacts scanner then scans only `Env.Roots` (no worktree roots, no
+  built-in extra folders), and the CLI drops any project artifact outside them. `/` is refused as
+  a root. They narrow the artifacts scan only: the other providers get an `Env` with the
+  configured (or auto-detected) roots and `ExplicitRoots` false, since they read the roots to
+  learn what the projects use (Android SDK / NDK / Gradle versions, Ruby and node versions, main
+  repositories of worktrees) — with `--root ~/one-project` alone, every version used by the other
+  projects would look unused. Configured roots stay protected as a whole. Config exclusions are
+  also enforced by the CLI on every provider's output, matching item paths emitted through a
+  symlinked folder in their resolved form too.
+* Human output never prints a raw control character: names, paths, warnings and messages go
+  through a sanitizer (C0/C1 controls, DEL and bidi overrides become visible escapes such as
+  `\x1b`); JSON output escapes them as `\uXXXX`.
+* Signals: the first Ctrl-C / SIGTERM cancels the run (pending items are skipped, exit 130 / 143);
+  a second one kills the process at once, even in the middle of a long deletion.
+* Category totals (`scan`, `doctor`) overlap when items of one category lie inside items of
+  another (artifacts inside worktrees): the shared part is shown ("inside Worktrees", JSON
+  `shared_by_category`), and the global total counts it once.

@@ -63,9 +63,12 @@ func init() {
 				"~/Library/Developer/Xcode/iOS Device Logs",
 				"~/Library/Developer/Xcode/watchOS Device Logs",
 			},
-			Risk:         core.RiskModerate,
+			// Caution, not moderate: devices purge their crash logs after a
+			// while (and the device may be gone), so the imported copy is
+			// often the only one left. Never preselected by smart select.
+			Risk:         core.RiskCaution,
 			ProcessGuard: []string{"Xcode"},
-			Note:         "Crash and device logs copied from connected devices (Devices window); Xcode imports again the logs still on the device the next time it is connected.",
+			Note:         "Crash and device logs copied from connected devices (Devices window). Devices purge their own crash logs, so these copies are often the only ones left: keep the ones you may still need to symbolicate; Xcode only re-imports logs still on a connected device.",
 		},
 		Entry{
 			ID: "apple-xcode-dist-staging", Category: core.CatXcode,

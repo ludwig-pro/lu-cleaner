@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/term"
@@ -31,6 +32,8 @@ const (
 	ExitUsage   = 2
 	// ExitInterrupted is returned after Ctrl-C (128 + SIGINT).
 	ExitInterrupted = 130
+	// ExitTerminated is returned after SIGTERM (128 + SIGTERM).
+	ExitTerminated = 128 + int(syscall.SIGTERM)
 )
 
 // App holds the I/O streams and the dependencies of the CLI.
@@ -90,9 +93,37 @@ func NewApp(version string) *App {
 
 // Execute runs the CLI with the process arguments and returns the exit code.
 func Execute(version string) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return NewApp(version).Run(ctx, os.Args[1:])
+	return runWithSignals(func(ctx context.Context) int {
+		return NewApp(version).Run(ctx, os.Args[1:])
+	})
+}
+
+// runWithSignals runs fn with a context cancelled by the first SIGINT or
+// SIGTERM. The handler is removed right away, so a second signal gets the
+// default behaviour and ends the process even while fn is stuck in work
+// that does not watch the context (a huge RemoveAll, a slow sizing walk).
+// After SIGTERM the "interrupted" exit code is 143 instead of 130.
+func runWithSignals(fn func(context.Context) int) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigc)
+	var got atomic.Value // os.Signal
+	go func() {
+		select {
+		case sig := <-sigc:
+			signal.Stop(sigc) // the next signal kills the process
+			got.Store(sig)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	code := fn(ctx)
+	if sig, _ := got.Load().(os.Signal); code == ExitInterrupted && sig == syscall.SIGTERM {
+		return ExitTerminated
+	}
+	return code
 }
 
 // Run executes the command line args and returns the exit code.
@@ -114,14 +145,14 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
 		if ee.err != nil {
-			fmt.Fprintf(a.Stderr, "lu-cleaner: %v\n", ee.err)
+			fmt.Fprintf(a.Stderr, "lu-cleaner: %s\n", sanitizeLines(ee.err.Error(), "  "))
 			if ee.code == ExitUsage && cmd != nil {
 				fmt.Fprintf(a.Stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())
 			}
 		}
 		return ee.code
 	}
-	fmt.Fprintf(a.Stderr, "lu-cleaner: %v\n", err)
+	fmt.Fprintf(a.Stderr, "lu-cleaner: %s\n", sanitizeLines(err.Error(), "  "))
 	if !c.started {
 		// Cobra failed before running the command: unknown command, bad
 		// flag, wrong number of arguments...

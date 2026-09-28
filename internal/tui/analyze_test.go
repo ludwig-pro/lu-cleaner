@@ -31,10 +31,7 @@ func newAnFixture(t *testing.T) *anFixture {
 		"wt/file.txt":     5,
 		"repo2/.git/HEAD": 10,
 	})
-	gitFile := fmt.Sprintf("gitdir: %s/repo/.git/worktrees/wt\n", home)
-	if err := os.WriteFile(filepath.Join(root, "wt", ".git"), []byte(gitFile), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	fakeWorktree(t, filepath.Join(home, "repo"), filepath.Join(root, "wt"))
 	return &anFixture{home: home, root: root}
 }
 
@@ -107,10 +104,11 @@ func TestAnalyzerListsSizesAndTags(t *testing.T) {
 	if !strings.Contains(byName["node_modules"].tag, "regenerable") {
 		t.Fatalf("node_modules tag = %q", byName["node_modules"].tag)
 	}
-	if wt := byName["wt"]; wt.worktree != filepath.Join(f.home, "repo") || !strings.Contains(wt.tag, "worktree") {
+	if wt := byName["wt"]; !wt.isWorktree() || wt.git.main != filepath.Join(f.home, "repo") ||
+		wt.git.common != filepath.Join(f.home, "repo", ".git") || !strings.Contains(wt.tag, "worktree") {
 		t.Fatalf("wt = %+v", wt)
 	}
-	if !byName["repo2"].gitRepo || byName["repo2"].tag != "git repo" {
+	if byName["repo2"].git.kind != gitRepo || byName["repo2"].tag != "git repo" {
 		t.Fatalf("repo2 = %+v", byName["repo2"])
 	}
 	nm, err := fsx.Size(context.Background(), filepath.Join(f.root, "node_modules"), nil)
@@ -339,30 +337,11 @@ func TestAnalyzerRescanAndWorktreeItems(t *testing.T) {
 		t.Fatalf("src size %d -> %d", old, nw)
 	}
 	items := m.itemsFor([]*anEntry{m.cur().byName["wt"], m.cur().byName["src"]})
-	if items[0].Method != core.MethodWorktree || items[0].Project != filepath.Join(f.home, "repo") {
+	if items[0].Method != core.MethodWorktree || items[0].Project != filepath.Join(f.home, "repo", ".git") {
 		t.Fatalf("worktree item = %+v", items[0])
 	}
 	if items[1].Method != core.MethodDelete || items[1].Risk != core.RiskCaution || !items[1].Selectable {
 		t.Fatalf("dir item = %+v", items[1])
-	}
-}
-
-func TestWorktreeMain(t *testing.T) {
-	dir := t.TempDir()
-	cases := map[string]string{
-		"gitdir: /src/app/.git/worktrees/feat\n": "/src/app",
-		"gitdir: ../app/.git/worktrees/x":        filepath.Join(filepath.Dir(dir), "app"),
-		"gitdir: /src/app/.git/modules/sub":      "",
-		"nonsense":                               "",
-	}
-	for content, want := range cases {
-		p := filepath.Join(dir, ".git")
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if got := worktreeMain(p); got != want {
-			t.Errorf("%q: got %q want %q", content, got, want)
-		}
 	}
 }
 

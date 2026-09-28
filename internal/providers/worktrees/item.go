@@ -1,7 +1,10 @@
 package worktrees
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,7 +36,7 @@ func (w *worktree) status() string {
 	switch {
 	case w.orphan != "":
 		return statusOrphan
-	case w.offline != "" || w.external:
+	case w.offline != "" || w.external || w.unreadable != "" || w.repairAt != "":
 		if w.locked {
 			return statusLocked
 		}
@@ -84,11 +87,20 @@ func (s *scan) item(w *worktree) *core.Item {
 	case w.orphan != "":
 		caution = true
 		it.Method = core.MethodDelete
+		it.NoRecommend = true
 		if w.copyOf != "" {
 			warn = append(warn, "orphaned: copy of "+s.env.Pretty(w.copyOf)+" (git tracks that folder, not this one) — contents may be unrecoverable work")
 		} else {
 			warn = append(warn, "orphaned: git no longer tracks it — contents may be unrecoverable work")
 		}
+	case w.unreadable != "":
+		caution = true
+		it.Method = core.MethodReport
+		warn = append(warn, w.unreadable+" — status unknown")
+	case w.repairAt != "":
+		caution = true
+		it.Method = core.MethodReport
+		warn = append(warn, "main repository moved to "+s.env.Pretty(w.repairAt)+" — run git -C "+w.repairAt+" worktree repair "+w.path)
 	case w.offline != "":
 		caution = true
 		it.Method = core.MethodReport
@@ -113,7 +125,7 @@ func (s *scan) item(w *worktree) *core.Item {
 			warn = append(warn, "locked")
 		}
 	}
-	if w.orphan == "" && w.offline == "" && !w.external {
+	if w.gitUsable() && !w.external {
 		switch {
 		case !w.gitOK:
 			caution = true
@@ -142,7 +154,7 @@ func (s *scan) item(w *worktree) *core.Item {
 				switch {
 				case w.detached:
 					caution = true
-					msg += " on a detached HEAD — create a branch first or they are lost"
+					msg = plural(w.unpushed, "commit", "commits") + " on a detached HEAD in no branch — create a branch first or they are lost"
 				case w.gone:
 					msg += " (upstream branch deleted; branch " + w.branch + " is kept)"
 				default:
@@ -150,10 +162,29 @@ func (s *scan) item(w *worktree) *core.Item {
 				}
 				warn = append(warn, msg)
 			}
+			// Ignored files are deleted with the worktree and git does not
+			// refuse: secrets and personal settings found only here are user
+			// data (caution).
+			if len(w.envFiles) > 0 {
+				caution = true
+				warn = append(warn, "ignored secret/local files would be lost: "+strings.Join(limit(w.envFiles, 3), ", "))
+			}
+			if w.envErr != "" {
+				caution = true
+				warn = append(warn, w.envErr+" (secrets such as .env would be lost)")
+			}
 		}
 		if w.movedAt != "" {
 			caution = true
 			warn = append(warn, "moved: git records it at "+s.env.Pretty(w.movedAt)+" — run git -C "+w.main+" worktree repair")
+		}
+	}
+	if n := s.nestedKnown(w); len(n) > 0 {
+		w.nested = n
+		caution = true
+		warn = append(warn, nestedWarn(s, n))
+		if it.Method == core.MethodDelete {
+			it.Method = core.MethodReport // rm -rf would take the other repository with it
 		}
 	}
 	if len(w.inUse) > 0 {
@@ -168,15 +199,23 @@ func (s *scan) item(w *worktree) *core.Item {
 		caution = true
 		warn = append(warn, w.session)
 	}
-	if len(w.envFiles) > 0 {
-		warn = append(warn, "ignored .env files would be lost: "+strings.Join(limit(w.envFiles, 3), ", "))
-	}
-	if s.cwd != "" && fsx.Within(s.cwd, w.path) {
+	// The current directory may be spelled in another case or Unicode
+	// normalization (APFS ignores both).
+	if s.cwd != "" && fsx.Within(pathKey(s.cwd), pathKey(w.path)) {
 		it.Selectable = false
 		warn = append(warn, "current directory")
 	}
-	if it.Method == core.MethodReport {
+	switch it.Method {
+	case core.MethodReport:
 		it.Selectable = false
+	case core.MethodDelete:
+		// Orphan: the checkout holds a .git file (the safety guard refuses git
+		// repositories by default). Its orphan state rests on verified facts,
+		// checked again right before removal.
+		it.AllowGitRepo = true
+		it.Recheck = s.orphanRecheck(w)
+	case core.MethodWorktree:
+		it.Recheck = s.sessionRecheck(w)
 	}
 	if caution {
 		it.Risk = core.RiskCaution
@@ -185,6 +224,34 @@ func (s *scan) item(w *worktree) *core.Item {
 	it.Note = s.note(w, repoName)
 	s.recommend(w, it)
 	return it
+}
+
+// nestedKnown returns the other worktrees and main repositories found by the
+// scan inside w's checkout: removing w would delete them too.
+func (s *scan) nestedKnown(w *worktree) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, o := range s.ordered {
+		if o != w && o.path != w.path && fsx.Within(o.path, w.path) {
+			out = append(out, o.path)
+		}
+	}
+	for p := range s.repos {
+		if p != w.path && fsx.Within(p, w.path) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func nestedWarn(s *scan, paths []string) string {
+	pretty := make([]string, len(paths))
+	for i, p := range paths {
+		pretty[i] = s.env.Pretty(p)
+	}
+	return "contains another git repository or worktree: " + strings.Join(limit(pretty, 3), ", ")
 }
 
 // recommend applies the smart-selection rule: clean & pushed (or merged)
@@ -217,6 +284,10 @@ func (s *scan) meta(w *worktree, st string) map[string]string {
 		if w.copyOf != "" {
 			m["copy_of"] = w.copyOf
 		}
+	case w.unreadable != "":
+		m["unreadable"] = w.unreadable
+	case w.repairAt != "":
+		m["repair_main"] = w.repairAt
 	case w.offline != "":
 		m["offline_volume"] = w.offline
 	case w.external:
@@ -273,6 +344,9 @@ func (s *scan) meta(w *worktree, st string) map[string]string {
 	if len(w.envFiles) > 0 {
 		m["env_files"] = strings.Join(w.envFiles, ", ")
 	}
+	if len(w.nested) > 0 {
+		m["nested"] = strings.Join(w.nested, ", ")
+	}
 	return m
 }
 
@@ -282,9 +356,17 @@ func (s *scan) note(w *worktree, repoName string) string {
 	switch {
 	case w.orphan != "":
 		n = "Leftover checkout whose git metadata is gone (" + w.orphan + "): a plain copy of files that git cannot inspect; recover the code by re-cloning the remote"
-		if w.copyOf == "" && w.repo != nil {
-			n += ", or re-link it with git -C " + w.main + " worktree repair " + w.path
+		switch {
+		case w.orphan == orphanPruned:
+			// `git worktree repair` cannot restore a deleted admin entry.
+			n += "; to keep its changes, copy them into a new worktree (git -C " + w.main + " worktree add <folder> <branch>)"
+		case w.orphan == orphanMainGone:
+			n += "; if you moved or renamed " + w.main + ", re-link it with git -C <new location> worktree repair " + w.path + " instead"
 		}
+	case w.unreadable != "":
+		n = "Linked worktree whose git data cannot be read by this process (" + w.unreadable + "): its state is unknown, so it is only reported; fix the access and rescan"
+	case w.repairAt != "":
+		n = "Linked worktree of " + repoName + " whose main repository was moved or renamed to " + w.repairAt + ": git still tracks it; re-link it with git -C " + w.repairAt + " worktree repair " + w.path + ", then rescan"
 	case w.offline != "":
 		n = "Linked worktree whose main repository lives on volume " + w.offline + ": plug the volume in to inspect or remove it with git"
 	default:
@@ -351,6 +433,15 @@ func limit(list []string, n int) []string {
 
 // pruneItems returns one item per main repository whose worktree list has
 // prunable entries (checkout deleted by rm, Cursor, Conductor, /tmp cleanup).
+//
+// git calls an entry prunable as soon as it cannot lstat <checkout>/.git,
+// whatever the reason. An entry is only safe to drop when its checkout
+// verifiably no longer exists (confirmedMissing: ENOENT under a readable
+// folder), is not on an unmounted volume and its admin dir is not used by a
+// checkout found elsewhere (moved). `git worktree prune` is all-or-nothing:
+// it is proposed only when every admin dir it would drop is such a safe
+// entry; otherwise only the safe admin dirs are deleted. Both variants are
+// verified again right before cleaning (Recheck).
 func (s *scan) pruneItems() []*core.Item {
 	s.mu.Lock()
 	repos := make([]*repo, 0, len(s.repos))
@@ -379,17 +470,19 @@ func (s *scan) pruneItems() []*core.Item {
 		admins := adminDirs(r.common)
 		var safe, unsafe []listEntry
 		var paths []string
+		verified := map[string]string{} // admin dir -> recorded checkout, for safe entries
 		for _, e := range r.prunable {
 			a := admins[e.path]
 			switch {
-			case offlineVolume(e.path) != "":
-				unsafe = append(unsafe, e) // checkout on an unmounted disk: keep its metadata
 			case a != "" && live[realPath(a)]:
 				unsafe = append(unsafe, e) // moved checkout still using this entry
+			case checkoutGone(e.path) != nil:
+				unsafe = append(unsafe, e) // unreadable, unmounted, or still there
 			default:
 				safe = append(safe, e)
 				if a != "" {
 					paths = append(paths, a)
+					verified[a] = e.path
 				}
 			}
 		}
@@ -417,8 +510,9 @@ func (s *scan) pruneItems() []*core.Item {
 				"entries": strings.Join(limit(prettyAll(s, safe), 8), ", "),
 			},
 		}
-		if len(unsafe) > 0 {
-			// `git worktree prune` is all-or-nothing: remove only the safe admin dirs.
+		common := r.common
+		if len(unsafe) > 0 || pruneCommandUnsafe(common, verified) != nil {
+			// Remove only the verified admin dirs.
 			if len(paths) != len(safe) {
 				continue
 			}
@@ -434,9 +528,13 @@ func (s *scan) pruneItems() []*core.Item {
 			it.Method = core.MethodDelete
 			it.Command = nil
 			it.Paths = paths
-			it.Note = "Git bookkeeping for worktrees whose folder is already gone; only these entries are removed because `git worktree prune` would also drop " +
-				plural(len(unsafe), "entry", "entries") + " of worktrees on an unmounted volume or moved elsewhere."
-			it.Meta["kept"] = strings.Join(limit(prettyAll(s, unsafe), 8), ", ")
+			it.Note = "Git bookkeeping for worktrees whose folder is already gone; only these entries are removed because `git worktree prune` would also drop the entries of worktrees that are unreadable, on an unmounted volume or moved elsewhere."
+			if len(unsafe) > 0 {
+				it.Meta["kept"] = strings.Join(limit(prettyAll(s, unsafe), 8), ", ")
+			}
+			it.Recheck = func(context.Context) error { return recheckAdminDirs(verified) }
+		} else {
+			it.Recheck = func(context.Context) error { return pruneCommandUnsafe(common, verified) }
 		}
 		for _, p := range paths {
 			st, _ := fsx.Size(s.ctx, p, nil)
@@ -451,28 +549,145 @@ func (s *scan) pruneItems() []*core.Item {
 	return out
 }
 
+// checkoutGone returns nil when the recorded checkout path verifiably no
+// longer exists (so its admin entry holds nothing anyone can still use).
+func checkoutGone(path string) error {
+	if v := offlineVolume(path); v != "" {
+		return fmt.Errorf("%s: volume %s is not mounted", path, v)
+	}
+	gone, err := confirmedMissing(path)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: cannot verify that it is gone (%s)", path, errText(err))
+	case !gone:
+		return fmt.Errorf("%s still exists", path)
+	}
+	return nil
+}
+
+// adminEntry is one <common>/worktrees/<id> entry, as `git worktree prune`
+// sees it.
+type adminEntry struct {
+	dir      string // the admin dir
+	notDir   bool   // not a directory (git removes it)
+	locked   bool   // git never prunes locked entries
+	recorded string // checkout recorded in its gitdir file ("" if missing/unreadable/empty)
+	gitFile  string // <checkout>/.git as recorded
+}
+
+// readAdminEntries lists the admin dirs of the common dir.
+func readAdminEntries(common string) ([]adminEntry, error) {
+	dir := filepath.Join(common, "worktrees")
+	des, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []adminEntry
+	for _, de := range des {
+		a := adminEntry{dir: filepath.Join(dir, de.Name())}
+		if !isDirFollow(a.dir) {
+			a.notDir = true
+			out = append(out, a)
+			continue
+		}
+		a.locked = fsx.Exists(filepath.Join(a.dir, "locked"))
+		if g := readTrim(filepath.Join(a.dir, "gitdir")); g != "" {
+			if !filepath.IsAbs(g) {
+				g = filepath.Join(a.dir, g)
+			}
+			a.gitFile = filepath.Clean(g)
+			a.recorded = filepath.Dir(a.gitFile)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// pruneCommandUnsafe returns nil when `git worktree prune` on common would
+// remove only admin dirs of verified (admin dir -> recorded checkout) whose
+// checkout is still verifiably gone. It mirrors git's rules (expire = now):
+// an entry is pruned when it is not a directory, or not locked and its
+// gitdir file is missing or empty, or the recorded <checkout>/.git cannot be
+// lstat'ed, or when it duplicates another entry's checkout (git keeps one).
+func pruneCommandUnsafe(common string, verified map[string]string) error {
+	entries, err := readAdminEntries(common)
+	if err != nil {
+		return fmt.Errorf("cannot read the worktree entries of %s: %v — rescan", common, err)
+	}
+	// git keeps a single entry per checkout (and never one for the main
+	// working tree): the others are pruned as duplicates. Locked entries
+	// take no part in this.
+	seen := map[string]int{pathKey(realPath(common)): 1}
+	for _, a := range entries {
+		if a.recorded != "" && !a.locked {
+			seen[pathKey(a.gitFile)]++
+		}
+	}
+	for _, a := range entries {
+		if a.notDir || a.locked {
+			continue // stray file (harmless), or never pruned
+		}
+		pruned := a.recorded == "" || seen[pathKey(a.gitFile)] > 1
+		if !pruned {
+			if _, err := os.Lstat(a.gitFile); err != nil {
+				pruned = true
+			}
+		}
+		if !pruned {
+			continue
+		}
+		rec, ok := verified[a.dir]
+		if !ok || rec != a.recorded {
+			what := a.recorded
+			if what == "" {
+				what = a.dir
+			}
+			return fmt.Errorf("git worktree prune would also drop the entry of %s, not verified as deleted — rescan", what)
+		}
+		if err := checkoutGone(a.recorded); err != nil {
+			return fmt.Errorf("worktree entry no longer safe to prune: %v — rescan", err)
+		}
+	}
+	return nil
+}
+
+// recheckAdminDirs verifies, right before deleting them, that the admin dirs
+// still record the same checkout, are not locked, and that this checkout is
+// still verifiably gone.
+func recheckAdminDirs(verified map[string]string) error {
+	for dir, rec := range verified {
+		if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+			continue // already pruned
+		}
+		if fsx.Exists(filepath.Join(dir, "locked")) {
+			return fmt.Errorf("%s is locked now — rescan", dir)
+		}
+		g := readTrim(filepath.Join(dir, "gitdir"))
+		if g != "" && !filepath.IsAbs(g) {
+			g = filepath.Join(dir, g)
+		}
+		if g == "" || filepath.Dir(filepath.Clean(g)) != rec {
+			return fmt.Errorf("%s changed since the scan — rescan", dir)
+		}
+		if err := checkoutGone(rec); err != nil {
+			return fmt.Errorf("worktree entry no longer safe to prune: %v — rescan", err)
+		}
+	}
+	return nil
+}
+
 // adminDirs maps each recorded checkout path to its admin dir
 // (<common>/worktrees/<name>, whose "gitdir" file is "<checkout>/.git").
 func adminDirs(common string) map[string]string {
 	out := map[string]string{}
-	dir := filepath.Join(common, "worktrees")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return out
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	entries, _ := readAdminEntries(common)
+	for _, a := range entries {
+		if !a.notDir && a.recorded != "" {
+			out[a.recorded] = a.dir
 		}
-		a := filepath.Join(dir, e.Name())
-		g := readTrim(filepath.Join(a, "gitdir"))
-		if g == "" {
-			continue
-		}
-		if !filepath.IsAbs(g) {
-			g = filepath.Join(a, g)
-		}
-		out[filepath.Dir(filepath.Clean(g))] = a
 	}
 	return out
 }

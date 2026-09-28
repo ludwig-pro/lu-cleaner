@@ -23,9 +23,17 @@ type Stats struct {
 	Bytes int64 `json:"bytes"`
 	// Apparent is the sum of logical file sizes.
 	Apparent int64 `json:"apparent"`
-	// Reclaim is what deleting the whole tree would really free: files whose
-	// hardlinks live partly outside the tree (pnpm store, ...) are excluded.
-	// APFS clones cannot be detected cheaply and are counted as reclaimable.
+	// Reclaim is what deleting the whole tree would really free:
+	//   - files whose hardlinks live partly outside the tree (pnpm store...)
+	//     are excluded;
+	//   - APFS clones (bun and pnpm installs, `cp -c`, Finder duplicates)
+	//     count only their private bytes, unless every file sharing the same
+	//     data is inside the tree (then that data is counted once).
+	// It is an estimate: bytes shared between a partly modified clone and its
+	// origin both inside the tree may be counted once too many, a partly
+	// shared file under 128 KiB counts fully (privateMinAlloc), and data
+	// shared between two separately measured trees (the bun cache and a
+	// node_modules installed from it) is freed only when both are deleted.
 	Reclaim int64     `json:"reclaim"`
 	Files   int64     `json:"files"`
 	Dirs    int64     `json:"dirs"`
@@ -57,6 +65,64 @@ type hardlink struct {
 	size  int64
 	nlink uint16
 	seen  uint16
+	dev   int32
+	share fileShare
+}
+
+// volKey identifies an inode or an APFS data stream. Inode numbers and
+// clone ids are only unique within one volume, and a CrossDevice walk may
+// see several volumes: without the device, two unrelated files would be
+// merged (counted once, or their clone families mixed up).
+type volKey struct {
+	dev int32
+	id  uint64
+}
+
+// fileShare describes how the data of a regular file is shared with other
+// files through APFS clones (getattrlist ATTR_CMNEXT_*).
+type fileShare struct {
+	known   bool   // the volume reported clone information
+	private int64  // bytes held by this inode only (meaningful when refs == 1)
+	cloneID uint64 // id of the data stream (ATTR_CMNEXT_CLONEID)
+	refs    uint32 // inodes referencing that data stream (0 = no data stream)
+}
+
+// cloned reports whether the data stream is shared with other inodes.
+func (s fileShare) cloned() bool { return s.known && s.refs > 1 }
+
+// exclusive returns what deleting this inode alone frees.
+func (s fileShare) exclusive(alloc int64) int64 {
+	if !s.known || s.refs == 0 {
+		// No information, or no data stream: a transparently compressed file
+		// keeps its data in an extended attribute and reports a private
+		// size of 0 although nothing is shared. Count it fully.
+		return alloc
+	}
+	return min(max(s.private, 0), alloc)
+}
+
+// cloneFamily gathers the inodes of the tree sharing one data stream.
+type cloneFamily struct {
+	alloc  int64  // allocated size of the shared data
+	refs   uint32 // inodes sharing it, on the whole volume
+	inodes uint32 // of which fully inside the tree
+	excl   int64  // private bytes of those inodes
+}
+
+func (f *cloneFamily) add(alloc int64, s fileShare) {
+	f.alloc = max(f.alloc, alloc)
+	f.refs = max(f.refs, s.refs)
+	f.inodes++
+	f.excl += s.exclusive(alloc)
+}
+
+// reclaim is what deleting the family's inodes frees: the shared data once
+// when no inode outside the tree still references it.
+func (f *cloneFamily) reclaim() int64 {
+	if f.inodes >= f.refs {
+		return max(f.alloc, f.excl)
+	}
+	return f.excl
 }
 
 type walker struct {
@@ -67,8 +133,9 @@ type walker struct {
 	bytes, apparent, reclaim, files, dirs, errs atomic.Int64
 	newest                                      atomic.Int64
 
-	mu    sync.Mutex
-	links map[uint64]*hardlink
+	mu     sync.Mutex
+	links  map[volKey]*hardlink    // regular files with nlink > 1, by inode
+	clones map[volKey]*cloneFamily // cloned files with nlink == 1, by data stream id
 
 	wg sync.WaitGroup
 }
@@ -95,11 +162,15 @@ func size(ctx context.Context, path string, opt *Options) (Stats, error) {
 		}
 		return Stats{}, &os.PathError{Op: "lstat", Path: path, Err: err}
 	}
-	w := &walker{ctx: ctx, dev: st.Dev, links: map[uint64]*hardlink{}}
+	w := &walker{ctx: ctx, dev: st.Dev, links: map[volKey]*hardlink{}, clones: map[volKey]*cloneFamily{}}
 	if opt != nil {
 		w.opt = *opt
 	}
-	w.account(&st)
+	var sh fileShare
+	if st.Mode&unix.S_IFMT == unix.S_IFREG && useBulk && useCloneAttrs {
+		sh = shareOf(path)
+	}
+	w.account(&st, sh)
 	if st.Mode&unix.S_IFMT == unix.S_IFDIR {
 		w.dirs.Add(1)
 		w.walk(path)
@@ -123,65 +194,87 @@ func (w *walker) stats() Stats {
 		s.Newest = time.Unix(0, n)
 	}
 	w.mu.Lock()
+	// Work on copies so stats() can be called more than once.
+	families := make(map[volKey]cloneFamily, len(w.clones))
+	for id, f := range w.clones {
+		families[id] = *f
+	}
 	for _, l := range w.links {
-		if l.seen >= l.nlink {
-			s.Reclaim += l.size
+		if l.seen < l.nlink {
+			continue // hardlinked from outside the tree: deleting frees nothing
 		}
+		if l.share.cloned() {
+			k := volKey{l.dev, l.share.cloneID}
+			f := families[k]
+			f.add(l.size, l.share)
+			families[k] = f
+			continue
+		}
+		s.Reclaim += l.share.exclusive(l.size)
 	}
 	w.mu.Unlock()
+	for _, f := range families {
+		s.Reclaim += f.reclaim()
+	}
 	return s
 }
 
-// account adds one stat record to the totals.
-func (w *walker) account(st *unix.Stat_t) {
-	alloc := st.Blocks * 512
-	w.apparent.Add(st.Size)
-	mt := st.Mtim.Nano()
+// touch records an mtime (nanoseconds) for Stats.Newest.
+func (w *walker) touch(mt int64) {
 	for {
 		cur := w.newest.Load()
 		if mt <= cur || w.newest.CompareAndSwap(cur, mt) {
 			break
 		}
 	}
-	if st.Mode&unix.S_IFMT == unix.S_IFREG && st.Nlink > 1 {
-		w.mu.Lock()
-		l, ok := w.links[st.Ino]
-		if !ok {
-			w.links[st.Ino] = &hardlink{size: alloc, nlink: st.Nlink, seen: 1}
-			w.bytes.Add(alloc)
-		} else {
-			l.seen++
-		}
-		w.mu.Unlock()
-		return
-	}
-	w.bytes.Add(alloc)
-	w.reclaim.Add(alloc)
 }
 
-// accountEntry adds one bulk directory entry to the totals.
-func (w *walker) accountEntry(alloc, size, mtimeNs int64, regular bool, nlink uint32, ino uint64) {
-	w.apparent.Add(size)
-	for {
-		cur := w.newest.Load()
-		if mtimeNs <= cur || w.newest.CompareAndSwap(cur, mtimeNs) {
-			break
-		}
+// account adds one stat record to the totals.
+func (w *walker) account(st *unix.Stat_t, sh fileShare) {
+	w.apparent.Add(st.Size)
+	w.touch(st.Mtim.Nano())
+	if st.Mode&unix.S_IFMT == unix.S_IFDIR {
+		w.bytes.Add(st.Blocks * 512)
+		w.reclaim.Add(st.Blocks * 512)
+		return
 	}
-	if regular && nlink > 1 {
-		w.mu.Lock()
-		l, ok := w.links[ino]
-		if !ok {
-			w.links[ino] = &hardlink{size: alloc, nlink: uint16(min(nlink, 65535)), seen: 1}
-			w.bytes.Add(alloc)
-		} else {
+	w.accountFile(st.Blocks*512, st.Mode&unix.S_IFMT == unix.S_IFREG, uint32(st.Nlink), st.Dev, st.Ino, sh)
+}
+
+// accountFile adds one non-directory entry: hardlinks are counted once, and
+// clones and hardlinks shared with files outside the tree are left out of
+// the reclaimable bytes (resolved in stats()).
+func (w *walker) accountFile(alloc int64, regular bool, nlink uint32, dev int32, ino uint64, sh fileShare) {
+	if !regular {
+		w.bytes.Add(alloc)
+		w.reclaim.Add(alloc)
+		return
+	}
+	if nlink <= 1 && !sh.cloned() {
+		w.bytes.Add(alloc)
+		w.reclaim.Add(sh.exclusive(alloc))
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if nlink > 1 {
+		k := volKey{dev, ino}
+		if l, ok := w.links[k]; ok {
 			l.seen++
+			return
 		}
-		w.mu.Unlock()
+		w.links[k] = &hardlink{size: alloc, nlink: uint16(min(nlink, 65535)), seen: 1, dev: dev, share: sh}
+		w.bytes.Add(alloc)
 		return
 	}
 	w.bytes.Add(alloc)
-	w.reclaim.Add(alloc)
+	k := volKey{dev, sh.cloneID}
+	f := w.clones[k]
+	if f == nil {
+		f = &cloneFamily{}
+		w.clones[k] = f
+	}
+	f.add(alloc, sh)
 }
 
 // walkBulk lists dir with getattrlistbulk; false means "unsupported here".
@@ -201,11 +294,13 @@ func (w *walker) walkBulk(dir string) bool {
 			if w.opt.Skip != nil && w.opt.Skip(child, e.name) {
 				return
 			}
-			w.accountEntry(0, 0, e.mtimeNs, false, 0, 0)
+			w.touch(e.mtimeNs)
 			w.dirs.Add(1)
 			subdirs = append(subdirs, child)
 		default:
-			w.accountEntry(e.alloc, e.size, e.mtimeNs, e.objType == vREG, e.nlink, e.ino)
+			w.apparent.Add(e.size)
+			w.touch(e.mtimeNs)
+			w.accountFile(e.alloc, e.objType == vREG, e.nlink, e.dev, e.ino, e.share())
 			w.files.Add(1)
 		}
 	})
@@ -267,12 +362,12 @@ func (w *walker) walk(dir string) {
 			if w.opt.Skip != nil && w.opt.Skip(child, name) {
 				continue
 			}
-			w.account(&st)
+			w.account(&st, fileShare{})
 			w.dirs.Add(1)
 			subdirs = append(subdirs, child)
 			continue
 		}
-		w.account(&st)
+		w.account(&st, fileShare{})
 		w.files.Add(1)
 	}
 	f.Close()

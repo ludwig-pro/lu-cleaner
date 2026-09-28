@@ -22,7 +22,7 @@ func (m *analyzeModel) View() string {
 	d := m.cur()
 	var b strings.Builder
 	title := sTitle.Render("🔍 analyze")
-	b.WriteString(title + " " + sAccentB.Render(truncLeft(m.env.Pretty(m.cwd), w-width(title)-1)))
+	b.WriteString(title + " " + sAccentB.Render(truncLeft(safeText(m.env.Pretty(m.cwd)), w-width(title)-1)))
 	b.WriteByte('\n')
 	b.WriteString(diskLine(m.disk, m.diskErr, w))
 	b.WriteByte('\n')
@@ -44,7 +44,11 @@ func (m *analyzeModel) View() string {
 	case anConfirm:
 		out = overlay(out, m.viewConfirm(w, h), w, h)
 	case anDeleting:
-		out = overlay(out, sBoxDanger.Render(m.spin.View()+" "+sBold.Render("Deleting…")), w, h)
+		verb := "Deleting…"
+		if m.opt.Clean.Trash && !m.opt.Clean.DryRun {
+			verb = "Moving to the Trash…"
+		}
+		out = overlay(out, sBoxDanger.Render(m.spin.View()+" "+sBold.Render(verb)), w, h)
 	case anResult:
 		out = overlay(out, m.viewResult(w, h), w, h)
 	}
@@ -56,7 +60,7 @@ func (m *analyzeModel) viewTotal(d *anDir, w int) string {
 		return m.spin.View() + sSubtle.Render(" reading directory…")
 	}
 	if d.err != nil {
-		return sRed.Render("✗ " + d.err.Error())
+		return sRed.Render("✗ " + safeText(d.err.Error()))
 	}
 	sum, files, complete, sized := m.total(d)
 	s := sSubtle.Render("Total ") + sBold.Render(fsx.Bytes(sum))
@@ -176,7 +180,7 @@ func (m *analyzeModel) entryLine(e *anEntry, cur bool, sum, largest int64, c anC
 	if c.age > 0 {
 		line += sSubtle.Render(padLeft(ageText(e.newest, m.now), c.age))
 	}
-	name := e.name
+	name := safeText(e.name)
 	var nst lipgloss.Style
 	switch {
 	case e.isLink:
@@ -201,12 +205,13 @@ func (m *analyzeModel) entryLine(e *anEntry, cur bool, sum, largest int64, c anC
 	}
 	if c.tag > 0 && tag != "" {
 		st := sYellow
-		if e.worktree != "" {
+		switch e.git.kind {
+		case gitWorktree:
 			st = sGreen
-		} else if e.gitRepo && e.tag == "git repo" {
-			st = sDim
+		case gitRepo, gitOther:
+			st = sDim // never deleted by the analyzer
 		}
-		line += " " + st.Render(pad(tag, c.tag))
+		line += " " + st.Render(pad(safeText(tag), c.tag))
 	}
 	return line
 }
@@ -228,10 +233,13 @@ func (m *analyzeModel) viewStatus(w int) string {
 	if m.status == "" {
 		if e := m.curEntry(); e != nil {
 			s := m.env.Pretty(e.path)
-			if e.worktree != "" && e.worktree != "?" {
-				s += "  (worktree of " + m.env.Pretty(e.worktree) + ")"
+			switch {
+			case e.isWorktree():
+				s += "  (worktree of " + m.env.Pretty(e.git.main) + ")"
+			case e.refusal() != "":
+				s += "  (" + e.refusal() + " — never deleted here)"
 			}
-			return sDim.Render(truncLeft(s, w))
+			return sDim.Render(truncLeft(safeText(s), w))
 		}
 		return ""
 	}
@@ -244,7 +252,7 @@ func (m *analyzeModel) viewStatus(w int) string {
 	case stErr:
 		st = sRedB
 	}
-	return pad(st.Render(m.status), w)
+	return pad(st.Render(safeText(m.status)), w)
 }
 
 func (m *analyzeModel) viewFooter(w int) string {
@@ -283,6 +291,8 @@ func (m *analyzeModel) viewHelp(w, h int) string {
 		"",
 		sDim.Render("Sizes are allocated blocks on disk; hardlinks are counted once per entry."),
 		sDim.Render("Deletions go through the safety guard: protected paths are refused."),
+		sDim.Render("Entries that are git repositories, submodules or other checkouts are never deleted"),
+		sDim.Render("(a folder holding some is deleted with them); linked worktrees go through git."),
 	}
 	if len(lines) > h-4 {
 		lines = lines[:max(1, h-4)]
@@ -292,26 +302,32 @@ func (m *analyzeModel) viewHelp(w, h int) string {
 
 func (m *analyzeModel) viewConfirm(w, h int) string {
 	inner := min(w-6, 78)
+	trash := m.opt.Clean.Trash && !m.opt.Clean.DryRun
 	var lines []string
 	verb := "Delete"
 	switch {
 	case m.opt.Clean.DryRun:
 		verb = "Dry-run delete"
-	case m.opt.Clean.Trash:
+	case trash:
 		verb = "Move to Trash"
 	}
-	lines = append(lines, sBold.Render(fmt.Sprintf("%s %s — %s?", verb, plural(len(m.confirm), "entry"), fsx.Bytes(m.confTotal))), "")
-	show := clamp(h-14, 1, 8)
+	n := len(m.confirm)
 	notes := make([]string, len(m.confirm))
 	pathW, noteW := 0, 0
 	for i, e := range m.confirm {
 		notes[i] = e.tag
-		if e.worktree != "" && e.worktree != "?" {
+		if e.isWorktree() {
 			notes[i] = "🌳 worktree → git worktree remove"
+			if m.opt.Clean.Trash {
+				notes[i] = "↷ skipped in Trash mode"
+				n--
+			}
 		}
-		pathW = max(pathW, width(m.env.Pretty(e.path)))
+		pathW = max(pathW, width(safeText(m.env.Pretty(e.path))))
 		noteW = max(noteW, width(notes[i]))
 	}
+	lines = append(lines, sBold.Render(fmt.Sprintf("%s %s — %s?", verb, plural(n, "entry"), fsx.Bytes(m.confTotal))), "")
+	show := clamp(h-14, 1, 8)
 	noteW = min(noteW, inner/3)
 	pathW = clamp(pathW, 8, max(8, inner-2-2-9-2-noteW))
 	for i, e := range m.confirm {
@@ -323,18 +339,34 @@ func (m *analyzeModel) viewConfirm(w, h int) string {
 		if e.sized {
 			size = fsx.Bytes(e.size)
 		}
-		line := "  " + padTruncLeft(m.env.Pretty(e.path), pathW) + "  " + sBold.Render(padLeft(size, 9))
+		line := "  " + padTruncLeft(safeText(m.env.Pretty(e.path)), pathW) + "  " + sBold.Render(padLeft(size, 9))
 		if noteW > 0 {
-			line += "  " + sYellow.Render(pad(notes[i], noteW))
+			line += "  " + sYellow.Render(pad(safeText(notes[i]), noteW))
 		}
 		lines = append(lines, line)
+	}
+	if skipped := len(m.confirm) - n; skipped > 0 {
+		lines = append(lines, sOrange.Render(fmt.Sprintf("  ↷ %s skipped:", plural(skipped, "worktree"))),
+			sOrange.Render("    "+trashSkipMsg))
+	}
+	if k := len(m.confRefused); k > 0 {
+		names := make([]string, 0, min(k, 3))
+		for i, e := range m.confRefused {
+			if i == 3 {
+				names = append(names, "…")
+				break
+			}
+			names = append(names, safeText(e.name))
+		}
+		lines = append(lines, sOrange.Render(pad(fmt.Sprintf("  %s left out (git repository or checkout, never deleted here): %s",
+			plural(k, "marked entry"), strings.Join(names, ", ")), inner)))
 	}
 	lines = append(lines, "")
 	label := func(s string) string { return sSubtle.Render(pad(s, 9)) }
 	switch {
 	case m.opt.Clean.DryRun:
 		lines = append(lines, label("Method")+sCyan.Render("dry-run — nothing will be touched"))
-	case m.opt.Clean.Trash:
+	case trash:
 		lines = append(lines, label("Method")+sYellow.Render("move to Trash — space is NOT freed until you empty it"))
 	default:
 		lines = append(lines, label("Method")+sRed.Render("delete permanently")+sSubtle.Render(" — cannot be undone"))
@@ -355,9 +387,21 @@ func (m *analyzeModel) viewResult(w, h int) string {
 		return sBox.Render("nothing done")
 	}
 	var lines []string
-	head := sGreen.Render(fmt.Sprintf("✓ %d deleted", s.Count(clean.StatusDone)))
-	if s.DryRun {
+	freed, moved, nMoved := trashSplit(s)
+	nDeleted := s.Count(clean.StatusDone) - nMoved
+	var head string
+	switch {
+	case s.DryRun:
 		head = sCyan.Render(fmt.Sprintf("○ dry-run: %d would be deleted", s.Count(clean.StatusDryRun)))
+		if s.Trash {
+			head = sCyan.Render(fmt.Sprintf("○ dry-run: %d would be moved to the Trash", s.Count(clean.StatusDryRun)))
+		}
+	case nMoved > 0 && nDeleted > 0:
+		head = sGreen.Render(fmt.Sprintf("✓ %d deleted · %d moved to the Trash", nDeleted, nMoved))
+	case nMoved > 0:
+		head = sGreen.Render(fmt.Sprintf("✓ %d moved to the Trash", nMoved))
+	default:
+		head = sGreen.Render(fmt.Sprintf("✓ %d deleted", nDeleted))
 	}
 	if n := s.Count(clean.StatusSkipped); n > 0 {
 		head += sSubtle.Render(" · ") + sYellow.Render(fmt.Sprintf("↷ %d skipped", n))
@@ -366,7 +410,13 @@ func (m *analyzeModel) viewResult(w, h int) string {
 		head += sSubtle.Render(" · ") + sRed.Render(fmt.Sprintf("✗ %d failed", n))
 	}
 	if !s.DryRun {
-		head += sSubtle.Render(" · freed ") + sBold.Render(fsx.Bytes(s.Estimated))
+		// a move to the Trash frees nothing until the Trash is emptied
+		if freed > 0 || nMoved == 0 {
+			head += sSubtle.Render(" · freed ") + sBold.Render(fsx.Bytes(freed))
+		}
+		if nMoved > 0 {
+			head += sSubtle.Render(" · in the Trash ") + sBold.Render(fsx.Bytes(moved))
+		}
 	}
 	lines = append(lines, head, "")
 	show := clamp(h-10, 1, 10)
@@ -377,20 +427,20 @@ func (m *analyzeModel) viewResult(w, h int) string {
 		}
 		name := ""
 		if r.Item != nil {
-			name = r.Item.Name
+			name = safeText(r.Item.Name)
 		}
 		switch r.Status {
 		case clean.StatusDone:
 			lines = append(lines, sGreen.Render("✓ ")+name)
 		case clean.StatusDryRun:
-			lines = append(lines, sCyan.Render("○ ")+name+sSubtle.Render("  "+r.Message))
+			lines = append(lines, sCyan.Render("○ ")+name+sSubtle.Render("  "+safeText(r.Message)))
 		case clean.StatusSkipped:
-			lines = append(lines, sYellow.Render("↷ ")+name+sSubtle.Render("  "+r.Message))
+			lines = append(lines, sYellow.Render("↷ ")+name+sSubtle.Render("  "+safeText(r.Message)))
 		default:
-			lines = append(lines, sRed.Render("✗ ")+name+sSubtle.Render("  "+r.Error))
+			lines = append(lines, sRed.Render("✗ ")+name+sSubtle.Render("  "+safeText(r.Error)))
 		}
 	}
-	if s.Trash && s.Count(clean.StatusDone) > 0 {
+	if nMoved > 0 {
 		lines = append(lines, "", sYellow.Render("🗑 Moved to the Trash: empty it to really free the space."))
 	}
 	lines = append(lines, "", sDim.Render("press any key"))

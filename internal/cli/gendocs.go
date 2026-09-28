@@ -165,7 +165,7 @@ func catalogPage(entries []catalog.Entry) string {
 	b.WriteString(":::note[Generated]\nThis page is generated from the catalog in the source code (`make docs`). ")
 	b.WriteString("Run `lu-cleaner catalog` to print it on your machine. `~` is your home folder and `$TMPDIR` your per-user temporary folder.\n:::\n\n")
 	b.WriteString("These are the **static** locations. Things that need logic — git worktrees, project artifacts, simulators, emulators, node versions, AI sessions by age… — are found by dedicated scanners, described in [What gets scanned](/lu-cleaner/reference/scanners/).\n\n")
-	fmt.Fprintf(&b, "**%d entries.** Risk: `safe` = pure cache, `moderate` = regenerable at some cost, `caution` = may hold data you care about, `never` = report only.\n\n", len(entries))
+	fmt.Fprintf(&b, "**%d entries.** Risk: <span class=\"risk safe\">safe</span> pure cache · <span class=\"risk moderate\">moderate</span> regenerable at some cost · <span class=\"risk caution\">caution</span> may hold data you care about · <span class=\"risk never\">never</span> report only.\n\n", len(entries))
 	byCat := map[core.Category][]catalog.Entry{}
 	for _, e := range entries {
 		byCat[e.Category] = append(byCat[e.Category], e)
@@ -176,12 +176,16 @@ func catalogPage(entries []catalog.Entry) string {
 			continue
 		}
 		fmt.Fprintf(&b, "## %s %s\n\n%s — %d entries.\n\n", ci.Icon, ci.Title, ci.Desc, len(es))
-		b.WriteString("| Name | Risk | Cleaning | Paths | Notes |\n|---|---|---|---|---|\n")
 		for _, e := range es {
 			how := e.Method.String()
 			if e.Method == core.MethodCommand {
-				how = "`" + strings.Join(e.Command, " ") + "`"
+				how = "runs `" + strings.Join(e.Command, " ") + "`"
 			}
+			fmt.Fprintf(&b, "#### %s\n\n<span class=\"risk %s\">%s</span> · %s · <code>%s</code>\n\n", e.Name, e.Risk, e.Risk, how, e.ID)
+			for _, p := range e.Paths {
+				fmt.Fprintf(&b, "- `%s`\n", p)
+			}
+			b.WriteString("\n" + e.Note)
 			var extra []string
 			if len(e.ProcessGuard) > 0 {
 				extra = append(extra, "refused while "+strings.Join(e.ProcessGuard, ", ")+" runs")
@@ -192,18 +196,11 @@ func catalogPage(entries []catalog.Entry) string {
 			if e.KeepLatest > 0 {
 				extra = append(extra, fmt.Sprintf("keeps the %d newest", e.KeepLatest))
 			}
-			note := e.Note
 			if len(extra) > 0 {
-				note += " _(" + strings.Join(extra, "; ") + ")_"
+				b.WriteString(" _(" + strings.Join(extra, "; ") + ")_")
 			}
-			paths := make([]string, len(e.Paths))
-			for i, p := range e.Paths {
-				paths[i] = "`" + p + "`"
-			}
-			fmt.Fprintf(&b, "| **%s** <br/><sub>`%s`</sub> | %s | %s | %s | %s |\n",
-				mdCell(e.Name), e.ID, e.Risk, how, strings.Join(paths, "<br/>"), mdCell(note))
+			b.WriteString("\n\n")
 		}
-		b.WriteString("\n")
 	}
 	return b.String()
 }

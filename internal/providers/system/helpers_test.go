@@ -14,6 +14,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"golang.org/x/sys/unix"
 )
 
 // fakeRunner answers commands from a table ("name arg1 arg2" -> output).
@@ -24,10 +25,11 @@ type fakeRunner struct {
 	block map[string]bool // commands that hang until their context expires
 	bins  map[string]bool
 	calls []string
+	dirs  map[string]string // command -> working directory of its last call
 }
 
 func newFakeRunner(bins ...string) *fakeRunner {
-	f := &fakeRunner{out: map[string]string{}, fail: map[string]bool{}, block: map[string]bool{}, bins: map[string]bool{}}
+	f := &fakeRunner{out: map[string]string{}, fail: map[string]bool{}, block: map[string]bool{}, bins: map[string]bool{}, dirs: map[string]string{}}
 	for _, b := range bins {
 		f.bins[b] = true
 	}
@@ -39,6 +41,7 @@ func (f *fakeRunner) Output(ctx context.Context, dir, name string, args ...strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, key)
+	f.dirs[key] = dir
 	if f.block[key] {
 		f.mu.Unlock()
 		<-ctx.Done()
@@ -94,6 +97,7 @@ func newFixture(t *testing.T, parts ...string) *fixture {
 		updatesDir: "-",
 		only:       only,
 		lastUsed:   func(string) (time.Time, bool) { return time.Time{}, false },
+		added:      func(string, *unix.Stat_t) time.Time { return time.Time{} },
 	}
 	f.env = &core.Env{
 		Home:      home,

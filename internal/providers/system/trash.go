@@ -32,12 +32,17 @@ func (s *scan) trash() {
 		it.Command = []string{"osascript", "-e", `tell application "Finder" to empty trash`}
 		it.Note = "Emptying the Trash through Finder permanently deletes what you already trashed (on every volume); moving files to the Trash frees nothing until then."
 		it.Warn = "cannot read ~/.Trash: grant Full Disk Access to your terminal to measure it (Finder may ask for Automation permission)"
+		it.NoRecommend = true // irreversible and not regenerable: only on explicit selection
 		s.emitNow(it)
 		return
 	}
 	it := s.newItem("trash", core.CatSystem, "", core.RiskModerate)
 	it.ID = itemID(it.Kind, dir)
 	it.AllowGitRepo = true // a trashed project may be a git repository: it was thrown away on purpose
+	// Emptying the Trash is irreversible and its content is not regenerable:
+	// never preselected by smart select, however old the newest entry is
+	// (core.Recommend would otherwise pick a stale moderate item).
+	it.NoRecommend = true
 	for _, e := range ents {
 		if e.Name() == ".DS_Store" {
 			continue

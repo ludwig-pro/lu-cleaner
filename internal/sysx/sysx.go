@@ -12,8 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"golang.org/x/sys/unix"
 )
+
+// output runs a system tool and returns its stdout. WaitDelay bounds the wait
+// for the pipes once the context expired (a helper holding stdout would
+// otherwise keep Output blocked past the timeout).
+func output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	return cmd.Output()
+}
 
 // Disk describes the volume holding a path.
 type Disk struct {
@@ -75,7 +85,7 @@ func RunningStrict(patterns ...string) ([]string, error) {
 		procBase = map[string]bool{}
 		procPaths = nil
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		out, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "comm=").Output()
+		out, err := output(ctx, "/bin/ps", "-axo", "comm=")
 		cancel()
 		procErr = err
 		if err == nil && len(out) == 0 {
@@ -122,7 +132,7 @@ func InvalidateProcesses() {
 // LocalSnapshots lists APFS local (Time Machine) snapshots of the root
 // volume. They pin deleted blocks: space is not returned until they expire.
 func LocalSnapshots(ctx context.Context) []string {
-	out, err := exec.CommandContext(ctx, "/usr/bin/tmutil", "listlocalsnapshots", "/").Output()
+	out, err := output(ctx, "/usr/bin/tmutil", "listlocalsnapshots", "/")
 	if err != nil {
 		return nil
 	}
@@ -149,25 +159,37 @@ type lsofSnap struct {
 type procPath struct {
 	pid  string
 	path string
+	key  string // fsx.FoldPath(path), filled when cached
+}
+
+// newSnap caches procs with their comparison keys.
+func newSnap(procs []procPath) *lsofSnap {
+	for i := range procs {
+		procs[i].key = fsx.FoldPath(procs[i].path)
+	}
+	return &lsofSnap{at: time.Now(), procs: procs}
 }
 
 // openFDs lists (pid, path) pairs for one class: "cwd" = current
-// directories, "txt" = executables. It uses proc_info(2) natively (a few ms)
-// and falls back to a system-wide `lsof -d <fd> -Fpn`; cached for 5 seconds.
+// directories, "txt" = executables, loaded libraries and other mapped files.
+// It uses proc_info(2) natively and falls back to a system-wide
+// `lsof -d <fd> -Fpn`; cached for 5 seconds.
 func openFDs(fd string) []procPath {
 	lsofMu.Lock()
 	defer lsofMu.Unlock()
 	if c := lsofCache[fd]; c != nil && time.Since(c.at) < 5*time.Second {
 		return c.procs
 	}
-	if cwds, execs, ok := nativeProcPaths(); ok {
-		now := time.Now()
-		lsofCache["cwd"] = &lsofSnap{at: now, procs: cwds}
-		lsofCache["txt"] = &lsofSnap{at: now, procs: execs}
-		return lsofCache[fd].procs
+	native := nativeCwds
+	if fd == "txt" {
+		native = nativeExecs
+	}
+	if procs, ok := native(); ok {
+		lsofCache[fd] = newSnap(procs)
+		return procs
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	out, _ := exec.CommandContext(ctx, "/usr/sbin/lsof", "-w", "-n", "-P", "-d", fd, "-Fpn").Output()
+	out, _ := output(ctx, "/usr/sbin/lsof", "-w", "-n", "-P", "-d", fd, "-Fpn")
 	cancel()
 	var procs []procPath
 	pid := ""
@@ -182,25 +204,38 @@ func openFDs(fd string) []procPath {
 			procs = append(procs, procPath{pid: pid, path: l[1:]})
 		}
 	}
-	lsofCache[fd] = &lsofSnap{at: time.Now(), procs: procs}
+	lsofCache[fd] = newSnap(procs)
 	return procs
 }
 
+// invalidateFDs drops the cached process paths (tests).
+func invalidateFDs() {
+	lsofMu.Lock()
+	clear(lsofCache)
+	lsofMu.Unlock()
+}
+
 func pidsInside(fd, dir string) string {
-	dirs := []string{dir}
+	dirs := []string{fsx.FoldPath(filepath.Clean(dir))}
 	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
-		dirs = append(dirs, real) // the kernel reports resolved paths (/private/var/…)
+		dirs = append(dirs, fsx.FoldPath(real)) // the kernel reports resolved paths (/private/var/…)
 	}
 	var pids []string
 	seen := map[string]bool{}
 	for _, c := range openFDs(fd) {
+		if seen[c.pid] {
+			continue
+		}
+		// Case- and normalization-insensitive, like APFS: a target spelled
+		// "~/Dev/App" is busy when a process works in "~/dev/app".
 		inside := false
 		for _, d := range dirs {
-			if c.path == d || strings.HasPrefix(c.path, d+"/") {
+			if fsx.Within(c.key, d) {
 				inside = true
+				break
 			}
 		}
-		if inside && !seen[c.pid] {
+		if inside {
 			seen[c.pid] = true
 			pids = append(pids, c.pid)
 		}
@@ -213,5 +248,6 @@ func pidsInside(fd, dir string) string {
 func CwdInside(dir string) string { return pidsInside("cwd", dir) }
 
 // ExecInside returns the PIDs (comma separated) of processes running an
-// executable or a loaded library (e.g. a native .node addon) located in dir.
+// executable, or having a library (e.g. a native .node addon) or another
+// file mapped in memory, located in dir.
 func ExecInside(dir string) string { return pidsInside("txt", dir) }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,6 +90,7 @@ func (c *cli) runReport(ctx context.Context, spec reportSpec) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	c.warnUnmatchedKinds(spec.kinds, res.Items)
 	items := displayItems(res.Items, f, s.env.Now)
 	if c.f.smart {
 		items = recommendedOnly(items, s.env.Now, s.staleAfter)
@@ -118,8 +121,10 @@ func (c *cli) runReport(ctx context.Context, spec reportSpec) error {
 	return nil
 }
 
-// collect runs the providers with a live progress line on stderr.
+// collect runs the providers (restricted to the setup's scope) with a live
+// progress line on stderr.
 func (c *cli) collect(ctx context.Context, s *setup, provs []core.Provider) *engine.Result {
+	provs = scopeProviders(s, provs)
 	st := &scanStats{total: len(provs), sizes: map[string]int64{}}
 	sp := c.startSpinner(st.line)
 	res := engine.Collect(ctx, s.env, provs, func(ev engine.Event) {
@@ -174,7 +179,7 @@ func (c *cli) printProviderErrors(res *engine.Result) {
 		if !c.f.verbose {
 			msg = firstLine(msg)
 		}
-		c.errw.printf("warning: provider %s: %s\n", id, msg)
+		c.errw.printf("warning: provider %s: %s\n", sanitize(id), sanitizeLines(msg, "    "))
 	}
 }
 
@@ -218,6 +223,11 @@ type catGroup struct {
 	total int64 // freeable: cleanable items only, nested paths counted once
 	recoN int
 	recoB int64
+	// shared is the part of total inside items of other categories
+	// (node_modules of a worktree...), counted once in the global total;
+	// sharedWith names those categories.
+	shared     int64
+	sharedWith []core.Category
 }
 
 // groupByCategory groups items in display order (core.Categories, then
@@ -261,7 +271,95 @@ func groupByCategory(items []*core.Item, now time.Time, stale time.Duration, sor
 		g.recoB = core.Total(rec)
 		out = append(out, g)
 	}
+	computeShared(out)
 	return out
+}
+
+// computeShared sets catGroup.shared: the bytes of a category's top-level
+// cleanable items that lie inside a cleanable item of another category
+// (artifacts inside a worktree). Category totals then overlap, while the
+// global total (core.Total over everything) counts those bytes once. For
+// identical paths, the category listed first owns the bytes.
+func computeShared(groups []*catGroup) {
+	// owners maps a target path to the groups having an item with it.
+	owners := map[string][]int{}
+	tops := make([][]*core.Item, len(groups))
+	for gi, g := range groups {
+		var cleanable []*core.Item
+		for _, it := range g.items {
+			if it.CanClean() {
+				cleanable = append(cleanable, it)
+			}
+		}
+		tops[gi] = core.TopLevel(cleanable)
+		for _, it := range tops[gi] {
+			for _, p := range it.Targets() {
+				if !slices.Contains(owners[p], gi) {
+					owners[p] = append(owners[p], gi)
+				}
+			}
+		}
+	}
+	for gi, g := range groups {
+		for _, it := range tops[gi] {
+			ts := it.Targets()
+			if len(ts) == 0 {
+				continue
+			}
+			var with []int
+			covered := true
+			for _, p := range ts {
+				hit := -1
+				// The same path in an earlier category...
+				for _, o := range owners[p] {
+					if o < gi {
+						hit = o
+						break
+					}
+				}
+				// ...or an ancestor in any other category.
+				for d := p; hit < 0; {
+					parent := filepath.Dir(d)
+					if parent == d {
+						break
+					}
+					d = parent
+					for _, o := range owners[d] {
+						if o != gi {
+							hit = o
+							break
+						}
+					}
+				}
+				if hit < 0 {
+					covered = false
+					break
+				}
+				with = append(with, hit)
+			}
+			if !covered {
+				continue
+			}
+			g.shared += it.Freed()
+			for _, o := range with {
+				if !slices.Contains(g.sharedWith, groups[o].info.ID) {
+					g.sharedWith = append(g.sharedWith, groups[o].info.ID)
+				}
+			}
+		}
+	}
+}
+
+// sharedText describes catGroup.shared ("" when nothing is shared).
+func sharedText(g *catGroup) string {
+	if g.shared <= 0 {
+		return ""
+	}
+	var titles []string
+	for _, id := range g.sharedWith {
+		titles = append(titles, sanitize(core.LookupCategory(id).Title))
+	}
+	return fsx.Bytes(g.shared) + " inside " + strings.Join(titles, ", ")
 }
 
 // itemTable builds the NAME SIZE AGE RISK RECO PATH table.
@@ -309,7 +407,7 @@ func (c *cli) addItem(t *table, env *core.Env, it *core.Item, reco bool, now tim
 		return s
 	}, it.Name, size, ageText(it, now), riskPlain(it), star, whereText(env, it))
 	if it.Warn != "" {
-		t.line("    " + o.paint(o.warn, "! "+it.Warn))
+		t.line("    " + o.paint(o.warn, "! "+sanitize(it.Warn)))
 	}
 }
 
@@ -336,6 +434,9 @@ func (c *cli) printGroups(s *setup, groups []*catGroup, top int) {
 		head := fmt.Sprintf("%s  %s · %s", o.paint(o.title, o.catTitle(g.info)), o.sizeText(g.total), plural(len(g.items), "item", "items"))
 		if g.recoN > 0 {
 			head += " · " + o.paint(o.accent, "★ "+fsx.Bytes(g.recoB)) + " recommended"
+		}
+		if sh := sharedText(g); sh != "" {
+			head += " · " + o.paint(o.faint, sh)
 		}
 		t.line(head)
 		t.add(func(_ int, s string) string { return o.paint(o.dim, s) }, t.headers...)
@@ -367,12 +468,21 @@ func (c *cli) printSummaryTable(groups []*catGroup) {
 		o.println("Nothing found.")
 		return
 	}
-	t := newTable("CATEGORY", "SIZE", "ITEMS", "RECOMMENDED")
+	headers := []string{"CATEGORY", "SIZE", "ITEMS", "RECOMMENDED"}
+	shared := slices.ContainsFunc(groups, func(g *catGroup) bool { return g.shared > 0 })
+	if shared {
+		headers = append(headers, "SHARED")
+	}
+	t := newTable(headers...)
 	t.right[1], t.right[2], t.right[3] = true, true, true
 	for _, g := range groups {
 		reco := ""
 		if g.recoN > 0 {
 			reco = fsx.Bytes(g.recoB) + " (" + formatCount(g.recoN) + ")"
+		}
+		cells := []string{o.catTitle(g.info), fsx.Bytes(g.total), formatCount(len(g.items)), reco}
+		if shared {
+			cells = append(cells, sharedText(g))
 		}
 		t.add(func(col int, s string) string {
 			switch col {
@@ -382,9 +492,11 @@ func (c *cli) printSummaryTable(groups []*catGroup) {
 				return o.sizeText(g.total)
 			case 3:
 				return o.paint(o.accent, s)
+			case 4:
+				return o.paint(o.faint, s)
 			}
 			return s
-		}, o.catTitle(g.info), fsx.Bytes(g.total), formatCount(len(g.items)), reco)
+		}, cells...)
 	}
 	t.render(o, "", true)
 }
@@ -440,6 +552,9 @@ func (c *cli) printTotals(s *setup, groups []*catGroup, f core.Filter, narrowed 
 		line += " · " + o.paint(o.accent, "★ "+fsx.Bytes(core.Total(rec))) + " recommended (" + plural(len(rec), "item", "items") + ")"
 	}
 	o.println(line)
+	if slices.ContainsFunc(groups, func(g *catGroup) bool { return g.shared > 0 }) {
+		o.println(o.paint(o.faint, "Category sizes overlap (items inside items of another category): the total counts those bytes once."))
+	}
 	if d, err := c.Disk(s.env.Home); err == nil && d.Total > 0 {
 		o.println(o.paint(o.faint, fmt.Sprintf("Disk: %s free of %s (%.0f%% used)", fsx.Bytes(d.Free), fsx.Bytes(d.Total), d.UsedPct())))
 	}
@@ -448,8 +563,29 @@ func (c *cli) printTotals(s *setup, groups []*catGroup, f core.Filter, narrowed 
 		if narrowed && len(f.Categories) > 0 {
 			cmd += " -c " + strings.ReplaceAll(joinCats(f.Categories), ", ", ",")
 		}
-		o.println("→ run: " + o.paint(o.bold, cmd))
+		if s.env.ExplicitRoots {
+			// Keep the scope of this report: without them, the command
+			// would propose the artifacts of every root.
+			for _, r := range s.env.Roots {
+				cmd += " --root " + shellArg(s.env, r)
+			}
+		}
+		o.println("→ run: " + o.paint(o.bold, sanitize(cmd)))
 	}
+}
+
+// shellArg returns path p ready to paste in a shell: "~/…" when that needs
+// no quoting, the absolute path in single quotes otherwise.
+func shellArg(env *core.Env, p string) string {
+	plain := func(s string) bool {
+		return s != "" && !strings.ContainsFunc(s, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("~/._-+,:@%", r))
+		})
+	}
+	if pretty := env.Pretty(p); plain(pretty) {
+		return pretty
+	}
+	return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
 }
 
 // cleanableAndRecommended flattens the groups: cleanable items (totals do not
@@ -485,6 +621,9 @@ type jsonTotals struct {
 	Recommended int64            `json:"recommended"`
 	Items       int              `json:"items"`
 	ByCategory  map[string]int64 `json:"by_category"`
+	// SharedByCategory is the part of by_category inside items of another
+	// category (counted once in size): by_category values overlap.
+	SharedByCategory map[string]int64 `json:"shared_by_category"`
 }
 
 type jsonReport struct {
@@ -521,7 +660,7 @@ func (c *cli) buildReport(s *setup, groups []*catGroup, top int, res *engine.Res
 		Version:     c.Version,
 		GeneratedAt: s.env.Now.UTC().Truncate(time.Second),
 		Items:       []jsonItem{},
-		Totals:      jsonTotals{ByCategory: map[string]int64{}},
+		Totals:      jsonTotals{ByCategory: map[string]int64{}, SharedByCategory: map[string]int64{}},
 		Errors:      map[string]string{},
 	}
 	r.Disk, _ = c.Disk(s.env.Home)
@@ -534,6 +673,9 @@ func (c *cli) buildReport(s *setup, groups []*catGroup, top int, res *engine.Res
 			r.Items = append(r.Items, newJSONItem(it, g.reco[it], s.env.Now))
 		}
 		r.Totals.ByCategory[string(g.info.ID)] = g.total
+		if g.shared > 0 {
+			r.Totals.SharedByCategory[string(g.info.ID)] = g.shared
+		}
 	}
 	all, rec := cleanableAndRecommended(groups)
 	r.Totals.Size = core.Total(all)

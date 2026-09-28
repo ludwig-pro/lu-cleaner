@@ -6,13 +6,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // Env is everything a provider needs to scan. Built once per run by the CLI.
 type Env struct {
 	Home   string    // user home, absolute
-	TmpDir string    // $TMPDIR resolved (e.g. /var/folders/xx/.../T)
+	TmpDir string    // per-user temp dir, symlinks resolved (/private/var/folders/xx/yyyy/T), see NewEnv
 	Now    time.Time // reference time for ages
 
 	// Roots are directories scanned for project artifacts (node_modules, Pods, builds...).
@@ -53,11 +56,33 @@ type Runner interface {
 // ExecRunner is the real Runner backed by os/exec.
 type ExecRunner struct{}
 
+// waitDelay bounds how long Output waits for the stdout/stderr pipes to be
+// closed once the command was killed (a helper that escaped the process
+// group may still hold them).
+const waitDelay = 2 * time.Second
+
 func (ExecRunner) Output(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	killGroupOnCancel(cmd)
 	return cmd.Output()
+}
+
+// killGroupOnCancel runs cmd in its own process group and, when its context
+// is done, kills the whole group rather than only the direct child: wrappers
+// (xcrun, node shims, brew's ruby, sh -c) often leave helpers running that
+// inherited stdout, and Output would otherwise wait for them without bound.
+// WaitDelay is the backstop for a helper that left the group (setsid).
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) == nil {
+			return nil
+		}
+		return cmd.Process.Kill() // no group (already gone, EPERM...): at least the child
+	}
+	cmd.WaitDelay = waitDelay
 }
 
 func (ExecRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }
@@ -65,17 +90,9 @@ func (ExecRunner) LookPath(name string) (string, error) { return exec.LookPath(n
 // NewEnv builds an Env with sane defaults for the current user.
 func NewEnv() *Env {
 	home, _ := os.UserHomeDir()
-	tmp := os.Getenv("TMPDIR")
-	if tmp == "" {
-		tmp = os.TempDir()
-	}
-	tmp = filepath.Clean(tmp)
-	if r, err := filepath.EvalSymlinks(tmp); err == nil {
-		tmp = r
-	}
 	return &Env{
 		Home:       home,
-		TmpDir:     tmp,
+		TmpDir:     userTmpDir(os.Getenv("TMPDIR")),
 		Now:        time.Now(),
 		MaxDepth:   8,
 		KeepLatest: 1,
@@ -83,6 +100,66 @@ func NewEnv() *Env {
 		Runner:     ExecRunner{},
 		Logf:       func(string, ...any) {},
 	}
+}
+
+// darwinUserTempDir asks the system for the per-user temp dir, like
+// confstr(_CS_DARWIN_USER_TEMP_DIR) does ("" when unavailable). A variable
+// for tests.
+var darwinUserTempDir = func() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// userTmpDir resolves the per-user temp dir from $TMPDIR (tmpEnv). $TMPDIR
+// is missing under cron, launchd and sudo, and may be set to the shared
+// /tmp: falling back to /tmp would make the catalog's $TMPDIR entries point
+// at the wrong place and turn the whole parent (/private) into an allowed
+// deletion area. So when $TMPDIR does not resolve to a per-user temp dir,
+// the system is asked (getconf DARWIN_USER_TEMP_DIR); /tmp is only the last
+// resort.
+func userTmpDir(tmpEnv string) string {
+	resolve := func(p string) string {
+		if p == "" || !filepath.IsAbs(p) {
+			return ""
+		}
+		p = filepath.Clean(p)
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return p
+	}
+	if t := resolve(tmpEnv); IsUserTempDir(t) {
+		return t
+	}
+	if t := resolve(darwinUserTempDir()); IsUserTempDir(t) {
+		return t
+	}
+	if t := resolve(tmpEnv); t != "" {
+		return t
+	}
+	if t := resolve(os.TempDir()); t != "" {
+		return t
+	}
+	return "/tmp"
+}
+
+// IsUserTempDir reports whether p is a resolved per-user temp dir of macOS:
+// exactly /private/var/folders/<xx>/<id>/T.
+func IsUserTempDir(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/private/var/folders/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "T" &&
+		parts[0] != "." && parts[0] != ".." && parts[1] != "." && parts[1] != ".."
 }
 
 // Expand turns "~/x" into an absolute path under Home and cleans it.
@@ -110,10 +187,16 @@ func (e *Env) Pretty(p string) string {
 	return p
 }
 
-// Excluded reports whether p is inside one of the Exclude paths.
+// Excluded reports whether p is inside one of the Exclude paths. The
+// comparison ignores case and Unicode normalization (NFC/NFD), like APFS
+// does: "~/Dev/App" is excluded by an exclude entry "~/dev/app".
 func (e *Env) Excluded(p string) bool {
+	if len(e.Exclude) == 0 {
+		return false
+	}
+	fp := fsx.FoldPath(p)
 	for _, x := range e.Exclude {
-		if p == x || strings.HasPrefix(p, x+"/") {
+		if fsx.Within(fp, fsx.FoldPath(x)) {
 			return true
 		}
 	}

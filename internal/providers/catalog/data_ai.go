@@ -156,13 +156,25 @@ func init() {
 		},
 
 		// ------------------------------------------------------------ Codex
+		// Repair backups are pre-repair copies: only the logs DB ones are pure
+		// waste. Those of memories_* / goals_* (and state_*, protected by the
+		// guard) are the only way back if a repair dropped rows.
 		Entry{
 			ID: "ai-codex-repair-backups", Category: core.CatAI,
-			Name:  "Codex DB repair backups",
-			Paths: []string{"~/.codex/*.codex-repair-*.bak", "~/.codex/sqlite/*.codex-repair-*.bak"},
+			Name:  "Codex logs DB repair backups",
+			Paths: []string{"~/.codex/logs_*.codex-repair-*.bak", "~/.codex/sqlite/logs_*.codex-repair-*.bak"},
 			Files: true, OlderThan: 7 * aiDay,
 			Risk: core.RiskSafe, Recommended: true,
-			Note: "One-off copies Codex made while repairing corrupted databases (*.codex-repair-<epoch>.bak); never read again.",
+			Note: "One-off copies of the Codex logs database made while repairing it (logs_*.codex-repair-<epoch>.bak); never read again.",
+		},
+		Entry{
+			ID: "ai-codex-repair-backups-data", Category: core.CatAI,
+			Name:    "Codex DB repair backups (memories, goals…)",
+			Paths:   []string{"~/.codex/*.codex-repair-*.bak", "~/.codex/sqlite/*.codex-repair-*.bak"},
+			Exclude: []string{"logs_*", "state_*"},
+			Files:   true, OlderThan: 30 * aiDay,
+			Risk: core.RiskCaution, ProcessGuard: aiProcCodex,
+			Note: "Pre-repair copies of Codex databases holding your data (memories, goals…): the only way to recover rows a repair dropped (sqlite3 .recover). Kept unless you choose them.",
 		},
 		Entry{
 			ID: "ai-codex-global-state-tmp", Category: core.CatAI,
@@ -334,13 +346,15 @@ func init() {
 			Files: true, Risk: core.RiskNever, Method: core.MethodReport,
 			Note: "Holds every Cursor agent / composer chat, settings state and auth; delete old chats in Cursor (the file only shrinks after a VACUUM with Cursor closed).",
 		},
+		// The only restore points of the DB holding every Cursor chat: user
+		// data, never preselected (caution).
 		Entry{
 			ID: "ai-cursor-state-db-backups", Category: core.CatAI,
 			Name:  "Cursor state DB backups",
 			Paths: []string{cursorApp + "/User/globalStorage/state.vscdb.backup", cursorApp + "/User/globalStorage/state.vscdb.backup-*"},
 			Files: true, OlderThan: 30 * aiDay,
-			Risk: core.RiskModerate, ProcessGuard: aiProcCursor,
-			Note: "Old restore points of the chats/state DB (state.vscdb.backup is rewritten by Cursor, dated ones are one-off copies).",
+			Risk: core.RiskCaution, ProcessGuard: aiProcCursor,
+			Note: "Restore points of the chats/state DB (state.vscdb.backup is rewritten by Cursor, dated ones are one-off copies): the only way back to chats lost or corrupted since. Not regenerated.",
 		},
 		Entry{
 			ID: "ai-cursor-agent-worker-logs", Category: core.CatAI,

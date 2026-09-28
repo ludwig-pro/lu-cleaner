@@ -10,8 +10,10 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20260927004216-9c77d672503d
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.9
 	golang.org/x/sys v0.38.0
 	golang.org/x/term v0.37.0
+	golang.org/x/text v0.28.0
 )
 
 require (
@@ -34,7 +36,5 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/text v0.28.0 // indirect
 )

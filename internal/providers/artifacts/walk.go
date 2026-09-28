@@ -112,7 +112,9 @@ func (w *walker) walk(dir string, wc walkCtx) {
 	}
 	// Content-identified artifacts the parent's rules did not catch: a
 	// virtualenv of any name, a folder tagged CACHEDIR.TAG. Never walk them.
-	if dir != wc.root.path && (wc.git == nil || dir != wc.git.path) {
+	// A directory holding a .git entry is a checkout even when addGitRoot
+	// could not register it (unreadable or dangling .git file).
+	if dir != wc.root.path && (wc.git == nil || dir != wc.git.path) && !names[".git"] {
 		var r *rule
 		switch {
 		case names["pyvenv.cfg"]:
@@ -153,6 +155,9 @@ func (w *walker) walk(dir string, wc walkCtx) {
 		}
 		if unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || uint64(st.Dev) != wc.root.dev {
 			continue // unreadable, or a mount point: stay on the root's device
+		}
+		if r := s.rootKeys[fileKey{uint64(st.Dev), st.Ino}]; r != nil && r != wc.root {
+			continue // another root spelled differently (~/code vs ~/Code, NFD vs NFC)
 		}
 		if wc.depth+1 <= s.maxDepth {
 			if s.match(dir, names, name, child, fileKey{uint64(st.Dev), st.Ino}, wc) {
@@ -231,8 +236,15 @@ func (s *scan) match(parent string, parentNames map[string]bool, name, child str
 			}
 			tkey = fileKey{uint64(st.Dev), st.Ino}
 		}
+		// A checkout (a gh-pages branch checked out as dist/ with `git
+		// worktree add`, a nested repository, a submodule) is never an
+		// artifact: the walk enters it instead (addGitRoot registers it) and
+		// only git may remove it (worktrees provider, with its dirty checks).
+		if hasGitEntry(target) {
+			continue
+		}
 		var content map[string]bool
-		contentOK := false
+		contentOK, strongOK := false, false
 		if len(r.Content) > 0 || r.Generic {
 			content = dirNames(target)
 			_, contentOK = matchAny(r.Content, content)
@@ -240,10 +252,13 @@ func (s *scan) match(parent string, parentNames map[string]bool, name, child str
 		if r.NeedContent && !contentOK {
 			continue
 		}
+		if contentOK && len(r.Strong) > 0 && wc.git == nil {
+			strongOK = r.strongOutput(target, content) // only decisive outside git
+		}
 		s.addCand(&cand{
 			path: target, key: tkey, rule: r, kind: r.kindFor(target), parent: parent,
 			root: wc.root, git: wc.git, tool: wc.tool, depth: wc.depth + 1,
-			contentOK: contentOK, content: content,
+			contentOK: contentOK, strongOK: strongOK, content: content,
 		})
 		matched = true
 		if r.Sub == "" {

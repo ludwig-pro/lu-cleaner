@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -82,19 +84,118 @@ func (o *output) sizeText(n int64) string {
 }
 
 // catTitle is the category title, with its icon on a terminal only.
+// Unknown categories are titled with a provider-defined id: sanitized.
 func (o *output) catTitle(info core.CategoryInfo) string {
 	if o.tty && info.Icon != "" {
-		return info.Icon + " " + info.Title
+		return info.Icon + " " + sanitize(info.Title)
 	}
-	return info.Title
+	return sanitize(info.Title)
 }
 
-// writeJSON prints v as indented JSON on stdout.
+// writeJSON prints v as indented JSON on stdout. encoding/json escapes C0
+// controls but writes DEL, C1 controls and bidi overrides raw: they are
+// escaped too (\uXXXX, same decoded value) so `--json` on a terminal cannot
+// be hijacked by a crafted file name either.
 func (c *cli) writeJSON(v any) error {
-	enc := json.NewEncoder(c.Stdout)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
-	return enc.Encode(v)
+	if err := enc.Encode(v); err != nil {
+		return err
+	}
+	_, err := c.Stdout.Write(escapeJSONControls(buf.Bytes()))
+	return err
+}
+
+// escapeJSONControls rewrites the unsafe runes left raw by encoding/json
+// (DEL, C1 controls, bidi controls: C0 controls are already escaped inside
+// strings, and outside them are the JSON's own line breaks) as \uXXXX
+// escapes. They can only occur inside JSON strings (the syntax is ASCII),
+// where the escape decodes to the same rune.
+func escapeJSONControls(b []byte) []byte {
+	raw := func(r rune) bool { return r >= 0x20 && unsafeRune(r) }
+	if !bytes.ContainsFunc(b, raw) {
+		return b
+	}
+	out := make([]byte, 0, len(b)+32)
+	for len(b) > 0 {
+		r, size := utf8.DecodeRune(b)
+		if raw(r) {
+			out = fmt.Appendf(out, `\u%04x`, r)
+		} else {
+			out = append(out, b[:size]...)
+		}
+		b = b[size:]
+	}
+	return out
+}
+
+// ------------------------------------------------------------ sanitizing
+
+// unsafeRune reports runes a terminal interprets instead of printing them:
+// C0 controls (ESC, BEL, CR, LF…), DEL, C1 controls (U+0080–U+009F, CSI and
+// OSC in their 8-bit form) and the bidi overrides/isolates that reorder
+// the rest of a line (Trojan Source style spoofing).
+func unsafeRune(r rune) bool {
+	switch {
+	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+		return true
+	case r == 0x061c, r == 0x200e, r == 0x200f,
+		r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
+}
+
+// sanitize makes s safe to print on a terminal: unsafe runes (see
+// unsafeRune) become visible Go escapes (\x1b, \n, \u202e…) and invalid
+// UTF-8 bytes become \xNN. Every name, path, message or warning that comes
+// from the file system, a provider or an external tool goes through it
+// before reaching human output (JSON is escaped by writeJSON).
+func sanitize(s string) string {
+	ok := true
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if (r == utf8.RuneError && size == 1) || unsafeRune(r) {
+			ok = false
+			break
+		}
+		i += size
+	}
+	if ok {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case unsafeRune(r):
+			q := strconv.QuoteRune(r) // "'\x1b'"
+			b.WriteString(q[1 : len(q)-1])
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// sanitizeLines is sanitize for multi-line text: line breaks are kept (each
+// line is sanitized on its own), continuation lines are indented so they can
+// never pass for a line of their own.
+func sanitizeLines(s, indent string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		l = sanitize(l)
+		if i > 0 {
+			l = indent + l
+		}
+		lines[i] = l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ------------------------------------------------------------------ tables
@@ -127,10 +228,19 @@ func newTable(headers ...string) *table {
 	return &table{headers: headers, right: make([]bool, n), maxw: make([]int, n), leftTrunc: make([]bool, n), shrink: -1}
 }
 
+// add appends a grid row. Cells are plain text (styles are applied by
+// paint): they are sanitized here, so no table can print a raw control
+// character whatever the cell comes from.
 func (t *table) add(paint func(int, string) string, cells ...string) {
-	t.rows = append(t.rows, tableRow{cells: cells, paint: paint})
+	clean := make([]string, len(cells))
+	for i, c := range cells {
+		clean[i] = sanitize(c)
+	}
+	t.rows = append(t.rows, tableRow{cells: clean, paint: paint})
 }
 
+// line appends a raw line, printed as-is (it may hold ANSI styles): callers
+// sanitize the untrusted parts before styling them.
 func (t *table) line(s string) { t.rows = append(t.rows, tableRow{raw: s, isRaw: true}) }
 
 // render writes the table. indent prefixes every grid line. On a terminal,

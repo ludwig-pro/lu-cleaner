@@ -14,6 +14,17 @@ import (
 
 // ------------------------------------------------------------------ Go
 
+// goLocal prefixes a go command so that it runs the installed toolchain
+// only: with the default GOTOOLCHAIN=auto, running go inside a module that
+// requires a newer Go (lu-cleaner's current directory at scan or clean time)
+// downloads that toolchain into the module cache, or fails when offline.
+var goLocal = []string{"env", "GOTOOLCHAIN=local", "go"}
+
+// goArgv returns the argv of `go args...` pinned to the local toolchain.
+func goArgv(args ...string) []string {
+	return append(append([]string(nil), goLocal...), args...)
+}
+
 // golang proposes `go clean -cache` (build cache, safe) and
 // `go clean -modcache` (module cache, moderate: re-downloaded). The module
 // cache is read-only on disk, so the go command is the right tool. Without a
@@ -22,16 +33,22 @@ func (s *scan) golang() {
 	gocache, modcache := "", ""
 	hasGo := s.has("go")
 	if hasGo {
-		out, err := s.run(10*time.Second, "go", "env", "GOCACHE", "GOMODCACHE")
-		if err != nil {
-			return
-		}
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) >= 1 {
-			gocache = strings.TrimSpace(lines[0])
-		}
-		if len(lines) >= 2 {
-			modcache = strings.TrimSpace(lines[1])
+		// Run from the home folder (not lu-cleaner's cwd) with the local toolchain.
+		argv := goArgv("env", "GOCACHE", "GOMODCACHE")
+		out, err := s.runIn(s.env.Home, 10*time.Second, argv[0], argv[1:]...)
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) >= 1 {
+				gocache = strings.TrimSpace(lines[0])
+			}
+			if len(lines) >= 2 {
+				modcache = strings.TrimSpace(lines[1])
+			}
+		} else {
+			// `go env` failed: fall back to the go command's defaults instead of
+			// silently dropping both items (`go clean` still does the cleaning).
+			s.logf("go env failed (%v): using the default Go cache locations", err)
+			gocache, modcache = s.goDefaultDirs()
 		}
 	} else {
 		gocache = s.home("Library/Caches/go-build")
@@ -45,9 +62,9 @@ func (s *scan) golang() {
 		note       string
 	}
 	for _, c := range []goc{
-		{"go-build-cache", "Go build cache", gocache, core.RiskSafe, []string{"go", "clean", "-cache"},
+		{"go-build-cache", "Go build cache", gocache, core.RiskSafe, goArgv("clean", "-cache"),
 			"Compiled packages and test results cached by `go build` / `go test`; rebuilt on the next compile."},
-		{"go-module-cache", "Go module cache", modcache, core.RiskModerate, []string{"go", "clean", "-modcache"},
+		{"go-module-cache", "Go module cache", modcache, core.RiskModerate, goArgv("clean", "-modcache"),
 			"Downloaded Go modules (read-only files); downloaded again by the next build that needs them (bandwidth)."},
 	} {
 		if c.dir == "" || c.dir == "off" || !filepath.IsAbs(c.dir) {
@@ -84,6 +101,62 @@ func (s *scan) golang() {
 			s.publish(it, pubOpts{placeholder: true, newest: true})
 		}
 	}
+}
+
+// goDefaultDirs returns GOCACHE and GOMODCACHE as the go command computes
+// them without running it: each variable comes from the environment, else
+// from the go env file (`go env -w`), else its default —
+// ~/Library/Caches/go-build and <first GOPATH entry>/pkg/mod (GOPATH
+// defaulting to ~/go).
+func (s *scan) goDefaultDirs() (gocache, modcache string) {
+	file := s.goEnvFile()
+	get := func(k string) string {
+		if v := s.p.getenv(k); v != "" {
+			return v
+		}
+		return file[k]
+	}
+	gocache = get("GOCACHE")
+	if gocache == "" {
+		gocache = s.home("Library/Caches/go-build")
+	}
+	modcache = get("GOMODCACHE")
+	if modcache == "" {
+		gopath := s.home("go")
+		if gp := get("GOPATH"); gp != "" {
+			if first := filepath.SplitList(gp)[0]; filepath.IsAbs(first) {
+				gopath = first
+			}
+		}
+		modcache = filepath.Join(gopath, "pkg", "mod")
+	}
+	return gocache, modcache
+}
+
+// goEnvFile reads the variables written by `go env -w`: $GOENV, else
+// <user config dir>/go/env (~/Library/Application Support/go/env).
+// GOENV=off disables it, as for the go command.
+func (s *scan) goEnvFile() map[string]string {
+	p := s.p.getenv("GOENV")
+	switch {
+	case p == "off":
+		return nil
+	case p == "":
+		p = s.appSupport("go/env")
+	case !filepath.IsAbs(p):
+		return nil
+	}
+	vars := map[string]string{}
+	for _, l := range strings.Split(readSmall(p), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(l, "="); ok {
+			vars[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return vars
 }
 
 // ------------------------------------------------------------------ rustup

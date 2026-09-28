@@ -2,6 +2,9 @@ package jsdev
 
 import (
 	"context"
+	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -276,3 +279,69 @@ func joinLimit(vals []string, n int) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// volumesDir is where macOS mounts other volumes (a var for tests).
+var volumesDir = "/Volumes"
+
+// pathMissing reports whether p surely does not exist: stat fails with
+// ENOENT, it is not on an unmounted volume and its nearest existing ancestor
+// is a readable directory. Any other error (EACCES, EPERM/TCC, I/O) means
+// "unknown", never "missing". So do a dangling symlink on the way (p itself,
+// or an ancestor pointing to an unmounted volume) and a /Volumes/X folder
+// that is not a mount point (volume unmounted uncleanly).
+func pathMissing(p string) bool {
+	p = filepath.Clean(p)
+	if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	// A path on an unmounted volume is unknown too (/Volumes itself is readable).
+	if rest, ok := strings.CutPrefix(p, volumesDir+"/"); ok {
+		vol, _, _ := strings.Cut(rest, "/")
+		if !isMountPoint(filepath.Join(volumesDir, vol)) {
+			return false
+		}
+	}
+	for cur := p; ; {
+		fi, err := os.Lstat(cur)
+		switch {
+		case err == nil:
+			if cur == p {
+				return false // p is a dangling symlink: its target is unknown
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				// The missing part lies behind a symlink: it must resolve
+				// (a link to an unmounted volume dangles).
+				if fi, err = os.Stat(cur); err != nil {
+					return false
+				}
+			}
+			if !fi.IsDir() {
+				return false
+			}
+			f, err := os.Open(cur)
+			if err != nil {
+				return false
+			}
+			_, err = f.Readdirnames(1)
+			f.Close()
+			return err == nil || errors.Is(err, io.EOF)
+		case !errors.Is(err, fs.ErrNotExist):
+			return false
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false
+		}
+		cur = parent
+	}
+}
+
+// isMountPoint reports whether dir exists and is on another device than its
+// parent (a mounted volume, not a leftover folder).
+func isMountPoint(dir string) bool {
+	var st, pst unix.Stat_t
+	if unix.Stat(dir, &st) != nil || unix.Stat(filepath.Dir(dir), &pst) != nil {
+		return false
+	}
+	return st.Dev != pst.Dev
+}

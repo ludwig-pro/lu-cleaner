@@ -108,7 +108,7 @@ func (c *cli) analyzeReport(ctx context.Context, s *setup, root string, top int)
 		return c.writeJSON(map[string]any{"root": root, "total": sum, "entries": entries})
 	}
 	o := c.out
-	o.printf("%s  %s\n", o.paint(o.title, s.env.Pretty(root)), o.sizeText(sum))
+	o.printf("%s  %s\n", o.paint(o.title, sanitize(s.env.Pretty(root))), o.sizeText(sum))
 	t := newTable("SIZE", "SHARE", "FILES", "NAME")
 	t.right[0], t.right[2] = true, true
 	t.shrink = 3

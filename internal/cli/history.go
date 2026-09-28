@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
+	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
@@ -14,7 +15,10 @@ func (c *cli) historyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "history",
 		Short: "What was cleaned, when, and how much it freed",
-		Args:  cobra.NoArgs,
+		Long: `List what was cleaned, newest first, from the history file.
+"Total freed" counts permanent removals only: what was moved to the Trash
+still uses its space until the Trash is emptied (it is totalled apart).`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if limit < 0 {
 				return usageErr("--limit must be >= 0")
@@ -23,13 +27,19 @@ func (c *cli) historyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var freed int64
-			done := 0
+			var freed, trashed int64
+			done, trashedN := 0, 0
 			for _, e := range entries {
-				if e.Status == clean.StatusDone.String() {
-					freed += e.Size
-					done++
+				if e.Status != clean.StatusDone.String() {
+					continue
 				}
+				if e.Method == core.MethodTrash.String() {
+					trashed += e.Size
+					trashedN++
+					continue
+				}
+				freed += e.Size
+				done++
 			}
 			// Newest first.
 			shown := make([]clean.HistoryEntry, 0, len(entries))
@@ -41,7 +51,7 @@ func (c *cli) historyCmd() *cobra.Command {
 			}
 			if c.f.json {
 				return c.writeJSON(map[string]any{
-					"path": clean.HistoryPath(), "total": len(entries), "freed": freed, "entries": shown,
+					"path": clean.HistoryPath(), "total": len(entries), "freed": freed, "trashed": trashed, "entries": shown,
 				})
 			}
 			o := c.out
@@ -56,10 +66,7 @@ func (c *cli) historyCmd() *cobra.Command {
 			t.leftTrunc[5] = true
 			t.shrink = 5
 			for _, e := range shown {
-				where := env.Pretty(e.Path)
-				if e.Path == "" && e.Command != "" {
-					where = "$ " + e.Command
-				}
+				where := historyWhere(env, e)
 				status, size := e.Status, e.Size
 				errMsg := e.Error
 				t.add(func(col int, v string) string {
@@ -82,7 +89,9 @@ func (c *cli) historyCmd() *cobra.Command {
 					return v
 				}, e.Time.Local().Format("2006-01-02 15:04"), e.Status, e.Method, fsx.Bytes(e.Size), e.Name, where)
 				if errMsg != "" {
-					t.line("    " + o.paint(o.bad, "! "+errMsg))
+					t.line("    " + o.paint(o.bad, "! "+sanitize(errMsg)))
+				} else if status == clean.StatusSkipped.String() && e.Message != "" {
+					t.line("    " + o.paint(o.warn, "! "+sanitize(e.Message)))
 				}
 			}
 			t.render(o, "", true)
@@ -91,10 +100,37 @@ func (c *cli) historyCmd() *cobra.Command {
 				o.println(o.paint(o.faint, fmt.Sprintf("Showing the last %d of %d entries (--limit 0 for all).", len(shown), len(entries))))
 			}
 			o.printf("%s %s over %s (%s)\n", o.paint(o.bold, "Total freed:"), o.sizeText(freed),
-				plural(done, "cleaned item", "cleaned items"), env.Pretty(clean.HistoryPath()))
+				plural(done, "cleaned item", "cleaned items"), sanitize(env.Pretty(clean.HistoryPath())))
+			if trashedN > 0 {
+				o.println(o.paint(o.faint, fmt.Sprintf("Moved to the Trash: %s over %s (freed only once the Trash is emptied).",
+					fsx.Bytes(trashed), plural(trashedN, "item", "items"))))
+			}
 			return nil
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 30, "entries shown, newest first (0 = all)")
 	return cmd
+}
+
+// historyWhere is the PATH/COMMAND cell of a history entry: the path, the
+// command, or the location of a group item with its number of paths.
+func historyWhere(env *core.Env, e clean.HistoryEntry) string {
+	n := max(e.Count, len(e.Paths))
+	switch {
+	case e.Path != "":
+		return env.Pretty(e.Path)
+	case e.Command != "":
+		return "$ " + e.Command
+	case e.Location != "":
+		if n > 1 {
+			return fmt.Sprintf("%s (%d paths)", env.Pretty(e.Location), n)
+		}
+		return env.Pretty(e.Location)
+	case len(e.Paths) > 0:
+		if n > 1 {
+			return fmt.Sprintf("%s (+%d more)", env.Pretty(e.Paths[0]), n-1)
+		}
+		return env.Pretty(e.Paths[0])
+	}
+	return ""
 }

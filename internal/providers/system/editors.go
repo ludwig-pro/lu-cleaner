@@ -91,19 +91,19 @@ type jbDir struct {
 	mtime                  time.Time
 }
 
-// jetbrains: per product, keep the newest IDE version; caches of older
-// versions (safe), their settings folders (moderate: only used to import
-// settings) and all IDE logs (safe). Current caches are proposed as
-// moderate (re-indexing takes time). Android Studio lives under Google/ and
-// belongs to the android provider.
+// jetbrains: per product, keep the newest IDE versions (config keep_latest,
+// at least 1); caches of older versions (safe), their settings folders
+// (moderate: only used to import settings) and all IDE logs (safe). Current
+// caches are proposed as moderate (re-indexing takes time). Android Studio
+// lives under Google/ and belongs to the android provider.
 func (s *scan) jetbrains() {
 	roots := map[string]string{
 		"caches":   s.home("Library/Caches/JetBrains"),
 		"settings": s.appSupport("JetBrains"),
 		"logs":     s.home("Library/Logs/JetBrains"),
 	}
-	dirs := map[string][]jbDir{} // root kind -> dirs
-	newest := map[string]string{}
+	dirs := map[string][]jbDir{}      // root kind -> dirs
+	versions := map[string][]string{} // product -> versions with caches or settings
 	for kind, root := range roots {
 		for _, e := range list(root, false) {
 			if !e.dir {
@@ -118,14 +118,30 @@ func (s *scan) jetbrains() {
 			if kind == "logs" {
 				continue // a log folder does not prove the version is installed
 			}
-			if cur, ok := newest[d.product]; !ok || compareVersions(d.version, cur) > 0 {
-				newest[d.product] = d.version
-			}
+			versions[d.product] = append(versions[d.product], d.version)
 		}
 	}
 	if len(dirs) == 0 {
 		return
 	}
+	// current[product+" "+version]: the keep_latest newest versions of each product.
+	current := map[string]bool{}
+	keepN := max(1, s.env.KeepLatest)
+	for product, vs := range versions {
+		sort.Slice(vs, func(i, j int) bool { return compareVersions(vs[i], vs[j]) > 0 })
+		kept := 0
+		for i, v := range vs {
+			if i > 0 && v == vs[i-1] {
+				continue // same version in caches and settings
+			}
+			if kept == keepN {
+				break
+			}
+			current[product+" "+v] = true
+			kept++
+		}
+	}
+	isCurrent := func(d jbDir) bool { return current[d.product+" "+d.version] }
 	procs := func(ds []jbDir) []string {
 		seen := map[string]bool{}
 		var out []string
@@ -165,19 +181,19 @@ func (s *scan) jetbrains() {
 	}
 	var oldCaches, curCaches, oldSettings []jbDir
 	for _, d := range dirs["caches"] {
-		if d.version == newest[d.product] {
+		if isCurrent(d) {
 			curCaches = append(curCaches, d)
 		} else {
 			oldCaches = append(oldCaches, d)
 		}
 	}
 	for _, d := range dirs["settings"] {
-		if d.version != newest[d.product] {
+		if !isCurrent(d) {
 			oldSettings = append(oldSettings, d)
 		}
 	}
 	group("jetbrains-old-caches", "JetBrains caches of old IDE versions", core.RiskSafe, oldCaches, true,
-		"Indexes and caches of IDE versions you upgraded from; the newest version of each IDE is kept.")
+		"Indexes and caches of IDE versions you upgraded from; the newest version of each IDE (keep_latest of them) is kept.")
 	group("jetbrains-old-settings", "JetBrains settings of old IDE versions", core.RiskModerate, oldSettings, false,
 		"Settings and plugins folders of IDE versions you upgraded from (only used to import settings into a newer version).")
 	group("jetbrains-logs", "JetBrains IDE logs", core.RiskSafe, dirs["logs"], false,

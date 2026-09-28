@@ -98,8 +98,16 @@ func (s *scan) downloads() {
 			if alloc == 0 {
 				continue // iCloud "dataless" placeholder: deleting it frees nothing here
 			}
+			// Age = the most recent of: last modification, last opened
+			// (Finder) and the time the file arrived here. An archive
+			// extracted today, `curl -R`, AirDrop or a copy preserving times
+			// all leave an old mtime on a file added today; the arrival time
+			// is its ctime (creation or rename into the folder both set it).
 			used := time.Unix(st.Mtim.Sec, st.Mtim.Nsec)
 			if t, ok := s.p.lastUsed(e.path); ok && t.After(used) {
+				used = t
+			}
+			if t := s.p.added(e.path, &st); t.After(used) {
 				used = t
 			}
 			if s.now.Sub(used) < downloadsMinAge {
@@ -152,6 +160,14 @@ func (s *scan) downloads() {
 			s.emitNow(it)
 		}
 	}
+}
+
+// fileAdded returns when a file arrived at its current place: its ctime,
+// which creation and rename set (utimes cannot move it back). It is always at
+// least the APFS "date added" (ATTR_CMN_ADDEDTIME); it also moves on
+// metadata changes (xattr, chmod), which only makes a file look younger.
+func fileAdded(_ string, st *unix.Stat_t) time.Time {
+	return time.Unix(st.Ctim.Sec, st.Ctim.Nsec)
 }
 
 // finderLastUsed returns the "Last opened" date macOS records on a file

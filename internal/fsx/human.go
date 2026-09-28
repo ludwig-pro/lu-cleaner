@@ -58,7 +58,8 @@ func ParseBytes(s string) (int64, error) {
 		}
 	}
 	v, err := strconv.ParseFloat(num, 64)
-	if err != nil || v < 0 || math.IsInf(v, 0) || math.IsNaN(v) {
+	// v*mult >= 2^63 would overflow int64 (and wrap to a negative size).
+	if err != nil || !(v >= 0) || math.IsInf(v, 0) || v*mult >= math.MaxInt64 {
 		return 0, fmt.Errorf("invalid size %q (examples: 500MB, 1.5GB, 2GiB)", s)
 	}
 	return int64(v * mult), nil
@@ -89,7 +90,9 @@ func ParseAge(s string) (time.Duration, error) {
 		mult = 24 * time.Hour
 	}
 	v, err := strconv.ParseFloat(num, 64)
-	if err != nil || v < 0 {
+	// NaN (!(v >= 0)) and values beyond time.Duration's range would convert
+	// to 0 or a negative duration, silently disabling the age filter.
+	if err != nil || !(v >= 0) || math.IsInf(v, 0) || v*float64(mult) >= math.MaxInt64 {
 		return 0, fmt.Errorf("invalid age %q (examples: 7d, 2w, 3m, 1y)", s)
 	}
 	return time.Duration(v * float64(mult)), nil

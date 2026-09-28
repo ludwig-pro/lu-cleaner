@@ -2,15 +2,20 @@ package worktrees
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"golang.org/x/sys/unix"
+	"golang.org/x/text/unicode/norm"
 )
 
 // worktree is one linked worktree found on disk.
@@ -23,11 +28,19 @@ type worktree struct {
 	bare   bool
 	repo   *repo // nil when the main repository is gone
 
-	// Classification (filled by resolve).
+	// Classification (filled by resolve, then reconcile).
 	orphan  string // why git no longer tracks it ("" = tracked)
 	copyOf  string // the admin entry belongs to this other (existing) checkout
 	movedAt string // git still records the checkout at this (missing) path
 	offline string // main repository on this unmounted volume: state unknown
+	// unreadable: the git metadata or the main repository cannot be inspected
+	// (EACCES, EPERM from macOS privacy protection, I/O error...). Its state is
+	// unknown: report only, never an orphan.
+	unreadable string
+	// repairAt: the .git file points to a missing place but this existing main
+	// repository still lists the checkout (the main repository was renamed or
+	// moved). Git still tracks it (maybe locked): `git worktree repair` fixes it.
+	repairAt string
 	// external: the checkout itself lives on another volume than the home.
 	external bool
 	outside  bool // outside the areas the safety guard allows (e.g. /private/tmp)
@@ -49,7 +62,9 @@ type worktree struct {
 	mergedOK   bool
 	locked     bool
 	lockReason string
-	envFiles   []string // ignored .env files that would be lost
+	envFiles   []string // ignored secret / local files that would be lost
+	envErr     string   // why the ignored files could not be listed
+	nested     []string // other repositories or worktrees inside the checkout
 	activity   time.Time
 
 	// Environment (filled by inspect from the tool state).
@@ -68,6 +83,7 @@ type repo struct {
 	bare   bool
 
 	listed   bool
+	entries  []listEntry // linked worktrees listed by `git worktree list`
 	prunable []listEntry
 
 	info       sync.Once // guards the fields below (resolved by repoInfo)
@@ -195,33 +211,59 @@ func readGitFile(dir string) (string, bool) {
 	return filepath.Clean(g), true
 }
 
-// commonDir returns the common git dir of the admin dir gitdir. It reads
-// <gitdir>/commondir when present, else derives it from the
-// ".../worktrees/<name>" layout. ok is false for submodules and anything
-// that is not a linked worktree.
+// commonDir returns the common git dir of the admin dir gitdir
+// (<common>/worktrees/<name>). It reads <gitdir>/commondir, which git always
+// writes for a linked worktree: an existing admin dir without it is something
+// else (e.g. the gitdir of a submodule checked out under "worktrees/"). Only
+// when the admin dir is gone or unreadable (orphan detection) is the common
+// dir derived from the path, and it must then look like a git dir. ok is false
+// for submodules (and their worktrees) and anything that is not a linked
+// worktree.
 func commonDir(gitdir string) (string, bool) {
-	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
-		c := strings.TrimSpace(string(b))
-		if c != "" {
-			if !filepath.IsAbs(c) {
-				c = filepath.Join(gitdir, c)
-			}
-			c = filepath.Clean(c)
-			if filepath.Base(filepath.Dir(gitdir)) == "worktrees" && !strings.Contains(c, "/modules/") {
-				return c, true
-			}
-			return "", false
-		}
+	if strings.Contains(gitdir+"/", "/.git/modules/") {
+		return "", false // submodule, or a worktree of a submodule: out of scope
 	}
-	i := strings.LastIndex(gitdir, "/worktrees/")
-	if i <= 0 || strings.Contains(gitdir[i+len("/worktrees/"):], "/") {
+	if filepath.Base(filepath.Dir(gitdir)) != "worktrees" {
 		return "", false
 	}
-	c := gitdir[:i]
-	if strings.Contains(c, "/modules/") {
-		return "", false // worktree of a submodule: out of scope
+	b, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err == nil {
+		c := strings.TrimSpace(string(b))
+		if c == "" {
+			return "", false
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(gitdir, c)
+		}
+		c = filepath.Clean(c)
+		if strings.Contains(c+"/", "/.git/modules/") {
+			return "", false
+		}
+		return c, true
 	}
-	return c, true
+	if fi, lerr := os.Lstat(gitdir); lerr == nil && fi.IsDir() && errors.Is(err, fs.ErrNotExist) {
+		return "", false // live admin dir without commondir: not a linked worktree
+	}
+	// The admin dir is gone (or unreadable): derive the common dir from the
+	// ".../worktrees/<name>" layout.
+	c := filepath.Dir(filepath.Dir(gitdir))
+	if base := filepath.Base(c); base == ".git" || strings.HasSuffix(base, ".git") || looksBare(c) {
+		return c, true
+	}
+	return "", false
+}
+
+// looksBare reports a bare repository layout (HEAD file, objects/ and refs/).
+func looksBare(dir string) bool {
+	if fi, err := os.Lstat(filepath.Join(dir, "HEAD")); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	for _, sub := range []string{"objects", "refs"} {
+		if fi, err := os.Lstat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // mainOf returns the main repository of a common git dir.
@@ -426,8 +468,17 @@ func (s *scan) addCandidate(dir string) {
 	s.scanNested(path)
 }
 
-// resolve finds the main repository and classifies orphans, moved and
-// offline worktrees.
+// Orphan reasons (Meta "orphan").
+const (
+	orphanMainGone = "main repository deleted or moved"
+	orphanPruned   = "worktree entry pruned from the main repository"
+	orphanCopy     = "copy of another worktree"
+)
+
+// resolve finds the main repository and classifies orphans, moved, offline
+// and unreadable worktrees. A worktree is an orphan only when its admin dir
+// (and, for "main repository deleted", its common dir) verifiably does not
+// exist: see confirmedMissing.
 func (s *scan) resolve(w *worktree) {
 	w.main, w.bare = mainOf(w.common)
 	if fsx.Exists(w.main) {
@@ -442,17 +493,28 @@ func (s *scan) resolve(w *worktree) {
 	}
 	w.outside = !s.allowedPath(w.path)
 
-	gitdirOK := fsx.IsDir(w.gitdir)
-	mainOK := isDirFollow(w.common)
-	switch {
-	case !gitdirOK:
+	gone, err := confirmedMissing(w.gitdir)
+	if gone || err != nil {
 		if v := offlineVolume(w.gitdir); v != "" {
 			w.offline = v
-		} else if !mainOK {
-			w.orphan = "main repository deleted"
-		} else {
-			w.orphan = "worktree entry pruned from the main repository"
+			return
 		}
+	}
+	switch {
+	case err != nil:
+		w.unreadable = "git metadata unreadable (" + errText(err) + ")"
+	case gone:
+		mainGone, err := confirmedMissing(w.common)
+		switch {
+		case err != nil:
+			w.unreadable = "main repository unreadable (" + errText(err) + ")"
+		case mainGone:
+			w.orphan = orphanMainGone
+		default:
+			w.orphan = orphanPruned
+		}
+	case !isDirFollow(w.gitdir):
+		w.unreadable = "git metadata " + w.gitdir + " is not a directory"
 	default:
 		back := readTrim(filepath.Join(w.gitdir, "gitdir"))
 		if back != "" {
@@ -463,20 +525,130 @@ func (s *scan) resolve(w *worktree) {
 			if realPath(tracked) != w.path {
 				if k, ok := keyOf(tracked); ok && k != w.key && gitKind(tracked) == gitFile {
 					w.copyOf = tracked
-					w.orphan = "copy of another worktree"
+					w.orphan = orphanCopy
 				} else if !fsx.Exists(tracked) {
 					w.movedAt = tracked
 				}
 			}
 		}
 	}
-	if w.offline == "" && mainOK {
-		if w.bare {
-			w.repo = s.addRepo(w.main, w.common, true)
-		} else {
-			w.repo = s.addRepo(w.main, w.common, false)
+	if w.unreadable == "" && isDirFollow(w.common) {
+		w.repo = s.addRepo(w.main, w.common, w.bare)
+	}
+}
+
+// reconcile re-attaches orphan-looking checkouts that an existing main
+// repository still lists: that main repository was renamed or moved, so the
+// checkout's .git file points to the old place. Git still tracks them (maybe
+// locked, maybe with uncommitted work): they are not orphans but need
+// `git worktree repair`, and are reported only. Runs once every main
+// repository has been listed.
+func (s *scan) reconcile() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	repos := make([]*repo, 0, len(s.repos))
+	for _, r := range s.repos {
+		repos = append(repos, r)
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].path < repos[j].path })
+	for _, r := range repos {
+		var admins map[string]string
+		for _, e := range r.entries {
+			k, ok := keyOf(e.path)
+			if !ok {
+				continue
+			}
+			w := s.byKey[k]
+			if w == nil || w.orphan == "" {
+				continue
+			}
+			if admins == nil {
+				admins = adminDirs(r.common)
+			}
+			w.repairAt = r.path
+			w.orphan, w.copyOf = "", ""
+			w.repo, w.main, w.common, w.bare = r, r.path, r.common, r.bare
+			if a := admins[e.path]; a != "" {
+				w.gitdir = a // its lock file is read from here by inspect
+			}
+			if e.locked {
+				w.locked = true
+				if w.lockReason == "" {
+					w.lockReason = firstLine(e.reason)
+				}
+			}
 		}
 	}
+}
+
+// confirmedMissing tells whether p verifiably does not exist: lstat fails
+// with ENOENT and the nearest existing ancestor is a directory this process
+// can list (symlinks in the ancestor chain must resolve, and not to an
+// unmounted volume). Any other outcome — EACCES, EPERM (macOS privacy
+// protection, e.g. ~/Documents for a process without access), an unreadable
+// ancestor, a dangling symlink to an unplugged disk, an I/O error — returns
+// an error: the state of p is unknown and nothing may be removed on the
+// assumption that it is gone. (false, nil) means p exists.
+func confirmedMissing(p string) (bool, error) {
+	p = filepath.Clean(p)
+	_, err := os.Lstat(p)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	for dir := filepath.Dir(p); ; dir = filepath.Dir(dir) {
+		fi, err := os.Lstat(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			if dir == filepath.Dir(dir) {
+				return false, err
+			}
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			if fi, err = os.Stat(dir); err != nil {
+				return false, fmt.Errorf("%s: symlink target unavailable: %w", dir, err)
+			}
+		}
+		if !fi.IsDir() {
+			return false, fmt.Errorf("%s is not a directory", dir)
+		}
+		if v := offlineVolume(realPath(dir)); v != "" {
+			return false, fmt.Errorf("volume %s is not mounted", v)
+		}
+		f, err := os.Open(dir)
+		if err != nil {
+			return false, err
+		}
+		_, err = f.Readdirnames(1)
+		f.Close()
+		if err != nil && err != io.EOF {
+			return false, err
+		}
+		return true, nil
+	}
+}
+
+// errText is a short description of a filesystem error.
+func errText(err error) string {
+	var pe *fs.PathError
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied — grant the terminal Full Disk Access or fix the permissions"
+	case errors.As(err, &pe):
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
+
+// pathKey is the comparison form of a path on macOS: APFS is case- and
+// Unicode-normalization-insensitive, and tools store paths in either form.
+func pathKey(p string) string {
+	return norm.NFC.String(strings.ToLower(norm.NFC.String(filepath.Clean(p))))
 }
 
 // allowedPath mirrors the safety guard: deletions only below the home or the

@@ -25,23 +25,57 @@ const (
 	existNo
 )
 
-// pathExistence tells whether the absolute path p exists. A path below an
-// unmounted /Volumes/<name>, or one that cannot be stat'ed for another reason
-// than "not found", is unknown.
+// pathExistence tells whether the absolute path p exists. p is reported
+// missing (existNo) only when stat says ENOENT/ENOTDIR AND the nearest
+// existing ancestor can be listed: anything else (EACCES, EPERM from TCC, an
+// unmounted /Volumes/<name>, a logged-out ~/Library/CloudStorage provider,
+// an unreadable parent) is unknown, and unknown is never cleaned.
 func pathExistence(p string) existence {
 	if p == "" || !filepath.IsAbs(p) {
 		return existUnknown
 	}
+	p = filepath.Clean(p)
 	_, err := os.Stat(p)
 	switch {
 	case err == nil:
 		return existYes
-	case missingVolume(filepath.Clean(p)):
+	case missingVolume(p):
 		return existUnknown
-	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
-		return existNo
+	case isNotExist(err):
+		if ancestorReadable(p) {
+			return existNo
+		}
 	}
 	return existUnknown
+}
+
+// isNotExist reports ENOENT or ENOTDIR (a file sits where a parent dir was).
+func isNotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// ancestorReadable reports whether the nearest existing ancestor of p can be
+// listed. A directory we may not read (permissions, TCC-protected folders)
+// cannot prove that p is absent.
+func ancestorReadable(p string) bool {
+	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+		fi, err := os.Stat(d)
+		if err == nil {
+			if !fi.IsDir() {
+				return true // a regular file: nothing can live below it
+			}
+			f, err := os.Open(d)
+			if err != nil {
+				return false
+			}
+			_, err = f.Readdirnames(1)
+			f.Close()
+			return err == nil || errors.Is(err, io.EOF)
+		}
+		if !isNotExist(err) || d == "/" || d == "." {
+			return false
+		}
+	}
 }
 
 // claudeEncode is Claude Code's project directory naming: every character
@@ -137,15 +171,26 @@ func (r *resolver) list(dir string) *dirListing {
 // maxEncodedName: Claude Code truncates longer names and appends a hash.
 const maxEncodedName = 200
 
-// resolve returns the directory whose encoding is exactly encoded.
+// resolve returns the directory whose encoding is encoded.
+//
+// Encodings are compared case-insensitively: APFS volumes are (by default)
+// case-insensitive, so a folder opened as ~/work/app is the folder ~/Work/App
+// on disk. On a case-sensitive volume this can only turn a "missing" into a
+// "found", the safe direction.
+//
+// existNo is only returned when the name demonstrably encodes a path below
+// root (at least its first component matched a child of root) and no
+// candidate exists; a name that does not look like a path at all ("empty-window",
+// a chat id...) is unknown.
 func (r *resolver) resolve(encoded string) (string, existence) {
 	if encoded == "" || len(encoded) > maxEncodedName {
 		return "", existUnknown
 	}
-	if r.enc(r.root) == encoded {
+	if strings.EqualFold(r.enc(r.root), encoded) {
 		return r.root, existYes
 	}
 	unknown := false
+	rootMatched := false
 	found := ""
 	budget := 4000 // directory visits, keeps pathological names bounded
 	var walk func(dir string, depth int) bool
@@ -164,15 +209,18 @@ func (r *resolver) resolve(encoded string) (string, existence) {
 		for _, n := range l.names {
 			cand := filepath.Join(dir, n)
 			e := r.enc(cand)
-			if e == encoded {
+			if strings.EqualFold(e, encoded) {
 				if isDir(cand) {
 					found = cand
 					return true
 				}
 				continue
 			}
-			if len(encoded) > len(e) && strings.HasPrefix(encoded, e) && encoded[len(e)] == '-' && isDir(cand) {
+			if len(encoded) > len(e) && strings.EqualFold(encoded[:len(e)], e) && encoded[len(e)] == '-' && isDir(cand) {
 				matched = true
+				if depth == 0 {
+					rootMatched = true
+				}
 				if walk(cand, depth+1) {
 					return true
 				}
@@ -187,7 +235,7 @@ func (r *resolver) resolve(encoded string) (string, existence) {
 	if walk(r.root, 0) {
 		return found, existYes
 	}
-	if unknown {
+	if unknown || !rootMatched {
 		return "", existUnknown
 	}
 	return "", existNo
@@ -207,16 +255,33 @@ func decodeNaive(name string, leadingSlash bool) string {
 }
 
 // readJSONStringField returns the first value of "field":"..." found in the
-// first maxBytes of the file (JSONL transcripts are too big to parse).
+// first maxBytes of the file (JSONL transcripts are too big to parse). The
+// file is read in chunks so that the common case (the field is near the
+// top) does not read maxBytes of every transcript.
 func readJSONStringField(path, field string, maxBytes int) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
-	buf := make([]byte, maxBytes)
-	n, _ := io.ReadFull(f, buf)
-	return findJSONString(buf[:n], field)
+	const chunk = 32 << 10
+	buf := make([]byte, 0, min(maxBytes, 4*chunk))
+	for len(buf) < maxBytes {
+		n := min(chunk, maxBytes-len(buf))
+		start := len(buf)
+		buf = append(buf, make([]byte, n)...)
+		got, err := io.ReadFull(f, buf[start:])
+		buf = buf[:start+got]
+		// a value cut by the chunk boundary is not found yet and is found
+		// complete on the next round
+		if v := findJSONString(buf, field); v != "" {
+			return v
+		}
+		if err != nil {
+			break // EOF or read error
+		}
+	}
+	return ""
 }
 
 func findJSONString(buf []byte, field string) string {
