@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
@@ -261,7 +262,10 @@ func TestOpenSQLiteSkipped(t *testing.T) {
 	}
 }
 
-func TestWorktreeUnknownUnpushedAndCodexParent(t *testing.T) {
+// A worktree on a branch with unpushed commits can be removed: the branch
+// (and its commits) stays in the main repository. A detached HEAD whose
+// commits are on no branch must be refused: they would become unreachable.
+func TestWorktreeUnpushedBranchVsDetachedAndCodexParent(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -270,24 +274,44 @@ func TestWorktreeUnknownUnpushedAndCodexParent(t *testing.T) {
 	git(t, main, "init", "-q", "-b", "main")
 	git(t, main, "add", ".")
 	git(t, main, "commit", "-qm", "init")
+
+	// 1. branch worktree with a local-only commit
 	parent := f.mk(t, ".codex/worktrees/ab12")
 	os.WriteFile(filepath.Join(parent, ".codex-worktree-name"), nil, 0o644)
 	wt := filepath.Join(parent, "repo2")
 	git(t, main, "worktree", "add", "-q", "-b", "wt-x", wt)
+	os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("work"), 0o644)
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-qm", "local only")
+	head := strings.TrimSpace(git(t, wt, "rev-parse", "HEAD"))
 
 	it := item(wt, core.MethodWorktree)
 	it.Project = main
-	it.Meta = map[string]string{"unpushed": "?"}
+	it.Meta = map[string]string{"unpushed": "1"}
 	sum := Run(context.Background(), []*core.Item{it}, f.opts(), nil)
-	if sum.Results[0].Status != StatusSkipped {
-		t.Fatalf("unknown unpushed must be skipped: %+v", sum.Results[0])
-	}
-	it.Meta["unpushed"] = "0"
-	sum = Run(context.Background(), []*core.Item{it}, f.opts(), nil)
 	if sum.Results[0].Status != StatusDone {
-		t.Fatalf("%+v", sum.Results[0])
+		t.Fatalf("branch worktree with unpushed commit should be removed: %+v", sum.Results[0])
+	}
+	if got := strings.TrimSpace(git(t, main, "rev-parse", "wt-x")); got != head {
+		t.Fatalf("branch wt-x lost its commit: %s != %s", got, head)
 	}
 	if _, err := os.Stat(parent); !os.IsNotExist(err) {
 		t.Errorf("empty codex task folder should be removed")
+	}
+
+	// 2. detached worktree with a commit on no branch
+	det := filepath.Join(f.mk(t, ".codex/worktrees/cd34"), "repo2")
+	git(t, main, "worktree", "add", "-q", "--detach", det)
+	os.WriteFile(filepath.Join(det, "wip.txt"), []byte("wip"), 0o644)
+	git(t, det, "add", ".")
+	git(t, det, "commit", "-qm", "detached work")
+	dit := item(det, core.MethodWorktree)
+	dit.Project = main
+	sum = Run(context.Background(), []*core.Item{dit}, f.opts(), nil)
+	if sum.Results[0].Status != StatusSkipped || !strings.Contains(sum.Results[0].Message, "on no branch") {
+		t.Fatalf("detached worktree with orphan commit must be skipped: %+v", sum.Results[0])
+	}
+	if _, err := os.Stat(filepath.Join(det, "wip.txt")); err != nil {
+		t.Fatalf("detached worktree was removed")
 	}
 }

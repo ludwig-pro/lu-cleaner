@@ -76,8 +76,28 @@ func MoveToTrash(home, path string) (string, error) {
 	return dst, nil
 }
 
+// orphanedCommits returns how many commits removing the worktree would make
+// unreachable: 0 when HEAD is on a branch (the branch survives the removal),
+// otherwise the commits of the detached HEAD contained in no branch, tag or
+// remote-tracking ref.
+func orphanedCommits(ctx context.Context, r core.Runner, wt string) (int, error) {
+	if _, err := r.Output(ctx, wt, "git", "symbolic-ref", "-q", "HEAD"); err == nil {
+		return 0, nil
+	}
+	out, err := r.Output(ctx, wt, "git", "rev-list", "--count", "HEAD", "--not", "--branches", "--tags", "--remotes")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("unexpected rev-list output %q", strings.TrimSpace(string(out)))
+	}
+	return n, nil
+}
+
 // removeWorktree removes a linked git worktree. Unless opt.Force, it refuses
-// when the worktree has uncommitted changes, unpushed commits or is locked.
+// when the worktree is locked, has uncommitted changes, or has commits that
+// exist on no branch (detached HEAD). Branches are always kept.
 func removeWorktree(ctx context.Context, it *core.Item, opt Options) (string, error) {
 	path := it.Path
 	fi, err := os.Lstat(filepath.Join(path, ".git"))
@@ -88,14 +108,15 @@ func removeWorktree(ctx context.Context, it *core.Item, opt Options) (string, er
 		if it.Meta["locked"] == "true" {
 			return "worktree is locked (git worktree lock) — use --force", errSkip
 		}
-		if u, ok := it.Meta["unpushed"]; ok && u != "" {
-			n, err := strconv.Atoi(u)
-			if err != nil || n < 0 {
-				return "unpushed commits unknown (" + u + ") — use --force", errSkip
-			}
-			if n > 0 {
-				return fmt.Sprintf("%d unpushed commit(s) — push them or use --force", n), errSkip
-			}
+		// Unpushed commits on a branch are safe: `git worktree remove` keeps the
+		// branch. Only commits reachable from nothing but this worktree's
+		// detached HEAD would be lost.
+		n, err := orphanedCommits(ctx, opt.Runner, path)
+		if err != nil {
+			return "cannot tell whether commits would be lost (" + err.Error() + ") — use --force", errSkip
+		}
+		if n > 0 {
+			return fmt.Sprintf("detached HEAD with %d commit(s) on no branch — they would be lost; create a branch (git branch <name>) or use --force", n), errSkip
 		}
 		out, err := opt.Runner.Output(ctx, path, "git", "status", "--porcelain")
 		if err == nil {
