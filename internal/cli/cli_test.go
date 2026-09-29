@@ -241,8 +241,8 @@ func TestCleanInteractiveOpensPicker(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, h.errOut.String())
 	}
 	opt := h.pickers[0]
-	if !opt.Smart || opt.Title != "lu-cleaner" || opt.Flat || len(opt.Providers) != 3 {
-		t.Fatalf("unexpected picker options %+v", opt)
+	if opt.Smart || opt.Title != "lu-cleaner" || opt.Flat || len(opt.Providers) != 3 {
+		t.Fatalf("unexpected picker options %+v (nothing may be preselected by default)", opt)
 	}
 	if opt.Filter.MaxRisk != core.RiskNever || opt.Filter.MinSize != 1e6 || opt.StaleAfter != 14*day {
 		t.Fatalf("unexpected filter %+v stale %v", opt.Filter, opt.StaleAfter)
@@ -289,8 +289,38 @@ func TestDashboard(t *testing.T) {
 		t.Fatal("dashboard picker not opened")
 	}
 	opt := h.pickers[0]
-	if opt.Title != "lu-cleaner" || !opt.Smart || len(opt.Providers) != 3 || len(opt.Filter.Categories) != 0 {
-		t.Fatalf("unexpected dashboard options %+v", opt)
+	if opt.Title != "lu-cleaner" || opt.Smart || len(opt.Providers) != 3 || len(opt.Filter.Categories) != 0 {
+		t.Fatalf("unexpected dashboard options %+v (nothing may be preselected by default)", opt)
+	}
+}
+
+// Deleting must always be the result of an explicit choice: neither the
+// dashboard nor `clean` preselect anything unless --smart is given.
+func TestPickersNeverPreselectUnlessSmart(t *testing.T) {
+	cases := []struct {
+		args      []string
+		wantSmart bool
+	}{
+		{nil, false},
+		{[]string{"clean"}, false},
+		{[]string{"worktrees"}, false},
+		{[]string{"artifacts"}, false},
+		{[]string{"--smart"}, true},
+		{[]string{"clean", "--smart"}, true},
+		{[]string{"clean", "--smart", "--no-smart"}, false}, // --no-smart is kept (hidden) and overrides --smart
+		{[]string{"clean", "--no-smart"}, false},
+	}
+	for _, c := range cases {
+		h := fixture(t).tty()
+		if code := h.run(c.args...); code != 0 {
+			t.Fatalf("%v: exit %d: %s", c.args, code, h.errOut.String())
+		}
+		if len(h.pickers) != 1 {
+			t.Fatalf("%v: %d pickers opened", c.args, len(h.pickers))
+		}
+		if got := h.pickers[0].Smart; got != c.wantSmart {
+			t.Errorf("%v: picker Smart = %v, want %v", c.args, got, c.wantSmart)
+		}
 	}
 }
 

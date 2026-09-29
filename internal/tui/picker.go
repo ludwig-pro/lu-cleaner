@@ -381,6 +381,9 @@ func (m *pickerModel) scanFinished() {
 			m.refresh()
 			m.setStatus(stOK, "Smart selection: %s preselected (%s) — review, then press d to clean", plural(n, "item"), fsx.Bytes(m.selTotal))
 		}
+	} else if len(m.base) > 0 {
+		// Nothing is ever selected for the user: say how to choose.
+		m.setStatus(stInfo, "Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection")
 	}
 }
 

@@ -12,9 +12,10 @@ This page is generated from the CLI itself (`make docs`). Do not edit it by hand
 
 Select what to clean, then clean it.
 
-Without --yes, opens the interactive picker (recommended items preselected
-unless --no-smart), pre-filtered by --category, --kind, --min-size,
---older-than and --risk.
+Without --yes, opens the interactive picker, pre-filtered by --category,
+--kind, --min-size, --older-than and --risk. Nothing is preselected: you
+choose what to remove (space; "a" selects the recommended items). Pass
+--smart to start with the recommended items preselected.
 
 With --yes, runs non-interactively: scan, filter, print the plan, clean.
 A narrowing filter is mandatory (--smart, --category or --kind). Items of
@@ -29,24 +30,19 @@ commands (simctl, docker, brew…) cannot be undone, so they are skipped.
 ## Usage
 
 ```bash
-lu-cleaner clean [flags]
+lu-cleaner clean
 ```
 
 ## Examples
 
 ```bash
-lu-cleaner clean                                   # interactive picker
+lu-cleaner clean                                   # interactive picker, nothing preselected
+lu-cleaner clean --smart                           # picker with the recommended items preselected
 lu-cleaner clean --yes --smart --dry-run           # what smart select would do
 lu-cleaner clean --yes --smart                     # clean the recommended items
 lu-cleaner clean -y -c artifacts --older-than 30d  # stale node_modules, Pods, builds
 lu-cleaner clean -y -k node_modules --min-size 200MB
 ```
-
-## Options
-
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--no-smart` |  |  | do not preselect (picker) / keep only (--yes) recommended items |
 
 ## Global options
 
@@ -62,7 +58,7 @@ lu-cleaner clean -y -k node_modules --min-size 200MB
 | `--older-than` | string |  | only items unused for longer than this, e.g. 30d, 2w, 6m |
 | `--risk` | string |  | highest risk allowed: safe\|moderate\|caution (default: moderate for clean --yes, everything otherwise); with --yes, caution also admits items with a warning |
 | `--root` | stringArray |  | project root to scan for artifacts (repeatable): replaces the config roots for the artifacts scan only, the other scanners keep them to see what your projects use |
-| `--smart` |  |  | only recommended items (safe caches, stale regenerable data) |
+| `--smart` |  |  | recommended items only: preselected in the picker (nothing is preselected otherwise), the only ones cleaned with --yes |
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |

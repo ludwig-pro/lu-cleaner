@@ -686,3 +686,30 @@ func TestSafeCleanRecoversPanics(t *testing.T) {
 		t.Fatalf("summary = %+v", sum)
 	}
 }
+
+// Without Smart, a finished scan selects nothing (whatever is recommended) and
+// tells the user how to choose; with Smart it preselects the recommended items.
+func TestNothingPreselectedWithoutSmart(t *testing.T) {
+	for _, smart := range []bool{false, true} {
+		m := newTestPicker(t, PickerOptions{Providers: standardProviders(), Smart: smart, StaleAfter: 14 * day})
+		d := newDriver(t, m)
+		d.until("scan done", scanDone(m))
+		n := 0
+		for _, sel := range m.selected {
+			if sel {
+				n++
+			}
+		}
+		if smart && n == 0 {
+			t.Errorf("Smart: expected recommended items to be preselected")
+		}
+		if !smart {
+			if n != 0 {
+				t.Errorf("no Smart: %d items were selected without any user action", n)
+			}
+			if !strings.Contains(m.View(), "Nothing is selected") {
+				t.Errorf("no Smart: the status line must explain how to select:\n%s", m.View())
+			}
+		}
+	}
+}
