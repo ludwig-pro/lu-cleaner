@@ -5,6 +5,7 @@ package fsx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,7 +148,11 @@ var ErrNotExist = os.ErrNotExist
 // the link itself). Directories on other devices are skipped unless
 // opt.CrossDevice. The walk stops early (returning partial stats and
 // ctx.Err()) when ctx is cancelled.
-func Size(ctx context.Context, path string, opt *Options) (Stats, error) {
+func Size(ctx context.Context, path string, opt *Options) (st Stats, err error) {
+	if traceOn {
+		start := time.Now()
+		defer func() { Trace("walk", path, start, fmt.Sprintf("%d files %s", st.Files, Bytes(st.Bytes))) }()
+	}
 	if c, ok := ctx.Value(cacheKey{}).(*sizeCache); ok && (opt == nil || (opt.Skip == nil && !opt.CrossDevice)) {
 		return c.get(ctx, path)
 	}
