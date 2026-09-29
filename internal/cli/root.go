@@ -92,7 +92,7 @@ func (c *cli) rootCmd() *cobra.Command {
 	pf.StringVar(&c.f.minSize, "min-size", "", "hide items smaller than this, e.g. 100MB (default: config min_size; 0 for clean --yes)")
 	pf.StringVar(&c.f.olderThan, "older-than", "", "only items unused for longer than this, e.g. 30d, 2w, 6m")
 	pf.StringVar(&c.f.risk, "risk", "", "highest risk allowed: safe|moderate|caution (default: moderate for clean --yes, everything otherwise); with --yes, caution also admits items with a warning")
-	pf.BoolVar(&c.f.smart, "smart", false, "only recommended items (safe caches, stale regenerable data)")
+	pf.BoolVar(&c.f.smart, "smart", false, "recommended items only: preselected in the picker (nothing is preselected otherwise), the only ones cleaned with --yes")
 	pf.BoolVarP(&c.f.dryRun, "dry-run", "n", false, "show what would be cleaned, delete nothing")
 	pf.BoolVarP(&c.f.yes, "yes", "y", false, "clean without the interactive picker")
 	pf.BoolVar(&c.f.trash, "trash", false, "move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash")
@@ -138,7 +138,9 @@ func (c *cli) runDashboard(ctx context.Context) error {
 	if !c.interactive() || c.f.json {
 		return c.runReport(ctx, reportSpec{})
 	}
-	return c.runPicker(ctx, pickerSpec{title: "lu-cleaner", smart: true})
+	// Nothing is preselected: deleting is always the result of an explicit
+	// selection (space, or `a` for the recommended items). --smart preselects.
+	return c.runPicker(ctx, pickerSpec{title: "lu-cleaner", smart: c.f.smart})
 }
 
 func (c *cli) versionCmd() *cobra.Command {

@@ -32,7 +32,7 @@ lu-cleaner config path
 | `--older-than` | string |  | only items unused for longer than this, e.g. 30d, 2w, 6m |
 | `--risk` | string |  | highest risk allowed: safe\|moderate\|caution (default: moderate for clean --yes, everything otherwise); with --yes, caution also admits items with a warning |
 | `--root` | stringArray |  | project root to scan for artifacts (repeatable): replaces the config roots for the artifacts scan only, the other scanners keep them to see what your projects use |
-| `--smart` |  |  | only recommended items (safe caches, stale regenerable data) |
+| `--smart` |  |  | recommended items only: preselected in the picker (nothing is preselected otherwise), the only ones cleaned with --yes |
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |

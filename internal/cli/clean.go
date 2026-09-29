@@ -20,9 +20,10 @@ import (
 
 const cleanLong = `Select what to clean, then clean it.
 
-Without --yes, opens the interactive picker (recommended items preselected
-unless --no-smart), pre-filtered by --category, --kind, --min-size,
---older-than and --risk.
+Without --yes, opens the interactive picker, pre-filtered by --category,
+--kind, --min-size, --older-than and --risk. Nothing is preselected: you
+choose what to remove (space; "a" selects the recommended items). Pass
+--smart to start with the recommended items preselected.
 
 With --yes, runs non-interactively: scan, filter, print the plan, clean.
 A narrowing filter is mandatory (--smart, --category or --kind). Items of
@@ -34,7 +35,8 @@ explicit --risk caution. Use --dry-run first.
 With --trash (or use_trash), files and folders go to the Trash; worktrees and
 commands (simctl, docker, brew…) cannot be undone, so they are skipped.`
 
-const cleanExamples = `  lu-cleaner clean                                   # interactive picker
+const cleanExamples = `  lu-cleaner clean                                   # interactive picker, nothing preselected
+  lu-cleaner clean --smart                           # picker with the recommended items preselected
   lu-cleaner clean --yes --smart --dry-run           # what smart select would do
   lu-cleaner clean --yes --smart                     # clean the recommended items
   lu-cleaner clean -y -c artifacts --older-than 30d  # stale node_modules, Pods, builds
@@ -87,10 +89,13 @@ func (c *cli) cleanCmd() *cobra.Command {
 			if !c.interactive() {
 				return usageErr("clean needs a terminal for the interactive picker; use --yes with --smart, --category or --kind to clean non-interactively")
 			}
-			return c.runPicker(cmd.Context(), pickerSpec{title: "lu-cleaner", smart: !noSmart})
+			return c.runPicker(cmd.Context(), pickerSpec{title: "lu-cleaner", smart: c.f.smart && !noSmart})
 		},
 	}
-	cmd.Flags().BoolVar(&noSmart, "no-smart", false, "do not preselect (picker) / keep only (--yes) recommended items")
+	// --no-smart predates the "nothing preselected" default: kept (hidden) so
+	// existing scripts and habits keep working.
+	cmd.Flags().BoolVar(&noSmart, "no-smart", false, "overrides --smart")
+	_ = cmd.Flags().MarkHidden("no-smart")
 	return cmd
 }
 
