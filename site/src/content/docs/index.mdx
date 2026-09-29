@@ -22,9 +22,9 @@ hero:
 import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <figure style={{ margin: '0 0 1.5rem' }}>
-	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Demo of the lu-cleaner dashboard: the scan streams in, the Worktrees category shows the details of each AI agent worktree, a project artifact is added to the smart selection, the confirmation dialog lists what will be cleaned, and the summary shows the freed space." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Demo of the lu-cleaner dashboard: the scan streams in and nothing is selected, the Worktrees category shows the details of each AI agent worktree, the a key smart-selects the recommended project artifacts and space adds one more by hand, the confirmation dialog lists what will be cleaned, and the summary shows the freed space." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
 		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
-		<img src="/lu-cleaner/demos/dashboard.gif" alt="Demo of the lu-cleaner dashboard: the scan streams in, the Worktrees category shows the details of each AI agent worktree, a project artifact is added to the smart selection, the confirmation dialog lists what will be cleaned, and the summary shows the freed space." width="1200" height="720" />
+		<img src="/lu-cleaner/demos/dashboard.gif" alt="Demo of the lu-cleaner dashboard: the scan streams in and nothing is selected, the Worktrees category shows the details of each AI agent worktree, the a key smart-selects the recommended project artifacts and space adds one more by hand, the confirmation dialog lists what will be cleaned, and the summary shows the freed space." width="1200" height="720" />
 	</video>
 	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner</code> on a demo home folder: scan, AI agent worktrees, project artifacts, confirmation, summary. The data is synthetic, hence sizes in MB; on a real machine, count in GB.</figcaption>
 </figure>
@@ -62,12 +62,13 @@ lu-cleaner knows them — and knows which ones are safe to remove.
 	<TabItem label="Interactive">
 		```bash
 		go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
-		lu-cleaner            # dashboard, recommended items preselected
+		lu-cleaner            # dashboard: you pick what to remove, nothing is preselected
+		lu-cleaner clean --smart   # same, but starts with the recommended items selected
 		```
 	</TabItem>
-	<TabItem label="Pick everything yourself">
+	<TabItem label="One category">
 		```bash
-		lu-cleaner clean --no-smart   # nothing preselected
+		lu-cleaner clean              # the picker again, nothing preselected
 		lu-cleaner worktrees          # only git worktrees
 		lu-cleaner artifacts          # only node_modules, Pods, builds…
 		```
@@ -76,7 +77,7 @@ lu-cleaner knows them — and knows which ones are safe to remove.
 		```bash
 		lu-cleaner scan --json > report.json
 		lu-cleaner clean --yes --smart --dry-run   # the plan, nothing deleted
-		lu-cleaner clean --yes --smart             # clean recommended items
+		lu-cleaner clean --yes --smart             # clean the recommended items
 		```
 		<img src="/lu-cleaner/demos/scan.gif" alt="Demo of lu-cleaner scan --summary followed by lu-cleaner clean --yes --smart --dry-run, which prints the plan and deletes nothing." loading="lazy" width="1200" height="720" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }} />
 	</TabItem>

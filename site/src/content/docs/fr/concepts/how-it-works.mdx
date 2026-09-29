@@ -95,7 +95,7 @@ Chaque ligne du sélecteur, du tableau de `scan` et de la sortie JSON est un él
 | Âge / dernière utilisation | `last_used`, `age_days` | Meilleure estimation de la dernière activité réelle, et non la date de modification du dossier. |
 | Risque | `risk` | Ce que vous perdez : `safe`, `moderate`, `caution` ou `never`. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/). |
 | Méthode | `method` | La façon dont il est nettoyé : `delete`, `trash`, `command`, `worktree` ou `report`. |
-| ★ | `recommended` | Présélectionné par la sélection intelligente. |
+| ★ | `recommended` | Choisi par la sélection intelligente (la touche `a`, `--smart`). |
 | Exige `--force` | `require_force` | Refusé sans `--force`, en simulation aussi (dossiers de worktrees orphelins). |
 | Avertissement | `warn` | Un point qui mérite votre attention (worktree modifié, application en cours d'exécution, version la plus récente conservée…). |
 | Note | `note` | Ce qu'est l'élément et comment il revient après le nettoyage. |
@@ -108,7 +108,7 @@ Chaque ligne du sélecteur, du tableau de `scan` et de la sortie JSON est un él
 - DerivedData utilise la `LastAccessedDate` tenue par Xcode lui-même.
 - Les caches utilisent le fichier le plus récent écrit à l'intérieur.
 
-Cette date pilote `--older-than`, le marquage *stale* (âge en jaune dans le sélecteur) et la sélection intelligente des éléments moderate.
+Cette date pilote `--older-than`, le marquage *stale* (âge en jaune dans le sélecteur) et les éléments moderate que recommande la sélection intelligente.
 
 **Les éléments en rapport seul** (méthode `report`, affichés `info` dans la colonne RISK de `scan`) ne peuvent pas être sélectionnés. Ils expliquent où part l'espace quand lu-cleaner ne le libère pas lui-même : snapshots locaux de Time Machine, installations supplémentaires de Xcode, SDK Android sur un disque externe, image disque de Docker. Leur note indique comment récupérer cet espace à la main.
 
@@ -116,7 +116,7 @@ Cette date pilote `--older-than`, le marquage *stale* (âge en jaune dans le sé
 
 <Steps>
 
-1. **Sélection.** Dans le sélecteur, vous sélectionnez des éléments (<kbd>space</kbd>, ou <kbd>a</kbd> pour la sélection intelligente) et appuyez sur <kbd>d</kbd>. Avec `clean --yes`, ce sont les filtres et `--smart` qui décident (voir [la commande `clean`](/lu-cleaner/reference/commands/clean/)). Les sélections imbriquées sont fusionnées : si vous sélectionnez un worktree *et* le `node_modules` qu'il contient, seul le worktree est traité et rien n'est compté deux fois.
+1. **Sélection.** Dans le sélecteur, rien n'est sélectionné au départ : vous sélectionnez des éléments (<kbd>space</kbd>, ou <kbd>a</kbd> pour la sélection intelligente) et appuyez sur <kbd>d</kbd>. Avec `clean --yes`, ce sont les filtres et `--smart` qui décident (voir [la commande `clean`](/lu-cleaner/reference/commands/clean/)). Les sélections imbriquées sont fusionnées : si vous sélectionnez un worktree *et* le `node_modules` qu'il contient, seul le worktree est traité et rien n'est compté deux fois.
 
 2. **Confirmation** (sélecteur uniquement). Une boîte de dialogue résume la sélection par risque, la méthode (suppression définitive, déplacement dans la Corbeille ou simulation), les commandes qui seront exécutées et les applications en cours d'exécution qui bloqueraient certains éléments. Si la sélection contient un élément `caution` (sélectionné, ou situé dans un élément sélectionné) ou un élément qui exige `--force`, vous devez taper `yes`.
 

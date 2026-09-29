@@ -42,7 +42,7 @@ AI tools  21.4 GB · 36 items · ★ 6.90 GB recommended
   …
 ```
 
-Sizes and names above are illustrative. The `★` column is [smart select](/lu-cleaner/concepts/risk-and-smart-select/): items lu-cleaner would preselect.
+Sizes and names above are illustrative. The `★` column is [smart select](/lu-cleaner/concepts/risk-and-smart-select/): items lu-cleaner recommends (they are the ones the `a` key selects).
 
 ## Clean it
 
@@ -52,7 +52,7 @@ The interactive picker is the best way to review this category, because much of 
 lu-cleaner clean -c ai
 ```
 
-Recommended items are preselected. Items with the <span class="risk caution">caution</span> risk (transcripts, models, generated images) are never preselected, and cleaning them asks you to type `yes`.
+Nothing is selected when the picker opens. Press `a` to select the recommended items, or pick with `space`. Items with the <span class="risk caution">caution</span> risk (transcripts, models, generated images) are never recommended, and cleaning them asks you to type `yes`.
 
 For scripts, start with a dry run:
 
@@ -80,7 +80,7 @@ lu-cleaner worktrees        # remove the finished worktrees
 lu-cleaner clean -c ai      # their Claude Code / Cursor data now shows up as orphaned
 ```
 
-A folder that disappeared recently may come back (a renamed folder, a restored Conductor workspace, a re-created worktree), and transcripts and chats are never regenerated. So this data is <span class="risk caution">caution</span> and never preselected during the first 30 days after its last write. After that, it becomes <span class="risk moderate">moderate</span> and is preselected, unless its folder was only guessed from the directory name or is a Conductor workspace.
+A folder that disappeared recently may come back (a renamed folder, a restored Conductor workspace, a re-created worktree), and transcripts and chats are never regenerated. So this data is <span class="risk caution">caution</span> and never recommended during the first 30 days after its last write. After that, it becomes <span class="risk moderate">moderate</span> and is recommended, unless its folder was only guessed from the directory name or is a Conductor workspace.
 
 ## Claude Code
 
@@ -99,7 +99,7 @@ A folder that disappeared recently may come back (a renamed folder, a restored C
 | **File checkpoints behind `/rewind`** (older than 30 days)<br/><sub>`ai-claude-code-file-history`</sub> | `~/.claude/file-history/` | <span class="risk caution">caution</span> | No |
 | **Plan files** (older than 60 days)<br/><sub>`ai-claude-code-plans`</sub> | `~/.claude/plans/` | <span class="risk caution">caution</span> | No |
 
-"When stale" means the item is preselected once it has been unused for longer than `stale_after`, which is 14 days by default. See [Configuration](/lu-cleaner/reference/configuration/).
+"When stale" means the item is recommended once it has been unused for longer than `stale_after`, which is 14 days by default. See [Configuration](/lu-cleaner/reference/configuration/).
 
 A shell snapshot is sourced by every command of the session that created it, so a session left open for days still needs its snapshot: only snapshots older than a week are proposed.
 
@@ -112,10 +112,10 @@ A shell snapshot is sourced by every command of the session that created it, so 
 Claude Code names each project folder after the working directory, with every character that is not a letter or a digit replaced by `-`. For example, `~/.codex/worktrees/a1b2/my-app` becomes `-Users-me--codex-worktrees-a1b2-my-app`. You cannot decode that name reliably, so lu-cleaner does not try to parse it first:
 
 1. It reads the real `cwd` of each session from its transcript, or from `sessions-index.json`. Several folders can share one project directory (`my-app` and `my_app` encode the same way), so each session is judged on its own folder.
-2. If no session names its folder, it looks for a folder on disk whose encoded name matches. Such an item says the folder was *guessed for the whole directory* and is never preselected.
+2. If no session names its folder, it looks for a folder on disk whose encoded name matches. Such an item says the folder was *guessed for the whole directory* and is never recommended.
 3. A folder that cannot be checked (unmounted volume, unreadable parent, macOS privacy protection, a logged-out cloud storage provider) counts as "unknown", never as "deleted".
 
-A session becomes an orphan only when its folder verifiably no longer exists, no live session runs there, and nothing was written in the last hour. It is preselected only when its folder was read from the sessions, is not a Conductor workspace (Conductor restores archived workspaces), and nothing was written for 30 days. Sessions of other folders sharing the directory are kept. The auto-memory (`memory/`) is always kept: lu-cleaner deletes the transcripts around it, never the folder. Right before deletion, it checks again that the folder is still missing and that no session has started there.
+A session becomes an orphan only when its folder verifiably no longer exists, no live session runs there, and nothing was written in the last hour. It is recommended only when its folder was read from the sessions, is not a Conductor workspace (Conductor restores archived workspaces), and nothing was written for 30 days. Sessions of other folders sharing the directory are kept. The auto-memory (`memory/`) is always kept: lu-cleaner deletes the transcripts around it, never the folder. Right before deletion, it checks again that the folder is still missing and that no session has started there.
 
 ## Claude desktop
 
@@ -171,7 +171,7 @@ The VM image is a sparse Linux disk, about 10 GB allocated. Claude desktop downl
 
 **Old builds and versions.** Cursor creates a `CachedData/<commit>` folder for each update, but only uses the commit of the installed `Cursor.app`, which lu-cleaner reads from the app bundle. The bundled `cursor-agent` keeps every build it downloads (200 MB to 600 MB each). lu-cleaner keeps only the build its `bin/cursor-agent` symlink targets and the newest one.
 
-**Workspace state of deleted folders.** Each folder or worktree you open gets an entry in `workspaceStorage`. lu-cleaner reads the folder from its `workspace.json` and proposes the entry once that folder verifiably no longer exists. Remote workspaces are ignored. Entries untouched for 30 days and without chat data form a preselected item. The others (written recently, holding chat history, or of a Conductor workspace that can be restored) go into a separate "to review" item that is never preselected. The agent data in `~/.cursor/projects` follows the same split. Just before deletion, lu-cleaner checks again that the folders have not come back.
+**Workspace state of deleted folders.** Each folder or worktree you open gets an entry in `workspaceStorage`. lu-cleaner reads the folder from its `workspace.json` and proposes the entry once that folder verifiably no longer exists. Remote workspaces are ignored. Entries untouched for 30 days and without chat data form a recommended item. The others (written recently, holding chat history, or of a Conductor workspace that can be restored) go into a separate "to review" item that is never recommended. The agent data in `~/.cursor/projects` follows the same split. Just before deletion, lu-cleaner checks again that the folders have not come back.
 
 **Extension data.** Data of uninstalled extensions (language-server indexes can take gigabytes) is only proposed when lu-cleaner can read the built-in extension list from `Cursor.app`. Without it, lu-cleaner cannot tell that an extension is gone.
 
@@ -190,7 +190,7 @@ The VM image is a sparse Linux disk, about 10 GB allocated. Claude desktop downl
 | | `conductor.db` (sessions and messages) and `cache.db` (unsent drafts): report only | <span class="risk never">never</span>, <span class="risk caution">caution</span> |
 | **Multica** | The `codex-home` copy of each task completed 7+ days ago. Task workdirs (repository checkouts) are never touched. | <span class="risk moderate">moderate</span> |
 | **GitHub Copilot CLI, vibe-kanban** | Superseded versions | <span class="risk safe">safe</span> |
-| **Antigravity** | Extensions left after uninstalling the app (moderate). The browser-agent profile left after uninstalling (saved passwords, cookies) and browser recordings older than 90 days (caution, never preselected). Conversations and "brain" are report only. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
+| **Antigravity** | Extensions left after uninstalling the app (moderate). The browser-agent profile left after uninstalling (saved passwords, cookies) and browser recordings older than 90 days (caution, never recommended). Conversations and "brain" are report only. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
 | **opencode, Continue, Windsurf, Raycast, Grok CLI, chrome-devtools MCP** | Caches, indexes, logs, downloaded updates and installers. Sessions and chats stay (report only). | <span class="risk safe">safe</span> |
 | **VoiceInk** | Dictation recordings older than 30 days (transcripts stay in the app) | <span class="risk caution">caution</span> |
 | **Gemini CLI, Warp** | `~/.gemini/tmp` (checkpoints) and Warp's database: report only | <span class="risk caution">caution</span>, <span class="risk never">never</span> |
@@ -199,7 +199,7 @@ Run `lu-cleaner catalog -c ai` for the exact paths, or see the [catalog](/lu-cle
 
 ## Local models
 
-Model weights are deliberate multi-gigabyte downloads, so each one is its own item with the <span class="risk caution">caution</span> risk. They are never preselected, and `clean --yes` ignores them unless you pass `--risk caution`.
+Model weights are deliberate multi-gigabyte downloads, so each one is its own item with the <span class="risk caution">caution</span> risk. They are never recommended, and `clean --yes` ignores them unless you pass `--risk caution`.
 
 | Store | Location | Item |
 |---|---|---|

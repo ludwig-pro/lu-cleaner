@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The interactive dashboard is the safest way to clean: you see every item before anything is removed, the recommended ones are preselected for you, and every deletion is re-checked at the last moment. This walkthrough follows one complete cleanup, screen by screen. The projects, paths and sizes are illustrative.
+The interactive dashboard is the safest way to clean: you see every item before anything is removed, nothing is selected until you choose it, and every deletion is re-checked at the last moment. This walkthrough follows one complete cleanup, screen by screen. The projects, paths and sizes are illustrative.
 
 <figure style={{ margin: '1rem 0 1.5rem' }}>
 	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Demo of a complete cleanup in the lu-cleaner dashboard: category overview, worktree details, project artifacts, selection, confirmation dialog and summary." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
@@ -29,28 +29,28 @@ lu-cleaner
 Start with `lu-cleaner --dry-run`. Everything in this walkthrough works the same, the footer shows **○ dry-run**, and the final summary tells you what *would* have been freed. Nothing is touched.
 :::
 
-The usual filters pre-filter the dashboard, for example `lu-cleaner -c artifacts,worktrees --older-than 30d`. To start with nothing preselected, use `lu-cleaner clean --no-smart`.
+The usual filters pre-filter the dashboard, for example `lu-cleaner -c artifacts,worktrees --older-than 30d`. Nothing is preselected: the dashboard always opens with an empty selection, and you decide what to remove. To start with the recommended items already selected, opt in with `lu-cleaner clean --smart`.
 
 ## 1. Read the category overview
 
-Scanners run in parallel and stream their results: categories appear and grow while the header shows `scanning 5/8 providers`. When the last scanner finishes, *smart select* preselects the recommended items and says so in the status line.
+Scanners run in parallel and stream their results: categories appear and grow while the header shows `scanning 5/8 providers`. When the last scanner finishes, the status line tells you how to choose: nothing is selected yet.
 
 <div class="terminal">
 <span class="acc">🧹 lu-cleaner</span> <span class="ok">✓</span><span class="dim"> scan done in 21.4s · 339 items · </span>176 GB<span class="dim"> reclaimable</span>
 💾 <span class="bad">██████████████████████</span><span class="dim">░░</span> <span class="bad">91% used</span><span class="dim"> · </span>43.0 GB<span class="dim"> free of 494 GB</span>
 <span class="acc">Categories</span><span class="dim"> · enter to open</span>
 &nbsp;        <span class="dim">CATEGORY                                          SIZE       ITEMS      SELECTED</span>
-<span class="acc">› </span><span class="warn">[\~] </span><span class="acc">🌳 Worktrees                                   </span>   42.8 GB<span class="dim">    31 items</span><span class="ok">     ✓ 11.6 GB</span>
-&nbsp; <span class="warn">[\~] </span>📦 Project artifacts                              36.4 GB<span class="dim">   118 items</span><span class="ok">     ✓ 9.20 GB</span>
-&nbsp; <span class="warn">[\~] </span>📱 iOS Simulators                                 24.1 GB<span class="dim">    14 items</span><span class="ok">     ✓ 8.70 GB</span>
-&nbsp; <span class="warn">[\~] </span>🔨 Xcode                                          18.6 GB<span class="dim">    12 items</span><span class="ok">     ✓ 15.2 GB</span>
-&nbsp; <span class="warn">[\~] </span>🤖 Android                                        14.3 GB<span class="dim">    19 items</span><span class="ok">     ✓ 3.40 GB</span>
-&nbsp; <span class="warn">[\~] </span>🧠 AI tools                                       12.9 GB<span class="dim">    57 items</span><span class="ok">     ✓ 4.10 GB</span>
-&nbsp; <span class="warn">[\~] </span>🟨 JS toolchain                                   17.2 GB<span class="dim">    48 items</span><span class="ok">     ✓ 12.3 GB</span>
-&nbsp; <span class="warn">[\~] </span>🧩 IDEs                                           3.10 GB<span class="dim">    15 items</span><span class="ok">     ✓ 2.60 GB</span>
-&nbsp; <span class="warn">[\~] </span>💻 System                                         6.40 GB<span class="dim">    25 items</span><span class="ok">     ✓ 1.90 GB</span>
-<span class="ok">Smart selection: 131 items preselected (69.0 GB) — review, then press d to clean</span>
-<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">enter</span><span class="dim"> open  </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">t</span><span class="dim"> trash  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+<span class="acc">› </span>[ ] <span class="acc">🌳 Worktrees                                   </span>   42.8 GB<span class="dim">    31 items</span>
+&nbsp; [ ] 📦 Project artifacts                              36.4 GB<span class="dim">   118 items</span>
+&nbsp; [ ] 📱 iOS Simulators                                 24.1 GB<span class="dim">    14 items</span>
+&nbsp; [ ] 🔨 Xcode                                          18.6 GB<span class="dim">    12 items</span>
+&nbsp; [ ] 🤖 Android                                        14.3 GB<span class="dim">    19 items</span>
+&nbsp; [ ] 🧠 AI tools                                       12.9 GB<span class="dim">    57 items</span>
+&nbsp; [ ] 🟨 JS toolchain                                   17.2 GB<span class="dim">    48 items</span>
+&nbsp; [ ] 🧩 IDEs                                           3.10 GB<span class="dim">    15 items</span>
+&nbsp; [ ] 💻 System                                         6.40 GB<span class="dim">    25 items</span>
+<span class="dim">Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection</span>
+<span class="dim">nothing selected</span><span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">enter</span><span class="dim"> open  </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">t</span><span class="dim"> trash  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
 </div>
 
 | Element | Meaning |
@@ -58,10 +58,10 @@ Scanners run in parallel and stream their results: categories appear and grow wh
 | Header | Scan status, number of items listed, and the total that could be reclaimed. |
 | 💾 line | Disk usage of the volume that holds your home folder, refreshed after each cleanup. |
 | SIZE | What cleaning every item of the category would free. Report-only entries are not counted. |
-| SELECTED | Size of the current selection in that category. |
+| SELECTED | Size of the current selection in that category. Blank until you select something. |
 | `[✓]` `[~]` `[ ]` `[·]` | Everything selected, part of it, nothing, or nothing cleanable (report-only entries). |
-| Status line | The latest message, otherwise a description of the category under the cursor. |
-| Footer | Selection count and size, the cleaning mode, and the main keys. |
+| Status line | The latest message (here, how to select), otherwise a description of the category under the cursor. |
+| Footer | Selection count and size (`nothing selected` for now), the cleaning mode, and the main keys. |
 
 The mode in the footer matters: **delete permanently** frees space immediately, **🗑 Trash mode** (toggled with `t`) moves files and folders to `~/.Trash`, frees nothing until you empty it and skips worktrees and commands (they cannot be undone), and **○ dry-run** touches nothing.
 
@@ -77,11 +77,11 @@ Move to **Project artifacts** and press `enter` (or `→`):
 <span class="acc">📦 Project artifacts</span><span class="dim"> (118)</span><span class="dim"> · sort: size ↓ · ← back · tab next</span>
 &nbsp;     <span class="dim">NAME                           LOCATION                                  SIZE   AGE RISK</span>
 &nbsp; [ ] my-app › ios/build             <span class="dim">\~/dev/my-app/ios/build              </span>   2.10 GB <span class="dim">   5h</span> <span class="ok">safe</span>
-<span class="acc">› </span><span class="ok">[✓] </span><span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+<span class="acc">› </span>[ ] <span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
 &nbsp; [ ] my-app › node_modules          <span class="dim">\~/dev/my-app/node_modules           </span>   1.31 GB <span class="dim">   2d</span> <span class="warn">moderate</span>
-&nbsp; <span class="ok">[✓] </span>codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
-&nbsp; <span class="ok">[✓] </span>shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
-&nbsp; <span class="ok">[✓] </span>shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
+&nbsp; [ ] shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
 &nbsp; [ ] my-app › ios/Pods              <span class="dim">\~/dev/my-app/ios/Pods               </span>    910 MB <span class="dim">   2d</span> <span class="warn">moderate</span>
 <span class="dim">…</span>
 <span class="dim">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
@@ -93,7 +93,7 @@ shop-app › node_modules<span class="dim"> · </span><span class="warn">moderat
 <span class="dim">Project  </span><span class="dim">\~/dev/shop-app</span>
 <span class="dim">Meta     </span><span class="cy">package_manager=yarn · project_type=react-native</span>
 &nbsp;
-<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+<span class="dim">nothing selected</span><span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
 </div>
 
 Each row is one item: something lu-cleaner can remove as a unit (a `node_modules` folder, a worktree, a cache, a simulator…).
@@ -109,14 +109,14 @@ Each row is one item: something lu-cleaner can remove as a unit (a `node_modules
 
 Dimmed rows marked `[·]` are listed for information and cannot be selected. Press `space` on one to see why.
 
-Notice what smart select left out:
-
-- `my-app › ios/build` was used 5 hours ago. Smart select never preselects the artifacts of a project used in the last 24 hours: you are probably working on it.
-- `my-app › node_modules` and `my-app › ios/Pods` are <span class="risk moderate">moderate</span>: rebuilding them costs time, so they are only recommended once unused for 14 days.
-
 Use `tab` / `shift+tab` to jump to the next or previous category, `←` to go back to the overview, `/` to filter by text and `s` to sort by size, age or name.
 
 ## 3. Select what to clean
+
+Nothing is selected until you choose. There are two ways, and you can mix them:
+
+- **By hand.** Move to a row and press `space`. On the category overview, `space` selects a whole category (except its caution items).
+- **With smart select.** Press `a`: lu-cleaner selects the *recommended* items of the current view, nothing more, and says how many in the status line. It is your explicit request, so you see what it picked before anything can be cleaned.
 
 | Key | Effect |
 | --- | --- |
@@ -127,6 +127,30 @@ Use `tab` / `shift+tab` to jump to the next or previous category, `←` to go ba
 | `i` | Invert the selection in the view. |
 
 Inside a category, "the view" is the current list, after any `/` filter. On the category overview, it is every visible item. The selection is kept when you move between categories.
+
+Try it: in **Project artifacts**, press `a`.
+
+<div class="terminal">
+<span class="acc">📦 Project artifacts</span><span class="dim"> (118)</span><span class="dim"> · sort: size ↓ · ← back · tab next</span>
+&nbsp;     <span class="dim">NAME                           LOCATION                                  SIZE   AGE RISK</span>
+&nbsp; [ ] my-app › ios/build             <span class="dim">\~/dev/my-app/ios/build              </span>   2.10 GB <span class="dim">   5h</span> <span class="ok">safe</span>
+<span class="acc">› </span><span class="ok">[✓] </span><span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › node_modules          <span class="dim">\~/dev/my-app/node_modules           </span>   1.31 GB <span class="dim">   2d</span> <span class="warn">moderate</span>
+&nbsp; <span class="ok">[✓] </span>codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › ios/Pods              <span class="dim">\~/dev/my-app/ios/Pods               </span>    910 MB <span class="dim">   2d</span> <span class="warn">moderate</span>
+<span class="dim">…</span>
+<span class="ok">Smart selection: 38 items (safe caches + moderate items unused for 2w)</span>
+<span class="ok">✓ </span>38 selected · 9.20 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+</div>
+
+Notice what smart select left out:
+
+- `my-app › ios/build` was used 5 hours ago. Smart select never picks the artifacts of a project used in the last 24 hours: you are probably working on it.
+- `my-app › node_modules` and `my-app › ios/Pods` are <span class="risk moderate">moderate</span>: rebuilding them costs time, so they are only recommended once unused for 14 days.
+
+You can always adjust: `space` unselects a recommended item or selects one it left out. To carry on with the recommended items of every category, press `←` to go back to the overview and press `a` there: the rest of this walkthrough cleans that selection (131 items, 69.0 GB).
 
 When you select a <span class="risk caution">caution</span> item, the status line tells you what is at stake, for example `⚠ caution: my-app · spike/old-ui — 3 uncommitted changes`.
 
@@ -155,7 +179,7 @@ Press `o` to reveal the item in Finder.
 
 ## 5. Clean and confirm
 
-Press `d` (or `x`). A confirmation shows what is about to happen:
+Press `d` (or `x`). With nothing selected, `d` only reminds you to select something. Otherwise a confirmation shows what is about to happen, with the total:
 
 <div class="terminal">
 <span class="acc">╭──────────────────────────────────────────────────────────────────────────╮</span>
@@ -316,7 +340,7 @@ macOS does not always return deleted space right away. Here is what to check, in
 
 <CardGrid>
 	<LinkCard title="Keyboard shortcuts" href="/lu-cleaner/reference/keyboard-shortcuts/" description="Every key of the picker and of the disk analyzer." />
-	<LinkCard title="Risk levels and smart select" href="/lu-cleaner/concepts/risk-and-smart-select/" description="What gets preselected, and why." />
+	<LinkCard title="Risk levels and smart select" href="/lu-cleaner/concepts/risk-and-smart-select/" description="What smart select recommends, and why it is opt-in." />
 	<LinkCard title="AI agent worktrees" href="/lu-cleaner/guides/ai-worktrees/" description="Clean up after Codex, Cursor, Conductor and Claude Code." />
 	<LinkCard title="Safety" href="/lu-cleaner/concepts/safety/" description="Everything that is checked before a path is removed." />
 </CardGrid>

@@ -199,7 +199,7 @@ Les durées acceptent `h` (heures), `d` (jours), `w` (semaines), `m` (mois de 30
 
 ### `keep_latest`
 
-Nombre de versions les plus récentes à conserver pour les installations versionnées, en plus de celles qui sont actives, épinglées ou en cours d'exécution. Les versions conservées ne sont jamais présélectionnées par la sélection intelligente (certaines ne sont pas listées du tout). Par défaut `1`, minimum `1`.
+Nombre de versions les plus récentes à conserver pour les installations versionnées, en plus de celles qui sont actives, épinglées ou en cours d'exécution. Les versions conservées ne sont jamais recommandées par la sélection intelligente (certaines ne sont pas listées du tout). Par défaut `1`, minimum `1`.
 
 ```toml
 keep_latest = 2

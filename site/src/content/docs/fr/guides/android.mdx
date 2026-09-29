@@ -16,7 +16,7 @@ Les dossiers propres à chaque projet, comme `android/build`, `android/app/build
 ```bash
 ./gradlew --stop                 # depuis n'importe quel projet Android : arrêter d'abord les démons Gradle
 lu-cleaner scan -c android       # ce qui prend de la place ; rien n'est modifié
-lu-cleaner clean -c android      # sélecteur, éléments recommandés présélectionnés
+lu-cleaner clean -c android      # sélecteur : rien n'est sélectionné, appuyez sur a pour les éléments recommandés
 lu-cleaner devices               # AVD et images système à côté des simulateurs iOS (a pour la sélection intelligente)
 ```
 
@@ -55,8 +55,8 @@ Quand un projet React Native n'a pas de `node_modules`, la version de `react-nat
 
 Ce parcours utilise toujours vos racines configurées (ou détectées automatiquement). Les racines passées en ligne de commande (`--root`, `lu-cleaner artifacts <root>`) ne restreignent que le scan des artefacts : avec un seul projet comme racine, toutes les versions utilisées par vos autres projets sembleraient inutilisées.
 
-:::caution[Quand l'utilisation est inconnue, rien n'est présélectionné]
-Le parcours des projets s'arrête au bout de 20 secondes ou de 250 000 dossiers. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas présélectionnés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
+:::caution[Quand l'utilisation est inconnue, rien n'est recommandé]
+Le parcours des projets s'arrête au bout de 20 secondes ou de 250 000 dossiers. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas recommandés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
 :::
 
 ## Où se trouve le SDK
@@ -108,7 +108,7 @@ Les émulateurs en cours d'exécution sont détectés grâce à leurs processus 
 
 ### Snapshots Quick Boot
 
-Le dossier `snapshots/` d'un AVD contient `default_boot`, l'état de la RAM et de l'appareil enregistré à la fermeture pour Quick Boot. Le supprimer ne coûte que du temps : le lancement suivant se fait à froid (30 à 90 secondes), et les apps et les données restent. L'élément, `Quick Boot snapshots · Pixel 8`, est <span class="risk moderate">moderate</span> et présélectionné une fois périmé.
+Le dossier `snapshots/` d'un AVD contient `default_boot`, l'état de la RAM et de l'appareil enregistré à la fermeture pour Quick Boot. Le supprimer ne coûte que du temps : le lancement suivant se fait à froid (30 à 90 secondes), et les apps et les données restent. L'élément, `Quick Boot snapshots · Pixel 8`, est <span class="risk moderate">moderate</span> et recommandé une fois périmé.
 
 Si vous avez enregistré vous-même des snapshots nommés, l'élément devient `Emulator snapshots · Pixel 8`, avec le risque <span class="risk caution">caution</span> et un avertissement qui les liste. lu-cleaner ne supprime jamais les images userdata d'un AVD à elles seules : les snapshots en dépendent.
 
@@ -116,11 +116,11 @@ Si vous avez enregistré vous-même des snapshots nommés, l'élément devient `
 
 Les NDK, build-tools, plateformes, CMake et sources suivent les mêmes règles de conservation :
 
-- **Utilisé par un projet** : conservé. L'élément affiche `used_by` (dans le panneau de détails et dans les métadonnées `--json`) et n'est jamais présélectionné.
+- **Utilisé par un projet** : conservé. L'élément affiche `used_by` (dans le panneau de détails et dans les métadonnées `--json`) et n'est jamais recommandé.
 - **Version installée la plus récente** : toujours conservée. Réglez `keep_latest` dans la [configuration](/lu-cleaner/fr/reference/configuration/) pour conserver davantage de versions parmi les plus récentes (1 par défaut).
-- **Tout le reste** : présélectionné, à condition que le parcours des projets soit allé jusqu'au bout.
+- **Tout le reste** : recommandé, à condition que le parcours des projets soit allé jusqu'au bout.
 
-Les images système suivent plutôt les émulateurs : une image utilisée par un AVD ne peut pas être sélectionnée, et une image inutilisée est présélectionnée.
+Les images système suivent plutôt les émulateurs : une image utilisée par un AVD ne peut pas être sélectionnée, et une image inutilisée est recommandée.
 
 | Paquet | Type (`-k`) | Conservé quand | Pour le récupérer |
 |---|---|---|---|
@@ -131,7 +131,7 @@ Les images système suivent plutôt les émulateurs : une image utilisée par un
 | CMake, `cmake/<version>` | `android-cmake` | un projet l'utilise, c'est le plus récent, ou c'est `3.22.1` (la version par défaut d'AGP 8, avec laquelle React Native compile) | AGP télécharge la version dont il a besoin |
 | Sources, `sources/android-<N>` | `android-sources` | c'est le `compileSdk` d'un projet, ou les plus récentes | servent uniquement à parcourir le code dans l'IDE |
 
-Les images système sont <span class="risk moderate">moderate</span>, comme les autres paquets. Si un dossier d'AVD ne peut pas être lu (disque non monté), les images portent *an AVD folder is not reachable — cannot tell whether an emulator uses this image* et ne sont pas présélectionnées. Un dossier nommé comme `35.0.0-2` est le reste d'une installation qui a échoué : <span class="risk safe">safe</span> et présélectionné.
+Les images système sont <span class="risk moderate">moderate</span>, comme les autres paquets. Si un dossier d'AVD ne peut pas être lu (disque non monté), les images portent *an AVD folder is not reachable — cannot tell whether an emulator uses this image* et ne sont pas recommandées. Un dossier nommé comme `35.0.0-2` est le reste d'une installation qui a échoué : <span class="risk safe">safe</span> et recommandé.
 
 Contenu ancien et restes du SDK :
 
@@ -145,7 +145,7 @@ Contenu ancien et restes du SDK :
 
 ### Images x86 sur Apple Silicon
 
-Les images système et AVD x86 et x86_64 ne peuvent pas démarrer sur un Mac Apple Silicon ; ce sont des restes typiques d'une migration depuis un Mac Intel. lu-cleaner ajoute *cannot boot on Apple Silicon* à leur note et les présélectionne. C'est une raison de les supprimer plutôt qu'un danger : ce n'est donc pas affiché comme un avertissement.
+Les images système et AVD x86 et x86_64 ne peuvent pas démarrer sur un Mac Apple Silicon ; ce sont des restes typiques d'une migration depuis un Mac Intel. lu-cleaner ajoute *cannot boot on Apple Silicon* à leur note et les recommande. C'est une raison de les supprimer plutôt qu'un danger : ce n'est donc pas affiché comme un avertissement.
 
 ## Gradle
 
@@ -153,22 +153,22 @@ Gradle range tout dans son dossier utilisateur, `$GRADLE_USER_HOME` ou `~/.gradl
 
 | Élément | Type (`-k`) | Risque | Sélection intelligente et remarques |
 |---|---|---|---|
-| Distribution du wrapper, `wrapper/dists/gradle-<v>-bin` (ou `-all`) | `android-gradle-dist` | <span class="risk moderate">moderate</span> | présélectionnée quand aucun wrapper de projet ne l'utilise ; `./gradlew` la retélécharge (130 à 200 Mo) |
-| Téléchargement du wrapper interrompu (sans marqueur `.ok`) | `android-gradle-dist` | <span class="risk safe">safe</span> | présélectionné, sauf si un fichier `.part` a changé dans la dernière heure |
-| Caches par version, `caches/<version>` | `android-gradle-version-cache` | <span class="risk moderate">moderate</span> | présélectionnés quand aucun wrapper ni aucun Gradle Homebrew ou SDKMAN n'utilise cette version |
-| Transforms, jars ou build cache dans un ancien format (par exemple `transforms-3` quand `transforms-4` existe) | `android-gradle-transforms`, `android-gradle-jars`, `android-gradle-build-cache` | <span class="risk safe">safe</span> | présélectionnés |
+| Distribution du wrapper, `wrapper/dists/gradle-<v>-bin` (ou `-all`) | `android-gradle-dist` | <span class="risk moderate">moderate</span> | recommandée quand aucun wrapper de projet ne l'utilise ; `./gradlew` la retélécharge (130 à 200 Mo) |
+| Téléchargement du wrapper interrompu (sans marqueur `.ok`) | `android-gradle-dist` | <span class="risk safe">safe</span> | recommandé, sauf si un fichier `.part` a changé dans la dernière heure |
+| Caches par version, `caches/<version>` | `android-gradle-version-cache` | <span class="risk moderate">moderate</span> | recommandés quand aucun wrapper ni aucun Gradle Homebrew ou SDKMAN n'utilise cette version |
+| Transforms, jars ou build cache dans un ancien format (par exemple `transforms-3` quand `transforms-4` existe) | `android-gradle-transforms`, `android-gradle-jars`, `android-gradle-build-cache` | <span class="risk safe">safe</span> | recommandés |
 | Build cache local actuel | `android-gradle-build-cache` | <span class="risk safe">safe</span> | sert uniquement à accélérer les rebuilds ; se remplit de nouveau tout seul |
 | Cache de transforms actuel | `android-gradle-transforms` | <span class="risk moderate">moderate</span> | le dexing, jetifier et l'extraction des AAR sont recalculés (quelques minutes de plus) |
 | Cache des dépendances, `caches/modules-2` | `android-gradle-modules` | <span class="risk moderate">moderate</span> | 1 à 3 Go retéléchargés par le build suivant ; les builds hors ligne échouent d'ici là |
 | Autres caches partagés (Kotlin DSL, scripts, keyrings…) | `android-gradle-caches-other` | <span class="risk moderate">moderate</span> | reconstruits ou retéléchargés |
 | Journaux des démons, `daemon/<version>` | `android-gradle-daemon-logs` | <span class="risk safe">safe</span> | tant qu'un démon de cette version tourne, seuls les journaux de plus de 24 heures sont proposés |
-| Fichiers temporaires et téléchargements partiels, `.tmp` | `android-gradle-tmp` | <span class="risk safe">safe</span> | fichiers de plus d'un jour, que ni Gradle ni les autres outils de nettoyage ne suppriment ; présélectionnés |
-| JDK de toolchain, `jdks/*` | `android-gradle-jdk` | <span class="risk moderate">moderate</span> | retéléchargés (200 à 300 Mo) quand un build les demande ; jamais présélectionnés |
+| Fichiers temporaires et téléchargements partiels, `.tmp` | `android-gradle-tmp` | <span class="risk safe">safe</span> | fichiers de plus d'un jour, que ni Gradle ni les autres outils de nettoyage ne suppriment ; recommandés |
+| JDK de toolchain, `jdks/*` | `android-gradle-jdk` | <span class="risk moderate">moderate</span> | retéléchargés (200 à 300 Mo) quand un build les demande ; jamais recommandés |
 | Helpers natifs, rapports de build Kotlin, état des workers | `android-gradle-misc` | <span class="risk safe">safe</span> | recréés automatiquement |
 
 `caches/journal-1` n'est jamais proposé : le nettoyage de cache intégré à Gradle en dépend.
 
-La date de dernière utilisation d'une version de Gradle provient de ses journaux de démon, le signal d'utilisation le plus fiable. Une distribution ou un cache qu'un projet utilise n'est pas présélectionné comme inutilisé, mais comme tout élément <span class="risk moderate">moderate</span>, il est présélectionné une fois resté inutilisé plus longtemps que [`stale_after`](/lu-cleaner/fr/reference/configuration/) ; le build suivant de ce projet le retélécharge ou le reconstruit alors. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
+La date de dernière utilisation d'une version de Gradle provient de ses journaux de démon, le signal d'utilisation le plus fiable. Une distribution ou un cache qu'un projet utilise n'est pas recommandé comme inutilisé, mais comme tout élément <span class="risk moderate">moderate</span>, il est recommandé une fois resté inutilisé plus longtemps que [`stale_after`](/lu-cleaner/fr/reference/configuration/) ; le build suivant de ce projet le retélécharge ou le reconstruit alors. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
 
 ### Quand un démon Gradle tourne
 
@@ -185,9 +185,9 @@ Pourquoi c'est important : un démon en cours d'exécution garde les fichiers su
 | Élément | Type (`-k`) | Risque | Remarques |
 |---|---|---|---|
 | Caches de la version installée, `~/Library/Caches/Google/AndroidStudio<version>` | `android-studio-cache` | <span class="risk moderate">moderate</span> | reconstruits au lancement suivant (la réindexation prend plusieurs minutes) ; ignorés tant qu'Android Studio tourne |
-| Caches d'une version qui n'est plus installée | `android-studio-cache` | <span class="risk safe">safe</span> | plus rien ne les lit ; présélectionnés |
+| Caches d'une version qui n'est plus installée | `android-studio-cache` | <span class="risk safe">safe</span> | plus rien ne les lit ; recommandés |
 | Journaux, `~/Library/Logs/Google/AndroidStudio*` | `android-studio-logs` | <span class="risk safe">safe</span> | `idea.log` et rapports de crash |
-| Réglages d'une ancienne version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | lus uniquement pour migrer les réglages lors d'une mise à jour ; présélectionnés quand la version actuelle a ses propres réglages, jamais tant qu'une version installée n'a pas encore été lancée (elle les importe à son premier lancement) |
+| Réglages d'une ancienne version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | lus uniquement pour migrer les réglages lors d'une mise à jour ; recommandés quand la version actuelle a ses propres réglages, jamais tant qu'une version installée n'a pas encore été lancée (elle les importe à son premier lancement) |
 | Cache du dépôt du SDK, ancien build cache et dumps de crash de l'émulateur dans `~/.android` | `android-user-cache` | <span class="risk safe">safe</span> | uniquement le contenu de `cache`, `build-cache` et `breakpad` |
 
 Le dossier de réglages de la version que vous utilisez n'est jamais proposé. lu-cleaner détermine les versions installées à partir du `product-info.json` de chaque `Android Studio*.app` trouvée dans `/Applications`, `~/Applications` et les résultats de Spotlight. S'il n'en trouve aucune (emplacement personnalisé, JetBrains Toolbox…), le dossier de réglages utilisé le plus récemment est considéré comme celui de la version actuelle, par prudence. Avec `keep_latest` au-dessus de 1, ce nombre de versions utilisées récemment comptent comme actuelles.
@@ -198,7 +198,7 @@ Dans `~/.android`, `adbkey`, `debug.keystore` et les réglages de l'émulateur n
 
 ## JDK
 
-Les builds Android ont besoin d'un JDK, et la plupart des machines en accumulent plusieurs. lu-cleaner les liste tous et n'en présélectionne jamais aucun :
+Les builds Android ont besoin d'un JDK, et la plupart des machines en accumulent plusieurs. lu-cleaner les liste tous et n'en recommande jamais aucun :
 
 | Emplacement | Installé par | Traitement |
 |---|---|---|
@@ -247,7 +247,7 @@ Ces emplacements fixes proviennent du [catalogue](/lu-cleaner/reference/catalog/
    lu-cleaner scan -c android --all
    ```
 
-4. Ouvrez le sélecteur, vérifiez la présélection catégorie par catégorie, puis appuyez sur <kbd>d</kbd> :
+4. Ouvrez le sélecteur, appuyez sur <kbd>a</kbd> pour sélectionner les éléments recommandés (ou choisissez avec <kbd>space</kbd>), vérifiez-les catégorie par catégorie, puis appuyez sur <kbd>d</kbd> :
 
    ```bash
    lu-cleaner clean -c android

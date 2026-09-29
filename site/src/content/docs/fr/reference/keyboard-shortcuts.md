@@ -42,7 +42,7 @@ Dans `worktrees` et `artifacts`, qui n'ont pas de vue d'ensemble des catégories
 
 « La vue » désigne la liste d'éléments affichée (après un éventuel filtre de texte) quand une catégorie est ouverte, et tous les éléments visibles quand vous êtes sur la vue d'ensemble des catégories. Certains éléments ne peuvent pas être sélectionnés, et `space` sur l'un d'eux en indique la raison dans la ligne d'état : les éléments en rapport seul, les éléments encore en cours de mesure (`…`), et les éléments qui exigent `--force` (dossiers de worktrees orphelins), qui deviennent sélectionnables quand vous avez lancé lu-cleaner avec `--force` ou en mode Corbeille.
 
-La sélection intelligente s'exécute aussi une fois, automatiquement, à la fin de l'analyse : toujours avec `lu-cleaner`, avec `lu-cleaner clean` sauf si vous passez `--no-smart`, et avec `worktrees`, `artifacts` et `devices` uniquement si vous passez `--smart`. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
+Rien n'est sélectionné quand le sélecteur s'ouvre, dans toutes les commandes : la ligne d'état le dit une fois l'analyse terminée (« Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection »), et `d` n'a rien à nettoyer tant que vous n'avez pas choisi. La sélection intelligente ne s'exécute que lorsque vous appuyez sur `a`, ou une fois à la fin de l'analyse si vous l'avez demandée avec `--smart` (`lu-cleaner --smart`, `lu-cleaner clean --smart`, `worktrees --smart`…). Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
 
 ### Affichage
 

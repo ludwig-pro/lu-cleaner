@@ -42,7 +42,7 @@ In `worktrees` and `artifacts`, which have no category overview, `←`, `tab` an
 
 "The view" is the current item list (after any text filter) when a category is open, and every visible item when you are on the category overview. Some items cannot be selected, and `space` on one shows why in the status line: report-only items, items still being measured (`…`), and items that need `--force` (orphaned worktree folders), which become selectable when you started lu-cleaner with `--force` or in Trash mode.
 
-Smart select also runs once, automatically, when the scan finishes: always with `lu-cleaner`, with `lu-cleaner clean` unless you pass `--no-smart`, and with `worktrees`, `artifacts` and `devices` only when you pass `--smart`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
+Nothing is selected when the picker opens, in every command: the status line says so once the scan ends ("Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection"), and `d` has nothing to clean until you choose. Smart select only runs when you press `a`, or once when the scan finishes if you opted in with `--smart` (`lu-cleaner --smart`, `lu-cleaner clean --smart`, `worktrees --smart`…). See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
 
 ### View
 

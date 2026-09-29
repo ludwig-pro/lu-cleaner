@@ -1,7 +1,8 @@
-# dashboard.tape — `lu-cleaner`: scan, browse worktrees and project artifacts,
-# add an item to the smart selection, clean, summary. Synthetic sandbox only:
+# dashboard.tape — `lu-cleaner`: scan (nothing is selected afterwards), browse
+# the worktrees, smart-select the recommended project artifacts with `a`, add one
+# more item with space, then clean, confirm, summary. Synthetic sandbox only:
 # record with demo/record.sh dashboard.
-# poster: 7s (frame used as the video poster by demo/record.sh)
+# poster: 22s (frame used as the video poster by demo/record.sh)
 
 Output site/public/demos/dashboard.gif
 Output site/public/demos/dashboard.mp4
@@ -13,9 +14,10 @@ Type "lu-cleaner"
 Sleep 400ms
 Enter
 
-# Scanners stream their results; smart select preselects the recommended items.
-Wait+Screen@30s /scan done/
-Sleep 3s
+# Scanners stream their results. When the scan ends nothing is selected:
+# the status line says how to choose.
+Wait+Screen@30s /Nothing is selected/
+Sleep 4s
 
 # Worktrees: the details panel follows the cursor (branch, status, why).
 Type "g"
@@ -36,13 +38,18 @@ Sleep 600ms
 Enter
 Sleep 2s
 
-# Add my-app's Pods to the selection.
+# `a` is smart select: it picks the recommended items of this view (safe,
+# regenerable, unused for weeks). Nothing else is selected.
+Type "a"
+Sleep 3.5s
+
+# Then space picks one more item by hand: my-app's Pods.
 Down@250ms 8
 Sleep 1.5s
 Space
-Sleep 1.5s
+Sleep 2s
 
-# Clean: review the confirmation, then confirm.
+# Clean: review the confirmation (it shows the total), then confirm.
 Type "d"
 Sleep 3.5s
 Type "y"

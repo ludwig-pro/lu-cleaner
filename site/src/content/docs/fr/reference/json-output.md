@@ -82,7 +82,7 @@ Les totaux sont calculés sur tous les éléments correspondants, même quand `-
 | `note` | string | Ce qu'est l'élément et comment il revient |
 | `warn` | string | Avertissement ; un élément qui porte un avertissement n'est jamais recommandé, et `clean --yes` le retient sauf avec `--risk caution` |
 | `require_force` | boolean | `true` quand le nettoyage refuse l'élément sans `--force`, en simulation aussi (dossiers de worktrees orphelins). Omis sinon |
-| `recommended` | boolean | Sélectionné par la sélection intelligente. Toujours présent |
+| `recommended` | boolean | Recommandé par la sélection intelligente : ce que choisissent la touche `a` et `--smart`. Toujours présent |
 | `cleanable` | boolean | `false` pour les éléments en rapport seul, non sélectionnables et `never`. Toujours présent |
 
 ### Exemple

@@ -225,7 +225,7 @@ A worktree folder is sometimes deleted with `rm`, by Cursor or Conductor, or by 
 
 An orphan is a folder that still has a `.git` file, but git no longer knows it. Git cannot remove it, and cannot tell whether it contains work that exists nowhere else. So an orphan:
 
-- is <span class="risk caution">caution</span> and never preselected;
+- is <span class="risk caution">caution</span> and never recommended;
 - is deleted as a plain folder, after the safety guard, **only with `--force`**. Without it, the item is skipped with `needs --force: orphaned: …`, in a dry run too. In Trash mode it can be moved to the Trash instead, which you can undo;
 - is checked again right before deletion: same `.git` file, git data still missing, and no other repository or worktree inside. An orphan that contains another repository is only reported: `rm -rf` would take that repository with it.
 

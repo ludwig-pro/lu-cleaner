@@ -224,7 +224,7 @@ Consignes pour les scanners :
 - Mesurez avec `fsx.Size` sans options : le moteur donne à chaque analyse un cache partagé, si bien qu'un dossier mesuré par deux scanners n'est parcouru qu'une fois.
 - Consultez `env.IsProtected` et `env.Excluded` avant de proposer un chemin. Signalez les éléments situés sur un autre volume avec `MethodReport` au lieu de les proposer.
 - Renseignez `Warn` pour tout ce qu'un humain devrait regarder en premier (une application en cours d'exécution, un processus à l'intérieur, une version épinglée par un projet). Un avertissement exclut l'élément de la sélection intelligente, et de `clean --yes` sans `--risk caution`.
-- Renseignez `NoRecommend` quand l'élément ne doit jamais être présélectionné, quel que soit son âge : des données qui ne reviennent pas, ou que leur propriétaire peut encore vouloir garder. Mettre `Recommended = false` n'est pas un veto.
+- Renseignez `NoRecommend` quand l'élément ne doit jamais être recommandé, quel que soit son âge : des données qui ne reviennent pas, ou que leur propriétaire peut encore vouloir garder. Mettre `Recommended = false` n'est pas un veto.
 - Vérifiez `fsx.AppDataProtected` avant de toucher à quoi que ce soit sous `~/Library/Containers` ou `~/Library/Group Containers`, et signalez ces éléments au lieu de les lire.
 - Utilisez `ProcessGuard`, `RequireSibling` et `Recheck` pour exprimer les conditions que l'exécuteur doit revérifier au moment du nettoyage. `Recheck` doit refuser en cas de doute (fail closed).
 - Préférez la commande de nettoyage propre à l'outil (`MethodCommand`) quand l'outil tient sa propre comptabilité.

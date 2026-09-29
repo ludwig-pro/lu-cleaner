@@ -47,13 +47,18 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   installs, `cp -c`, Finder duplicates), which only count their private bytes. `Freed()` is what
   totals use. It is an estimate: data shared between two separately measured trees (the bun cache
   and a `node_modules` installed from it) is freed only when both are deleted.
-* `Item.LastUsed` drives ages, `--older-than`, and smart selection of moderate items.
+* `Item.LastUsed` drives ages, `--older-than`, and which moderate items smart select recommends.
 * Risk: `safe` (pure cache) → `moderate` (regenerable, costs time/bandwidth) → `caution`
   (user data/state) → `never` (report only).
-* `Item.NoRecommend` is a provider veto: `core.Recommend` (smart select) never preselects the
+* `Item.NoRecommend` is a provider veto: `core.Recommend` (smart select) never recommends the
   item (emptying the Trash, orphan data whose origin is uncertain…). Items with a `Warn` are
   never recommended either, and `clean --yes` treats them like `caution` items: they need an
   explicit `--risk caution` (they are listed as "held back" otherwise).
+* Nothing is preselected, ever: the picker (`lu-cleaner`, `lu-cleaner clean`) opens with an empty
+  selection, so deleting is always the result of an explicit choice (space, or the `a` key that
+  selects what `core.Recommend` approves in the current view). `--smart` is the explicit opt-in
+  that starts the picker with the recommended items selected; with `--yes` it restricts the plan
+  to them. The confirmation dialog shows the total before anything is removed.
 * Methods: `delete` (default, frees space now), `trash` (does NOT free space until the Trash is
   emptied), `command` (tool's own cleanup: `xcrun simctl delete <udid>`, `xcrun simctl runtime
   delete`, `pnpm store prune`…), `worktree` (`git worktree remove` + `prune`), `report`.

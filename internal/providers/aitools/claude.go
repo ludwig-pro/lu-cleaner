@@ -369,7 +369,7 @@ func (s *scanner) claudeOrphan(proj entry, orphan []*claudeSession, kept int, wh
 	case restorable:
 		it.Note += " Conductor workspace: an archived workspace can be restored and its sessions resumed from these transcripts."
 	case !recommend:
-		it.Note += " Not preselected before 30 days: the folder may come back (renamed, restored, re-created worktree)."
+		it.Note += " Not recommended before 30 days: the folder may come back (renamed, restored, re-created worktree)."
 	}
 	it.Meta = meta
 	it.Recheck = s.claudeOrphanRecheck(claudeOrphanCheck{

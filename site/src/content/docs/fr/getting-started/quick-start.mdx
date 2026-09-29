@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Ce tour prend environ cinq minutes. Rien n'est supprimé avant l'étape 4, et l'étape 4 ne retire que ce que lu-cleaner considère comme un choix par défaut raisonnable : des caches sans risque et des données régénérables que vous n'avez pas utilisés depuis un moment.
+Ce tour prend environ cinq minutes. Rien n'est supprimé avant l'étape 4, et l'étape 4 ne retire que les éléments que recommande la sélection intelligente (des caches sans risque et des données régénérables que vous n'avez pas utilisés depuis un moment), parce que vous le demandez avec `--smart`. Si vous préférez choisir élément par élément, le tableau de bord de l'étape 2 s'ouvre sans rien de sélectionné.
 
 Il suppose que lu-cleaner est [installé](/lu-cleaner/fr/getting-started/installation/). Les tailles ci-dessous sont données à titre d'illustration.
 
@@ -54,14 +54,14 @@ Il suppose que lu-cleaner est [installé](/lu-cleaner/fr/getting-started/install
    lu-cleaner
    ```
 
-   Sans commande, lu-cleaner ouvre le tableau de bord interactif. Les catégories se remplissent au fur et à mesure que les scanners terminent, et une fois l'analyse finie, les éléments recommandés sont présélectionnés. Rien ne se passe tant que vous n'appuyez pas sur `d` et ne confirmez pas.
+   Sans commande, lu-cleaner ouvre le tableau de bord interactif. Les catégories se remplissent au fur et à mesure que les scanners terminent. Une fois l'analyse finie, **rien n'est sélectionné** : le pied de page indique « nothing selected » et la ligne d'état vous rappelle comment choisir. Sélectionnez ce que vous voulez supprimer avec `space` (un élément, ou une catégorie entière), ou appuyez sur `a` pour sélectionner les éléments recommandés et voir ce qu'elle a choisi. Appuyez ensuite sur `d`. Rien n'est supprimé tant que vous ne confirmez pas.
 
    | Touche | Action |
    | --- | --- |
    | `↑` `↓` / `enter` | Se déplacer / ouvrir une catégorie |
-   | `space` | Sélectionner ou désélectionner l'élément sous le curseur |
-   | `a` | Sélection intelligente sur la vue actuelle |
-   | `d` | Nettoyer la sélection (demande une confirmation) |
+   | `space` | Sélectionner ou désélectionner l'élément sous le curseur (sur une catégorie : tout sauf les éléments caution) |
+   | `a` | Sélection intelligente sur la vue actuelle : sélectionne les éléments recommandés |
+   | `d` | Nettoyer la sélection (affiche le total et demande une confirmation) |
    | `?` / `q` | Aide / quitter |
 
    Appuyez sur `q` pour sortir sans rien toucher. [Votre premier nettoyage](/lu-cleaner/fr/getting-started/first-cleanup/) détaille chaque écran, et [Raccourcis clavier](/lu-cleaner/fr/reference/keyboard-shortcuts/) liste toutes les touches.

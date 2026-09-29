@@ -7,8 +7,8 @@ on a **synthetic** home folder. They are served by the documentation site from
 
 | Tape | Shows | Outputs |
 | --- | --- | --- |
-| `tapes/dashboard.tape` | `lu-cleaner`: the scan streaming in, smart selection, worktree details, project artifacts, adding an item, confirmation, cleaning, summary | `dashboard.gif`, `.mp4`, `.jpg` (poster) |
-| `tapes/worktrees.tape` | `lu-cleaner worktrees --list` (tool, branch, status), then the picker: a merged worktree is removed, a dirty one is refused by git's checks after the typed `yes` | `worktrees.gif`, `.mp4`, `.jpg` |
+| `tapes/dashboard.tape` | `lu-cleaner`: the scan streaming in (nothing is selected afterwards), worktree details, project artifacts, `a` smart-selects the recommended ones, one more item picked with space, confirmation, cleaning, summary | `dashboard.gif`, `.mp4`, `.jpg` (poster) |
+| `tapes/worktrees.tape` | `lu-cleaner worktrees --list` (tool, branch, status), then the picker (nothing selected): a merged worktree is picked with space and removed, a dirty one is picked too and refused by git's checks after the typed `yes` | `worktrees.gif`, `.mp4`, `.jpg` |
 | `tapes/scan.tape` | `lu-cleaner scan --summary`, then `lu-cleaner clean --yes --smart --dry-run` | `scan.gif`, `.mp4`, `.jpg` |
 
 ## Re-record
@@ -82,5 +82,8 @@ Start with `Source demo/tapes/settings.tape` (size, theme, font, and the hidden
 `source demo/tapes/shell.sh` that loads the sandbox and the prompt). Add `# poster: <seconds>`
 to pick the poster frame, and `# busy: <regex>` when only some in-use guards matter to the tape
 (the worktrees tape shows no Xcode-guarded item, so a running `xcodebuild` does not matter).
-For a command whose output scrolls, wait for the prompt with `Wait+Line /❯ *$/`: `Wait+Screen`
+Nothing is ever preselected: after the scan the picker says "Nothing is selected", so wait for
+that (`Wait+Screen@30s /Nothing is selected/`), then pick with `Space`, or with `a` (smart select:
+the recommended items of the current view). Note that `a` sets the selection of the view, so press
+it before adding items by hand. For a command whose output scrolls, wait for the prompt with `Wait+Line /❯ *$/`: `Wait+Screen`
 only sees the first page. Do not type non-ASCII characters (VHS mistypes them).

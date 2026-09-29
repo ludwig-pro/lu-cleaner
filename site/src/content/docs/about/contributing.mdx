@@ -224,7 +224,7 @@ Guidelines for scanners:
 - Measure with `fsx.Size` without options: the engine gives every scan a shared cache, so a folder measured by two scanners is walked once.
 - Consult `env.IsProtected` and `env.Excluded` before proposing a path. Report items living on another volume with `MethodReport` instead of proposing them.
 - Set `Warn` for anything a human should look at first (an app running, a process inside, a version pinned by a project). A warning keeps the item out of smart select, and out of `clean --yes` without `--risk caution`.
-- Set `NoRecommend` when the item must never be preselected whatever its age: data that does not come back, or whose owner may still want it. Setting `Recommended = false` is not a veto.
+- Set `NoRecommend` when the item must never be recommended whatever its age: data that does not come back, or whose owner may still want it. Setting `Recommended = false` is not a veto.
 - Check `fsx.AppDataProtected` before touching anything under `~/Library/Containers` or `~/Library/Group Containers`, and report such items instead of reading them.
 - Use `ProcessGuard`, `RequireSibling` and `Recheck` to express conditions the executor must re-verify at clean time. `Recheck` must fail closed.
 - Prefer the owning tool's cleanup command (`MethodCommand`) when the tool keeps its own bookkeeping.

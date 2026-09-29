@@ -1,11 +1,11 @@
 ---
 title: Risk levels and smart select
-description: The four risk levels, the exact rules smart select uses to preselect items, how to pick everything yourself, and the five cleaning methods.
+description: The four risk levels, the exact rules smart select uses to recommend items (opt-in, with the a key or --smart), how to choose what to remove yourself, and the five cleaning methods.
 sidebar:
   order: 2
 ---
 
-Every item lu-cleaner finds carries a **risk** (what you lose if it is deleted) and a **method** (how it is cleaned). Smart select combines the risk, the age and the scanner's own judgment to preselect what a careful developer would remove without a second thought.
+Every item lu-cleaner finds carries a **risk** (what you lose if it is deleted) and a **method** (how it is cleaned). Smart select combines the risk, the age and the scanner's own judgment to recommend what a careful developer would remove without a second thought. It is something you ask for, never something that happens on its own: nothing is selected when the picker opens.
 
 ## The four risk levels
 
@@ -33,6 +33,8 @@ Two details in the picker protect caution items further: pressing <kbd>space</kb
 
 ## Smart select
 
+Smart select is **opt-in**. When the picker opens, nothing is selected, and it stays that way until you choose: <kbd>space</kbd> picks an item, <kbd>a</kbd> runs smart select on the current view, and `--smart` runs it for you as soon as the scan ends. The reason is simple: deleting should always be the result of an explicit choice. If the recommended items were already selected, a single <kbd>d</kbd> and <kbd>enter</kbd> would delete everything smart select found, whether or not you had looked at it. Asking for smart select yourself means you know what was picked, and the footer and the confirmation dialog show the count and the total before anything is removed.
+
 Smart select is one function, applied to every item, in this order:
 
 1. **Never** when the item cannot be cleaned (report-only, not selectable, or risk <span class="risk never">never</span>), is still being measured, **carries a warning**, is <span class="risk caution">caution</span>, or **its scanner vetoes it** (see below).
@@ -51,7 +53,7 @@ The order matters. A warning or a veto blocks everything, including the scanner'
 
 ### Scanner vetoes
 
-Some items are never preselected, whatever their risk, size and age, because deleting them is irreversible or their origin is uncertain. You can still select them yourself:
+Some items are never recommended, whatever their risk, size and age, because deleting them is irreversible or their origin is uncertain. You can still select them yourself:
 
 - emptying the Trash;
 - orphaned data whose owner may come back: orphaned worktree folders (which also need `--force`), Claude Code data of a deleted folder written in the last 30 days or whose folder may be restored (it is then <span class="risk caution">caution</span>), Cursor data of deleted workspaces that is recent or holds chats;
@@ -62,7 +64,7 @@ Some items are never preselected, whatever their risk, size and age, because del
 - old Android Studio settings while a newly installed version has not imported them yet;
 - a build folder outside git with only weak evidence of being generated.
 
-Chat database backups (Cursor state database backups, Codex repair backups of the memories and goals databases) are <span class="risk caution">caution</span>, so never preselected either. In the picker, an item that needs `--force` is never preselected, even when you started lu-cleaner with `--force`.
+Chat database backups (Cursor state database backups, Codex repair backups of the memories and goals databases) are <span class="risk caution">caution</span>, so never recommended either. In the picker, an item that needs `--force` is never picked by smart select, even when you started lu-cleaner with `--force`.
 
 ### Scanner recommendations
 
@@ -84,8 +86,8 @@ The full list, item kind by item kind, is in the [scanners reference](/lu-cleane
 
 | Command | Behavior |
 |---|---|
-| `lu-cleaner`, `lu-cleaner clean` | Opens the picker. When the scan finishes, recommended items are preselected, except those you already touched during the scan. |
-| `lu-cleaner artifacts`, `worktrees`, `devices` | Nothing is preselected, unless you pass `--smart`. |
+| `lu-cleaner`, `lu-cleaner clean`, `lu-cleaner artifacts`, `worktrees`, `devices` | Opens the picker with nothing selected. Press <kbd>a</kbd> to smart select the current view. |
+| The same commands with `--smart` | Opens the picker; when the scan finishes, the recommended items are selected, except those you already touched during the scan. |
 | `lu-cleaner scan` | Recommended items get a ★ in the `RECO` column; each category header shows how much is recommended. `scan --smart` lists only them. |
 | `lu-cleaner clean --yes --smart` | Cleans exactly the recommended items (within the other filters). |
 
@@ -97,12 +99,14 @@ lu-cleaner clean --yes --smart -c artifacts    # clean only the recommended proj
 
 `stale_after` is a setting, not a filter. `--older-than 30d` hides everything used in the last 30 days (and everything whose age is unknown), whatever its risk; `stale_after = "30d"` only changes when moderate items become recommended. See [Configuration](/lu-cleaner/reference/configuration/).
 
-## Picking everything yourself
+## Choosing what to remove
 
-Smart select is a starting point, never a requirement.
+Smart select is a starting point you opt into, never a requirement.
 
-- **Start empty.** `lu-cleaner clean --no-smart` opens the picker with nothing selected.
-- **Clear a view.** In the picker, <kbd>n</kbd> unselects every item of the current view (the open category, or the filtered list). <kbd>A</kbd> selects them all, <kbd>i</kbd> inverts, <kbd>space</kbd> toggles one item, and <kbd>a</kbd> re-applies smart select to the current view.
+- **Start empty, always.** `lu-cleaner` and `lu-cleaner clean` open the picker with nothing selected. Pick with <kbd>space</kbd> (on a category, every item except caution ones), or press <kbd>a</kbd> to select the recommended items and review them.
+- **Start with the recommended items.** `lu-cleaner clean --smart` opens the picker with them already selected. That is the explicit version of pressing <kbd>a</kbd> right after the scan.
+- **Adjust a view.** In the picker, <kbd>n</kbd> unselects every item of the current view (the open category, or the filtered list). <kbd>A</kbd> selects them all, <kbd>i</kbd> inverts, <kbd>space</kbd> toggles one item, and <kbd>a</kbd> applies smart select to the current view: recommended items on, every other item off.
+- **Rehearse.** `--dry-run` (`-n`) shows what would be cleaned and deletes nothing.
 - **Script it without smart select.** `clean --yes` accepts any narrowing filter instead of `--smart`:
 
 ```bash

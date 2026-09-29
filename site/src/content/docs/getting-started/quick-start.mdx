@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-This tour takes about five minutes. Nothing is deleted before step 4, and step 4 only removes what lu-cleaner considers a sensible default: safe caches and regenerable data you have not used for a while.
+This tour takes about five minutes. Nothing is deleted before step 4, and step 4 only removes the items smart select recommends (safe caches and regenerable data you have not used for a while) because you ask for it with `--smart`. If you would rather choose item by item, the dashboard of step 2 opens with nothing selected.
 
 It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/). The sizes below are illustrative.
 
@@ -54,14 +54,14 @@ It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/).
    lu-cleaner
    ```
 
-   Without a command, lu-cleaner opens the interactive dashboard. Categories fill in as scanners finish, and when the scan is done the recommended items are preselected. Nothing happens until you press `d` and confirm.
+   Without a command, lu-cleaner opens the interactive dashboard. Categories fill in as scanners finish. When the scan is done, **nothing is selected**: the footer says "nothing selected" and the status line reminds you how to choose. Select what you want to remove with `space` (an item, or a whole category), or press `a` to select the recommended items and look at what it picked. Then press `d`. Nothing is deleted until you confirm.
 
    | Key | Action |
    | --- | --- |
    | `↑` `↓` / `enter` | Move / open a category |
-   | `space` | Select or unselect the item under the cursor |
-   | `a` | Smart select the current view |
-   | `d` | Clean the selection (asks for confirmation) |
+   | `space` | Select or unselect the item under the cursor (on a category: everything but caution items) |
+   | `a` | Smart select the current view: select the recommended items |
+   | `d` | Clean the selection (shows the total and asks for confirmation) |
    | `?` / `q` | Help / quit |
 
    Press `q` to leave without touching anything. [Your first cleanup](/lu-cleaner/getting-started/first-cleanup/) walks through every screen, and [Keyboard shortcuts](/lu-cleaner/reference/keyboard-shortcuts/) lists every key.

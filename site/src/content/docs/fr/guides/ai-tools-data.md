@@ -42,7 +42,7 @@ AI tools  21.4 GB · 36 items · ★ 6.90 GB recommended
   …
 ```
 
-Les tailles et les noms ci-dessus sont donnés à titre d'exemple. La colonne `★` correspond à la [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) (smart select) : les éléments que lu-cleaner présélectionnerait.
+Les tailles et les noms ci-dessus sont donnés à titre d'exemple. La colonne `★` correspond à la [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) (smart select) : les éléments que lu-cleaner recommande (ce sont ceux que sélectionne la touche `a`).
 
 ## Nettoyer
 
@@ -52,7 +52,7 @@ Le sélecteur interactif est le meilleur moyen de passer cette catégorie en rev
 lu-cleaner clean -c ai
 ```
 
-Les éléments recommandés sont présélectionnés. Les éléments de risque <span class="risk caution">caution</span> (transcriptions, modèles, images générées) ne sont jamais présélectionnés, et leur nettoyage vous demande de taper `yes`.
+Rien n'est sélectionné quand le sélecteur s'ouvre. Appuyez sur `a` pour sélectionner les éléments recommandés, ou choisissez avec `space`. Les éléments de risque <span class="risk caution">caution</span> (transcriptions, modèles, images générées) ne sont jamais recommandés, et leur nettoyage vous demande de taper `yes`.
 
 Dans un script, commencez par une simulation :
 
@@ -80,7 +80,7 @@ lu-cleaner worktrees        # supprimer les worktrees terminés
 lu-cleaner clean -c ai      # leurs données Claude Code / Cursor apparaissent désormais comme orphelines
 ```
 
-Un dossier disparu récemment peut revenir (dossier renommé, espace de travail Conductor restauré, worktree recréé), et les transcriptions et conversations ne sont jamais régénérées. Ces données sont donc <span class="risk caution">caution</span> et jamais présélectionnées pendant les 30 jours qui suivent leur dernière écriture. Ensuite, elles passent en <span class="risk moderate">moderate</span> et sont présélectionnées, sauf si leur dossier a seulement été déduit du nom du répertoire ou s'il s'agit d'un espace de travail Conductor.
+Un dossier disparu récemment peut revenir (dossier renommé, espace de travail Conductor restauré, worktree recréé), et les transcriptions et conversations ne sont jamais régénérées. Ces données sont donc <span class="risk caution">caution</span> et jamais recommandées pendant les 30 jours qui suivent leur dernière écriture. Ensuite, elles passent en <span class="risk moderate">moderate</span> et sont recommandées, sauf si leur dossier a seulement été déduit du nom du répertoire ou s'il s'agit d'un espace de travail Conductor.
 
 ## Claude Code
 
@@ -99,7 +99,7 @@ Un dossier disparu récemment peut revenir (dossier renommé, espace de travail 
 | **Points de contrôle de fichiers utilisés par `/rewind`** (plus de 30 jours)<br/><sub>`ai-claude-code-file-history`</sub> | `~/.claude/file-history/` | <span class="risk caution">caution</span> | Non |
 | **Fichiers de plan** (plus de 60 jours)<br/><sub>`ai-claude-code-plans`</sub> | `~/.claude/plans/` | <span class="risk caution">caution</span> | Non |
 
-« Si inactif » signifie que l'élément est présélectionné dès qu'il n'a pas été utilisé depuis plus de `stale_after`, soit 14 jours par défaut. Voir [Configuration](/lu-cleaner/fr/reference/configuration/).
+« Si inactif » signifie que l'élément est recommandé dès qu'il n'a pas été utilisé depuis plus de `stale_after`, soit 14 jours par défaut. Voir [Configuration](/lu-cleaner/fr/reference/configuration/).
 
 Un instantané du shell est chargé par chaque commande de la session qui l'a créé : une session restée ouverte plusieurs jours a donc encore besoin de son instantané. Seuls les instantanés de plus d'une semaine sont proposés.
 
@@ -112,10 +112,10 @@ Un instantané du shell est chargé par chaque commande de la session qui l'a cr
 Claude Code nomme chaque dossier de projet d'après le répertoire de travail, en remplaçant par `-` chaque caractère qui n'est ni une lettre ni un chiffre. Par exemple, `~/.codex/worktrees/a1b2/my-app` devient `-Users-me--codex-worktrees-a1b2-my-app`. Ce nom ne peut pas être décodé de façon fiable, donc lu-cleaner ne commence pas par l'analyser :
 
 1. Il lit le vrai `cwd` de chaque session dans sa transcription, ou dans `sessions-index.json`. Plusieurs dossiers peuvent partager un même répertoire de projet (`my-app` et `my_app` sont encodés de la même façon), donc chaque session est jugée d'après son propre dossier.
-2. Si aucune session n'indique son dossier, il cherche sur le disque un dossier dont le nom encodé correspond. Un tel élément indique que le dossier a été *deviné d'après le répertoire entier* et n'est jamais présélectionné.
+2. Si aucune session n'indique son dossier, il cherche sur le disque un dossier dont le nom encodé correspond. Un tel élément indique que le dossier a été *deviné d'après le répertoire entier* et n'est jamais recommandé.
 3. Un dossier qui ne peut pas être vérifié (volume non monté, dossier parent illisible, protection de la vie privée de macOS, fournisseur de stockage cloud déconnecté) est considéré comme « inconnu », jamais comme « supprimé ».
 
-Une session ne devient orpheline que si son dossier n'existe plus, de façon vérifiée, qu'aucune session active n'y tourne et que rien n'y a été écrit au cours de la dernière heure. Elle n'est présélectionnée que si son dossier a été lu dans les sessions, n'est pas un espace de travail Conductor (Conductor restaure les espaces de travail archivés) et que rien n'y a été écrit depuis 30 jours. Les sessions des autres dossiers qui partagent le répertoire sont conservées. La mémoire automatique (`memory/`) est toujours conservée : lu-cleaner supprime les transcriptions qui l'entourent, jamais le dossier. Juste avant la suppression, il vérifie de nouveau que le dossier est toujours absent et qu'aucune session n'y a démarré.
+Une session ne devient orpheline que si son dossier n'existe plus, de façon vérifiée, qu'aucune session active n'y tourne et que rien n'y a été écrit au cours de la dernière heure. Elle n'est recommandée que si son dossier a été lu dans les sessions, n'est pas un espace de travail Conductor (Conductor restaure les espaces de travail archivés) et que rien n'y a été écrit depuis 30 jours. Les sessions des autres dossiers qui partagent le répertoire sont conservées. La mémoire automatique (`memory/`) est toujours conservée : lu-cleaner supprime les transcriptions qui l'entourent, jamais le dossier. Juste avant la suppression, il vérifie de nouveau que le dossier est toujours absent et qu'aucune session n'y a démarré.
 
 ## Claude desktop
 
@@ -171,7 +171,7 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 
 **Anciens builds et versions.** Cursor crée un dossier `CachedData/<commit>` à chaque mise à jour, mais n'utilise que le commit du `Cursor.app` installé, que lu-cleaner lit dans le bundle de l'application. Le `cursor-agent` embarqué conserve chaque build qu'il télécharge (de 200 Mo à 600 Mo chacun). lu-cleaner ne garde que le build ciblé par son lien symbolique `bin/cursor-agent` et le plus récent.
 
-**État des espaces de travail de dossiers supprimés.** Chaque dossier ou worktree que vous ouvrez reçoit une entrée dans `workspaceStorage`. lu-cleaner lit le dossier dans son `workspace.json` et propose l'entrée dès que ce dossier n'existe plus, de façon vérifiée. Les espaces de travail distants sont ignorés. Les entrées intactes depuis 30 jours et sans données de conversation forment un élément présélectionné. Les autres (modifiées récemment, contenant un historique de conversation, ou appartenant à un espace de travail Conductor qui peut être restauré) vont dans un élément « to review » distinct, jamais présélectionné. Les données d'agent de `~/.cursor/projects` suivent la même répartition. Juste avant la suppression, lu-cleaner vérifie de nouveau que les dossiers ne sont pas réapparus.
+**État des espaces de travail de dossiers supprimés.** Chaque dossier ou worktree que vous ouvrez reçoit une entrée dans `workspaceStorage`. lu-cleaner lit le dossier dans son `workspace.json` et propose l'entrée dès que ce dossier n'existe plus, de façon vérifiée. Les espaces de travail distants sont ignorés. Les entrées intactes depuis 30 jours et sans données de conversation forment un élément recommandé. Les autres (modifiées récemment, contenant un historique de conversation, ou appartenant à un espace de travail Conductor qui peut être restauré) vont dans un élément « to review » distinct, jamais recommandé. Les données d'agent de `~/.cursor/projects` suivent la même répartition. Juste avant la suppression, lu-cleaner vérifie de nouveau que les dossiers ne sont pas réapparus.
 
 **Données d'extensions.** Les données des extensions désinstallées (les index des serveurs de langage peuvent peser plusieurs gigaoctets) ne sont proposées que si lu-cleaner parvient à lire la liste des extensions intégrées dans `Cursor.app`. Sans elle, lu-cleaner ne peut pas savoir qu'une extension a disparu.
 
@@ -190,7 +190,7 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 | | `conductor.db` (sessions et messages) et `cache.db` (brouillons non envoyés) : signalés uniquement | <span class="risk never">never</span>, <span class="risk caution">caution</span> |
 | **Multica** | La copie `codex-home` de chaque tâche terminée depuis 7 jours ou plus. Les dossiers de travail des tâches (copies des dépôts) ne sont jamais touchés. | <span class="risk moderate">moderate</span> |
 | **GitHub Copilot CLI, vibe-kanban** | Versions remplacées | <span class="risk safe">safe</span> |
-| **Antigravity** | Extensions laissées après la désinstallation de l'application (moderate). Le profil de l'agent de navigation laissé après la désinstallation (mots de passe enregistrés, cookies) et les enregistrements du navigateur de plus de 90 jours (caution, jamais présélectionnés). Les conversations et le « brain » sont seulement signalés. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
+| **Antigravity** | Extensions laissées après la désinstallation de l'application (moderate). Le profil de l'agent de navigation laissé après la désinstallation (mots de passe enregistrés, cookies) et les enregistrements du navigateur de plus de 90 jours (caution, jamais recommandés). Les conversations et le « brain » sont seulement signalés. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
 | **opencode, Continue, Windsurf, Raycast, Grok CLI, chrome-devtools MCP** | Caches, index, journaux, mises à jour et installateurs téléchargés. Les sessions et conversations restent (signalées uniquement). | <span class="risk safe">safe</span> |
 | **VoiceInk** | Enregistrements de dictée de plus de 30 jours (les transcriptions restent dans l'application) | <span class="risk caution">caution</span> |
 | **Gemini CLI, Warp** | `~/.gemini/tmp` (points de contrôle) et la base de données de Warp : signalés uniquement | <span class="risk caution">caution</span>, <span class="risk never">never</span> |
@@ -199,7 +199,7 @@ Lancez `lu-cleaner catalog -c ai` pour obtenir les chemins exacts, ou consultez 
 
 ## Modèles locaux
 
-Les poids de modèles sont des téléchargements volontaires de plusieurs gigaoctets, donc chacun constitue un élément distinct, avec le risque <span class="risk caution">caution</span>. Ils ne sont jamais présélectionnés, et `clean --yes` les ignore sauf si vous passez `--risk caution`.
+Les poids de modèles sont des téléchargements volontaires de plusieurs gigaoctets, donc chacun constitue un élément distinct, avec le risque <span class="risk caution">caution</span>. Ils ne sont jamais recommandés, et `clean --yes` les ignore sauf si vous passez `--risk caution`.
 
 | Stockage | Emplacement | Élément |
 |---|---|---|

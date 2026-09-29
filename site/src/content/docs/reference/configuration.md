@@ -199,7 +199,7 @@ Ages accept `h` (hours), `d` (days), `w` (weeks), `m` (months of 30 days) and `y
 
 ### `keep_latest`
 
-How many of the most recent versions to keep for versioned installs, besides the ones that are active, pinned or running. The kept versions are never preselected by smart select (some are not listed at all). Default `1`, minimum `1`.
+How many of the most recent versions to keep for versioned installs, besides the ones that are active, pinned or running. The kept versions are never recommended by smart select (some are not listed at all). Default `1`, minimum `1`.
 
 ```toml
 keep_latest = 2

@@ -1,11 +1,11 @@
 ---
 title: Niveaux de risque et sélection intelligente
-description: Les quatre niveaux de risque, les règles exactes que la sélection intelligente applique pour présélectionner des éléments, comment tout choisir vous-même, et les cinq méthodes de nettoyage.
+description: Les quatre niveaux de risque, les règles exactes que la sélection intelligente applique pour recommander des éléments (optionnelle, avec la touche a ou --smart), comment choisir vous-même ce qu'il faut supprimer, et les cinq méthodes de nettoyage.
 sidebar:
   order: 2
 ---
 
-Chaque élément trouvé par lu-cleaner porte un **risque** (ce que vous perdez s'il est supprimé) et une **méthode** (la façon dont il est nettoyé). La sélection intelligente (smart select) combine le risque, l'âge et le jugement propre du scanner pour présélectionner ce qu'un développeur prudent supprimerait sans hésiter.
+Chaque élément trouvé par lu-cleaner porte un **risque** (ce que vous perdez s'il est supprimé) et une **méthode** (la façon dont il est nettoyé). La sélection intelligente (smart select) combine le risque, l'âge et le jugement propre du scanner pour recommander ce qu'un développeur prudent supprimerait sans hésiter. C'est quelque chose que vous demandez, jamais quelque chose qui se produit tout seul : rien n'est sélectionné quand le sélecteur s'ouvre.
 
 ## Les quatre niveaux de risque
 
@@ -33,6 +33,8 @@ Deux détails du sélecteur protègent davantage les éléments caution : appuye
 
 ## Sélection intelligente
 
+La sélection intelligente est **optionnelle**. Quand le sélecteur s'ouvre, rien n'est sélectionné, et cela reste ainsi tant que vous n'avez pas choisi : <kbd>space</kbd> sélectionne un élément, <kbd>a</kbd> lance la sélection intelligente sur la vue actuelle, et `--smart` la lance pour vous dès la fin de l'analyse. La raison est simple : supprimer doit toujours être le résultat d'un choix explicite. Si les éléments recommandés étaient déjà sélectionnés, un simple <kbd>d</kbd> suivi de <kbd>enter</kbd> supprimerait tout ce que la sélection intelligente a trouvé, que vous l'ayez regardé ou non. En la demandant vous-même, vous savez ce qui a été choisi, et le pied de page ainsi que la fenêtre de confirmation affichent le nombre d'éléments et le total avant que quoi que ce soit ne soit supprimé.
+
 La sélection intelligente est une seule fonction, appliquée à chaque élément, dans cet ordre :
 
 1. **Jamais** quand l'élément ne peut pas être nettoyé (rapport seul, non sélectionnable ou risque <span class="risk never">never</span>), qu'il est encore en cours de mesure, qu'il **porte un avertissement**, qu'il est <span class="risk caution">caution</span> ou que **son scanner y oppose un veto** (voir ci-dessous).
@@ -51,7 +53,7 @@ L'ordre compte. Un avertissement ou un veto bloque tout, y compris la recommanda
 
 ### Vetos des scanners
 
-Certains éléments ne sont jamais présélectionnés, quels que soient leur risque, leur taille et leur âge, parce que leur suppression est irréversible ou que leur origine est incertaine. Vous pouvez toujours les sélectionner vous-même :
+Certains éléments ne sont jamais recommandés, quels que soient leur risque, leur taille et leur âge, parce que leur suppression est irréversible ou que leur origine est incertaine. Vous pouvez toujours les sélectionner vous-même :
 
 - vider la Corbeille ;
 - les données orphelines dont le propriétaire peut revenir : dossiers de worktrees orphelins (qui exigent aussi `--force`), données Claude Code d'un dossier supprimé écrites au cours des 30 derniers jours ou dont le dossier peut être restauré (elles sont alors <span class="risk caution">caution</span>), données Cursor de workspaces supprimés qui sont récentes ou contiennent des conversations ;
@@ -62,7 +64,7 @@ Certains éléments ne sont jamais présélectionnés, quels que soient leur ris
 - les anciens réglages d'Android Studio tant qu'une version nouvellement installée ne les a pas encore importés ;
 - un dossier de build hors de git dont on n'a que de faibles indices qu'il est généré.
 
-Les sauvegardes de bases de conversations (sauvegardes de la base d'état de Cursor, sauvegardes de réparation par Codex des bases de mémoires et d'objectifs) sont <span class="risk caution">caution</span>, et donc jamais présélectionnées non plus. Dans le sélecteur, un élément qui exige `--force` n'est jamais présélectionné, même quand vous avez lancé lu-cleaner avec `--force`.
+Les sauvegardes de bases de conversations (sauvegardes de la base d'état de Cursor, sauvegardes de réparation par Codex des bases de mémoires et d'objectifs) sont <span class="risk caution">caution</span>, et donc jamais recommandées non plus. Dans le sélecteur, un élément qui exige `--force` n'est jamais choisi par la sélection intelligente, même quand vous avez lancé lu-cleaner avec `--force`.
 
 ### Recommandations des scanners
 
@@ -84,8 +86,8 @@ La liste complète, type d'élément par type d'élément, se trouve dans la [r�
 
 | Commande | Comportement |
 |---|---|
-| `lu-cleaner`, `lu-cleaner clean` | Ouvre le sélecteur. À la fin de l'analyse, les éléments recommandés sont présélectionnés, sauf ceux que vous avez déjà cochés ou décochés pendant l'analyse. |
-| `lu-cleaner artifacts`, `worktrees`, `devices` | Rien n'est présélectionné, sauf si vous passez `--smart`. |
+| `lu-cleaner`, `lu-cleaner clean`, `lu-cleaner artifacts`, `worktrees`, `devices` | Ouvre le sélecteur sans rien de sélectionné. Appuyez sur <kbd>a</kbd> pour lancer la sélection intelligente sur la vue actuelle. |
+| Les mêmes commandes avec `--smart` | Ouvre le sélecteur ; à la fin de l'analyse, les éléments recommandés sont sélectionnés, sauf ceux que vous avez déjà cochés ou décochés pendant l'analyse. |
 | `lu-cleaner scan` | Les éléments recommandés reçoivent une ★ dans la colonne `RECO` ; l'en-tête de chaque catégorie indique le volume recommandé. `scan --smart` ne liste qu'eux. |
 | `lu-cleaner clean --yes --smart` | Nettoie exactement les éléments recommandés (dans la limite des autres filtres). |
 
@@ -97,12 +99,14 @@ lu-cleaner clean --yes --smart -c artifacts    # nettoie uniquement les artefact
 
 `stale_after` est un réglage, pas un filtre. `--older-than 30d` masque tout ce qui a été utilisé dans les 30 derniers jours (et tout ce dont l'âge est inconnu), quel que soit le risque ; `stale_after = "30d"` change seulement le moment où les éléments moderate deviennent recommandés. Voir [Configuration](/lu-cleaner/fr/reference/configuration/).
 
-## Tout choisir vous-même
+## Choisir ce qu'il faut supprimer
 
-La sélection intelligente est un point de départ, jamais une obligation.
+La sélection intelligente est un point de départ que vous choisissez, jamais une obligation.
 
-- **Partir d'une sélection vide.** `lu-cleaner clean --no-smart` ouvre le sélecteur sans rien de sélectionné.
-- **Vider une vue.** Dans le sélecteur, <kbd>n</kbd> désélectionne tous les éléments de la vue actuelle (la catégorie ouverte, ou la liste filtrée). <kbd>A</kbd> les sélectionne tous, <kbd>i</kbd> inverse la sélection, <kbd>space</kbd> bascule un seul élément, et <kbd>a</kbd> réapplique la sélection intelligente à la vue actuelle.
+- **Toujours partir d'une sélection vide.** `lu-cleaner` et `lu-cleaner clean` ouvrent le sélecteur sans rien de sélectionné. Choisissez avec <kbd>space</kbd> (sur une catégorie : tous les éléments sauf les éléments caution), ou appuyez sur <kbd>a</kbd> pour sélectionner les éléments recommandés et les passer en revue.
+- **Partir des éléments recommandés.** `lu-cleaner clean --smart` ouvre le sélecteur avec eux déjà sélectionnés. C'est la version explicite d'un appui sur <kbd>a</kbd> juste après l'analyse.
+- **Ajuster une vue.** Dans le sélecteur, <kbd>n</kbd> désélectionne tous les éléments de la vue actuelle (la catégorie ouverte, ou la liste filtrée). <kbd>A</kbd> les sélectionne tous, <kbd>i</kbd> inverse la sélection, <kbd>space</kbd> bascule un seul élément, et <kbd>a</kbd> applique la sélection intelligente à la vue actuelle : éléments recommandés sélectionnés, tous les autres désélectionnés.
+- **Répéter à blanc.** `--dry-run` (`-n`) montre ce qui serait nettoyé et ne supprime rien.
 - **Scripter sans sélection intelligente.** `clean --yes` accepte n'importe quel filtre restrictif à la place de `--smart` :
 
 ```bash

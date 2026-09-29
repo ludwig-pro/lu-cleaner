@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Réponses aux questions fréquentes sur lu-cleaner, notamment la sécurité, les worktrees et les branches, les éléments ignorés ou non recommandés, le mode Corbeille, l'accès complet au disque, sudo, les disques externes, la protection de dossiers et l'historique des nettoyages.
+description: Réponses aux questions fréquentes sur lu-cleaner, notamment la sécurité, pourquoi rien n'est sélectionné par défaut, les worktrees et les branches, les éléments ignorés ou non recommandés, le mode Corbeille, l'accès complet au disque, sudo, les disques externes, la protection de dossiers et l'historique des nettoyages.
 sidebar:
   order: 2
 ---
@@ -9,9 +9,9 @@ sidebar:
 
 ### Est-ce sans danger ?
 
-Le scan est en lecture seule : `lu-cleaner`, `scan`, `doctor` et les sélecteurs ne suppriment jamais rien d'eux-mêmes. Toute suppression exige un choix explicite de votre part, soit une sélection confirmée dans le sélecteur, soit `clean --yes`. Plusieurs règles ajoutent une marge de sécurité :
+Le scan est en lecture seule : `lu-cleaner`, `scan`, `doctor` et les sélecteurs ne suppriment jamais rien d'eux-mêmes. Rien n'est présélectionné, et toute suppression exige un choix explicite de votre part : soit une sélection que vous avez faite et confirmée dans le sélecteur, soit `clean --yes` avec un filtre restrictif. Plusieurs règles ajoutent une marge de sécurité :
 
-- Chaque élément a un [niveau de risque](/lu-cleaner/fr/concepts/risk-and-smart-select/). Les éléments <span class="risk caution">caution</span> (sessions, modèles, worktrees modifiés…) ne sont jamais présélectionnés, exigent de taper `yes` dans le sélecteur et sont écartés de `clean --yes`, sauf si vous passez `--risk caution`, comme tout élément qui porte un avertissement.
+- Chaque élément a un [niveau de risque](/lu-cleaner/fr/concepts/risk-and-smart-select/). Les éléments <span class="risk caution">caution</span> (sessions, modèles, worktrees modifiés…) ne sont jamais choisis par la sélection intelligente, sont ignorés quand vous appuyez sur `space` sur une catégorie entière, exigent de taper `yes` dans le sélecteur et sont écartés de `clean --yes`, sauf si vous passez `--risk caution`, comme tout élément qui porte un avertissement.
 - Juste avant la suppression, chaque chemin passe par un [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/). Il refuse tout ce qui se trouve hors de votre dossier personnel et de votre dossier temporaire utilisateur, les dossiers système et les dossiers de premier niveau du dossier personnel, les identifiants et configurations d'outils, les dépôts git et les racines de vos projets elles-mêmes.
 - lu-cleaner revérifie aussi l'état de chaque élément à ce moment-là : le fichier est toujours celui qu'il a scanné, l'application propriétaire est fermée, aucun processus ne travaille dedans, aucune base de données n'est ouverte.
 
@@ -86,9 +86,23 @@ Juste avant le nettoyage, chaque élément est revérifié. Si quelque chose a c
 | `not cleanable (…)` | L'élément est signalé uniquement. | Rien. |
 | `cancelled` | Vous avez appuyé sur `ctrl+c`. | Relancez. |
 
+### Pourquoi rien n'est-il sélectionné quand j'ouvre lu-cleaner ?
+
+Parce que supprimer doit être votre décision. `lu-cleaner` et `lu-cleaner clean` s'ouvrent avec une sélection vide : le pied de page indique « nothing selected », la colonne SELECTED est vide, et `d` n'a rien à nettoyer tant que vous n'avez pas choisi. Les versions précédentes démarraient avec les éléments recommandés déjà sélectionnés, si bien qu'un simple `d` suivi de `enter` pouvait supprimer bien plus que ce que vous aviez regardé. Ce n'est plus le cas.
+
+Pour choisir :
+
+- `space` sélectionne l'élément sous le curseur. Sur une catégorie, il sélectionne tout ce qu'elle contient sauf les éléments <span class="risk caution">caution</span>, que vous choisissez un par un.
+- `a` est la [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) : elle sélectionne les éléments recommandés de la vue actuelle (toutes les catégories sur la vue d'ensemble, ou la catégorie ouverte) et désélectionne le reste de cette vue. C'est une action explicite, et vous pouvez regarder ce qu'elle a choisi avant de nettoyer.
+- `A` sélectionne tout ce qui est nettoyable dans la vue, `n` ne sélectionne rien, `i` inverse.
+
+Appuyez ensuite sur `d`. La fenêtre de confirmation montre ce qui sera supprimé et le total, et demande de taper `yes` quand un élément caution est inclus. Pour répéter à blanc, ajoutez `--dry-run` (`-n`).
+
+Si vous voulez que les éléments recommandés soient sélectionnés dès le départ, demandez-le : `lu-cleaner clean --smart` (ou `lu-cleaner --smart`) ouvre le sélecteur avec eux sélectionnés, et `clean --yes --smart` les nettoie sans sélecteur. Les [raccourcis clavier](/lu-cleaner/fr/reference/keyboard-shortcuts/) listent toutes les touches.
+
 ### Pourquoi un élément n'est-il pas recommandé ?
 
-La [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) (smart select : la colonne `★`, la touche `a`, `--smart`) ne présélectionne que ce que vous nettoieriez sans hésiter. Un élément n'est **pas** recommandé lorsque :
+La [sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/) (smart select : la colonne `★`, la touche `a`, `--smart`) ne choisit que ce que vous nettoieriez sans hésiter. Un élément n'est **pas** recommandé lorsque :
 
 - son risque est <span class="risk caution">caution</span> ou <span class="risk never">never</span> ;
 - il porte un avertissement : application en cours d'exécution, modifications non commitées, commits non poussés, ouvert dans un éditeur, sur un volume externe… ;
@@ -197,7 +211,7 @@ lu-cleaner ne supprime jamais rien en dehors de votre dossier personnel et de vo
 
 ### Faut-il quitter mes applications d'abord ?
 
-Cela aide. Les éléments qui appartiennent à une application (Xcode, Simulator, Cursor, Codex, l'application ChatGPT, Claude desktop, émulateurs Android…) affichent un avertissement comme « Cursor is running — quit it before cleaning » tant que cette application tourne. Ils ne sont pas présélectionnés, `clean --yes` les retient, et ils sont ignorés pendant le nettoyage. Tout le reste est nettoyé normalement. `lu-cleaner doctor` liste les applications en cours d'exécution qui bloquent le nettoyage.
+Cela aide. Les éléments qui appartiennent à une application (Xcode, Simulator, Cursor, Codex, l'application ChatGPT, Claude desktop, émulateurs Android…) affichent un avertissement comme « Cursor is running — quit it before cleaning » tant que cette application tourne. La sélection intelligente ne les choisit jamais, `clean --yes` les retient, et ils sont ignorés pendant le nettoyage. Tout le reste est nettoyé normalement. `lu-cleaner doctor` liste les applications en cours d'exécution qui bloquent le nettoyage.
 
 ### lu-cleaner envoie-t-il des données quelque part ?
 

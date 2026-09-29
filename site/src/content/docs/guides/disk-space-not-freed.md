@@ -85,7 +85,7 @@ Files moved to the Trash still use disk space until the Trash is emptied. This a
 
 Trash mode never deletes anything permanently: worktree removals and commands (`simctl`, `docker`, `brew`…) are skipped, and so are items already in the Trash.
 
-To empty the Trash, use Finder, or let lu-cleaner do it. The Trash is an item of the `system` category. Emptying it cannot be undone, so smart select never preselects it:
+To empty the Trash, use Finder, or let lu-cleaner do it. The Trash is an item of the `system` category. Emptying it cannot be undone, so smart select never recommends it:
 
 ```bash
 lu-cleaner clean -c system          # select "Trash (N items)"
@@ -167,7 +167,7 @@ Compare lu-cleaner's numbers with `df`, not with Finder. There is nothing to "cl
 
 A <span class="risk safe">safe</span> item is a cache that its tool rebuilds automatically. That also means the space comes back as soon as the tool runs again: Xcode rebuilds DerivedData on the next build, Metro its cache on the next bundle, Cursor and other Electron apps their caches on the next launch.
 
-That is expected. Removing a cache you use every day only buys you a slower next start. Smart select focuses on stale items for this reason: <span class="risk moderate">moderate</span> items are preselected only after `stale_after` (14 days by default) without use. To target only what you have not touched for a while:
+That is expected. Removing a cache you use every day only buys you a slower next start. Smart select focuses on stale items for this reason: <span class="risk moderate">moderate</span> items are recommended only after `stale_after` (14 days by default) without use. To target only what you have not touched for a while:
 
 ```bash
 lu-cleaner clean --yes --smart --older-than 30d --dry-run

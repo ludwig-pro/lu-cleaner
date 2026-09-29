@@ -502,7 +502,7 @@ func (s *scanner) emitNodeVersion(n *nodeInstall, elsewhere map[string]bool, man
 	}
 	if n.latest {
 		it.NoRecommend = true
-		it.Meta["kept_because"] = fmt.Sprintf("one of the %d newest unreferenced %s versions (keep_latest): not preselected",
+		it.Meta["kept_because"] = fmt.Sprintf("one of the %d newest unreferenced %s versions (keep_latest): not recommended",
 			s.keepLatest(), n.manager)
 	}
 	if !s.procs.ok {

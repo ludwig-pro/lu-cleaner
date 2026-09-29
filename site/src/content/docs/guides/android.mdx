@@ -16,7 +16,7 @@ Per-project folders such as `android/build`, `android/app/build`, `android/.grad
 ```bash
 ./gradlew --stop                 # from any Android project: stop Gradle daemons first
 lu-cleaner scan -c android       # what takes space; nothing is touched
-lu-cleaner clean -c android      # picker, recommended items preselected
+lu-cleaner clean -c android      # picker: nothing selected, press a for the recommended items
 lu-cleaner devices               # AVDs and system images next to iOS simulators (press a for smart select)
 ```
 
@@ -55,8 +55,8 @@ When a React Native project has no `node_modules`, the `react-native` version in
 
 This walk always uses your configured (or auto-detected) roots. Roots passed on the command line (`--root`, `lu-cleaner artifacts <root>`) only narrow the artifacts scan: with a single project as root, every version your other projects use would look unused.
 
-:::caution[When usage is unknown, nothing is preselected]
-The project walk stops after 20 seconds or 250,000 directories. If it does not finish, or if no project root exists, lu-cleaner cannot prove that a package is unused: items show *no project roots scanned — usage unknown* and are not preselected. Point `roots` at the folders that hold your projects if the auto-detected ones miss them.
+:::caution[When usage is unknown, nothing is recommended]
+The project walk stops after 20 seconds or 250,000 directories. If it does not finish, or if no project root exists, lu-cleaner cannot prove that a package is unused: items show *no project roots scanned — usage unknown* and are not recommended. Point `roots` at the folders that hold your projects if the auto-detected ones miss them.
 :::
 
 ## Where the SDK lives
@@ -108,7 +108,7 @@ Running emulators are detected through their `qemu-system-*` processes. While an
 
 ### Quick Boot snapshots
 
-The `snapshots/` folder of an AVD holds `default_boot`, the RAM and device state saved on exit for Quick Boot. Deleting it only costs speed: the next launch cold-boots (30 to 90 seconds), and apps and data stay. The item, `Quick Boot snapshots · Pixel 8`, is <span class="risk moderate">moderate</span> and preselected once stale.
+The `snapshots/` folder of an AVD holds `default_boot`, the RAM and device state saved on exit for Quick Boot. Deleting it only costs speed: the next launch cold-boots (30 to 90 seconds), and apps and data stay. The item, `Quick Boot snapshots · Pixel 8`, is <span class="risk moderate">moderate</span> and recommended once stale.
 
 If you saved named snapshots yourself, the item becomes `Emulator snapshots · Pixel 8`, risk <span class="risk caution">caution</span>, with a warning listing them. lu-cleaner never removes an AVD's userdata images on their own: snapshots depend on them.
 
@@ -116,11 +116,11 @@ If you saved named snapshots yourself, the item becomes `Emulator snapshots · P
 
 NDKs, build-tools, platforms, CMake and sources follow the same keep rules:
 
-- **Used by a project**: kept. The item shows `used_by` (in the details panel and in `--json` metadata) and is never preselected.
+- **Used by a project**: kept. The item shows `used_by` (in the details panel and in `--json` metadata) and is never recommended.
 - **Newest installed version**: always kept. Set `keep_latest` in the [configuration](/lu-cleaner/reference/configuration/) to keep more of the newest versions (1 by default).
-- **Anything else**: preselected, as long as the project walk completed.
+- **Anything else**: recommended, as long as the project walk completed.
 
-System images follow the emulators instead: an image used by an AVD cannot be selected, and an unused one is preselected.
+System images follow the emulators instead: an image used by an AVD cannot be selected, and an unused one is recommended.
 
 | Package | Kind (`-k`) | Kept when | Coming back |
 |---|---|---|---|
@@ -131,7 +131,7 @@ System images follow the emulators instead: an image used by an AVD cannot be se
 | CMake, `cmake/<version>` | `android-cmake` | a project uses it, newest, or `3.22.1` (the AGP 8 default React Native builds with) | AGP downloads the version it needs |
 | Sources, `sources/android-<N>` | `android-sources` | a project's `compileSdk`, or newest | only used to browse code in the IDE |
 
-System images are <span class="risk moderate">moderate</span> like the other packages. If an AVD folder cannot be read (unmounted drive), images carry *an AVD folder is not reachable — cannot tell whether an emulator uses this image* and are not preselected. A folder named like `35.0.0-2` is the leftover of a failed install: <span class="risk safe">safe</span> and preselected.
+System images are <span class="risk moderate">moderate</span> like the other packages. If an AVD folder cannot be read (unmounted drive), images carry *an AVD folder is not reachable — cannot tell whether an emulator uses this image* and are not recommended. A folder named like `35.0.0-2` is the leftover of a failed install: <span class="risk safe">safe</span> and recommended.
 
 Legacy and leftover SDK content:
 
@@ -145,7 +145,7 @@ Legacy and leftover SDK content:
 
 ### x86 images on Apple Silicon
 
-x86 and x86_64 system images and AVDs cannot boot on an Apple Silicon Mac; they are typical leftovers of a migration from an Intel Mac. lu-cleaner adds *cannot boot on Apple Silicon* to their note and preselects them. This is a reason to delete them rather than a danger, so it is not shown as a warning.
+x86 and x86_64 system images and AVDs cannot boot on an Apple Silicon Mac; they are typical leftovers of a migration from an Intel Mac. lu-cleaner adds *cannot boot on Apple Silicon* to their note and recommends them. This is a reason to delete them rather than a danger, so it is not shown as a warning.
 
 ## Gradle
 
@@ -153,22 +153,22 @@ Gradle keeps everything in its user home, `$GRADLE_USER_HOME` or `~/.gradle`. If
 
 | Item | Kind (`-k`) | Risk | Smart select and notes |
 |---|---|---|---|
-| Wrapper distribution, `wrapper/dists/gradle-<v>-bin` (or `-all`) | `android-gradle-dist` | <span class="risk moderate">moderate</span> | preselected when no project wrapper uses it; `./gradlew` re-downloads it (130 to 200 MB) |
-| Interrupted wrapper download (no `.ok` marker) | `android-gradle-dist` | <span class="risk safe">safe</span> | preselected, unless a `.part` file changed in the last hour |
-| Per-version caches, `caches/<version>` | `android-gradle-version-cache` | <span class="risk moderate">moderate</span> | preselected when no wrapper, Homebrew or SDKMAN Gradle uses that version |
-| Old-format transforms, jars or build cache (for example `transforms-3` when `transforms-4` exists) | `android-gradle-transforms`, `android-gradle-jars`, `android-gradle-build-cache` | <span class="risk safe">safe</span> | preselected |
+| Wrapper distribution, `wrapper/dists/gradle-<v>-bin` (or `-all`) | `android-gradle-dist` | <span class="risk moderate">moderate</span> | recommended when no project wrapper uses it; `./gradlew` re-downloads it (130 to 200 MB) |
+| Interrupted wrapper download (no `.ok` marker) | `android-gradle-dist` | <span class="risk safe">safe</span> | recommended, unless a `.part` file changed in the last hour |
+| Per-version caches, `caches/<version>` | `android-gradle-version-cache` | <span class="risk moderate">moderate</span> | recommended when no wrapper, Homebrew or SDKMAN Gradle uses that version |
+| Old-format transforms, jars or build cache (for example `transforms-3` when `transforms-4` exists) | `android-gradle-transforms`, `android-gradle-jars`, `android-gradle-build-cache` | <span class="risk safe">safe</span> | recommended |
 | Current local build cache | `android-gradle-build-cache` | <span class="risk safe">safe</span> | only speeds up rebuilds; refills itself |
 | Current transforms cache | `android-gradle-transforms` | <span class="risk moderate">moderate</span> | dexing, jetifier and AAR extraction are recomputed (a few extra minutes) |
 | Dependency cache, `caches/modules-2` | `android-gradle-modules` | <span class="risk moderate">moderate</span> | 1 to 3 GB re-downloaded by the next build; offline builds fail until then |
 | Other shared caches (Kotlin DSL, scripts, keyrings…) | `android-gradle-caches-other` | <span class="risk moderate">moderate</span> | rebuilt or re-downloaded |
 | Daemon logs, `daemon/<version>` | `android-gradle-daemon-logs` | <span class="risk safe">safe</span> | while a daemon of that version runs, only logs older than 24 hours are proposed |
-| Temp files and partial downloads, `.tmp` | `android-gradle-tmp` | <span class="risk safe">safe</span> | files older than a day, which neither Gradle nor other cleaners remove; preselected |
-| Toolchain JDKs, `jdks/*` | `android-gradle-jdk` | <span class="risk moderate">moderate</span> | re-downloaded (200 to 300 MB) when a build requests them; never preselected |
+| Temp files and partial downloads, `.tmp` | `android-gradle-tmp` | <span class="risk safe">safe</span> | files older than a day, which neither Gradle nor other cleaners remove; recommended |
+| Toolchain JDKs, `jdks/*` | `android-gradle-jdk` | <span class="risk moderate">moderate</span> | re-downloaded (200 to 300 MB) when a build requests them; never recommended |
 | Native helpers, Kotlin build reports, worker state | `android-gradle-misc` | <span class="risk safe">safe</span> | re-created automatically |
 
 `caches/journal-1` is never proposed: Gradle's own cache cleanup relies on it.
 
-The last-used date of a Gradle version comes from its daemon logs, the most reliable usage signal. A distribution or cache that a project uses is not preselected as unused, but like every <span class="risk moderate">moderate</span> item it is preselected once it has not been used for longer than [`stale_after`](/lu-cleaner/reference/configuration/); the next build of that project then downloads or rebuilds it. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
+The last-used date of a Gradle version comes from its daemon logs, the most reliable usage signal. A distribution or cache that a project uses is not recommended as unused, but like every <span class="risk moderate">moderate</span> item it is recommended once it has not been used for longer than [`stale_after`](/lu-cleaner/reference/configuration/); the next build of that project then downloads or rebuilds it. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
 
 ### When a Gradle daemon is running
 
@@ -185,9 +185,9 @@ Why it matters: a running daemon keeps deleted files open, so their space is not
 | Item | Kind (`-k`) | Risk | Notes |
 |---|---|---|---|
 | Caches of the installed version, `~/Library/Caches/Google/AndroidStudio<version>` | `android-studio-cache` | <span class="risk moderate">moderate</span> | rebuilt on next launch (re-indexing takes minutes); skipped while Android Studio runs |
-| Caches of a version no longer installed | `android-studio-cache` | <span class="risk safe">safe</span> | nothing reads them; preselected |
+| Caches of a version no longer installed | `android-studio-cache` | <span class="risk safe">safe</span> | nothing reads them; recommended |
 | Logs, `~/Library/Logs/Google/AndroidStudio*` | `android-studio-logs` | <span class="risk safe">safe</span> | `idea.log` and crash reports |
-| Settings of an old version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | only read to migrate settings on upgrade; preselected when the current version has its own settings, never while an installed version has not been started yet (it imports them at first launch) |
+| Settings of an old version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | only read to migrate settings on upgrade; recommended when the current version has its own settings, never while an installed version has not been started yet (it imports them at first launch) |
 | SDK repository cache, legacy build cache and emulator crash dumps in `~/.android` | `android-user-cache` | <span class="risk safe">safe</span> | the contents of `cache`, `build-cache` and `breakpad` only |
 
 The settings folder of the version you use is never proposed. lu-cleaner finds the installed versions from the `product-info.json` of every `Android Studio*.app` in `/Applications`, `~/Applications` and Spotlight results. If none is found (custom location, JetBrains Toolbox…), the most recently used settings folder is treated as the current one, to stay on the safe side. With `keep_latest` above 1, that many recently used versions count as current.
@@ -198,7 +198,7 @@ In `~/.android`, `adbkey`, `debug.keystore` and the emulator settings are never 
 
 ## JDKs
 
-Android builds need a JDK, and most machines collect several. lu-cleaner lists them all and never preselects one:
+Android builds need a JDK, and most machines collect several. lu-cleaner lists them all and never recommends one:
 
 | Location | Installed by | Handling |
 |---|---|---|
@@ -247,7 +247,7 @@ These fixed locations come from the [catalog](/lu-cleaner/reference/catalog/):
    lu-cleaner scan -c android --all
    ```
 
-4. Open the picker, review the preselection category by category, then press <kbd>d</kbd>:
+4. Open the picker, press <kbd>a</kbd> to select the recommended items (or pick with <kbd>space</kbd>), review them category by category, then press <kbd>d</kbd>:
 
    ```bash
    lu-cleaner clean -c android
