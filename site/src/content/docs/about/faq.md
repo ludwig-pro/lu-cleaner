@@ -11,7 +11,7 @@ sidebar:
 
 Scanning is read-only: `lu-cleaner`, `scan`, `doctor` and the pickers never delete anything on their own. Deletion needs an explicit choice from you, either a selection confirmed in the picker or `clean --yes`. Several rules add margin on top of that:
 
-- Every item has a [risk level](/lu-cleaner/concepts/risk-and-smart-select/). <span class="risk caution">caution</span> items (sessions, models, dirty worktrees…) are never preselected, need a typed `yes` in the picker, and are left out of `clean --yes` unless you pass `--risk caution`.
+- Every item has a [risk level](/lu-cleaner/concepts/risk-and-smart-select/). <span class="risk caution">caution</span> items (sessions, models, dirty worktrees…) are never preselected, need a typed `yes` in the picker, and are left out of `clean --yes` unless you pass `--risk caution`, like every item that carries a warning.
 - Right before removal, every path goes through a [safety guard](/lu-cleaner/concepts/safety/). It refuses anything outside your home folder and per-user temp folder, system and top-level home folders, credentials and tool configurations, git repositories, and your project roots themselves.
 - lu-cleaner also re-checks the state of each item at that moment: the file is still the one it scanned, the owning app is closed, no process works inside it, no database is open.
 
@@ -35,20 +35,23 @@ No. lu-cleaner removes worktrees with `git worktree remove`, which deletes the c
 
 lu-cleaner refuses to remove a worktree, unless you pass `--force`, when:
 
-- it has uncommitted changes, including untracked files;
+- it has uncommitted changes, including untracked files (whatever your git configuration hides);
 - it is on a detached HEAD with commits that no branch, tag or remote contains (they would become unreachable);
 - it is locked (`git worktree lock`);
+- it contains another worktree or repository, which git would delete along;
 - lu-cleaner cannot read its git status.
 
-Git itself refuses dirty or locked worktrees as a second line of defence. Git-ignored files such as `node_modules`, `Pods` or `.env` do not block removal. lu-cleaner warns when a worktree contains ignored `.env` files, because those are lost with the checkout. See [Clean up AI agent worktrees](/lu-cleaner/guides/ai-worktrees/).
+`--dry-run` runs the same checks. Git itself refuses dirty or locked worktrees as a second line of defence. Git-ignored files such as `node_modules`, `Pods` or `.env` do not block removal. When a worktree holds ignored secret or personal files that exist nowhere else (`.env*`, `.npmrc`, keystores, signing keys…), lu-cleaner marks it <span class="risk caution">caution</span> with a warning, because those are lost with the checkout.
+
+A worktree git no longer tracks (its metadata or main repository verifiably gone) is an orphan: it is deleted as a plain folder, and only with `--force`. A worktree whose repository cannot be read is only reported. See [Clean up AI agent worktrees](/lu-cleaner/guides/ai-worktrees/).
 
 ### Can it delete my source code?
 
-The guard refuses to delete any directory that is a git repository (one with a `.git` folder), your project roots, and any folder that contains them. Project artifacts are only proposed when their marker file sits next to them (for example `package.json` next to `node_modules`), and lu-cleaner checks that marker again right before deletion. A folder named `build` that is tracked source code is not proposed. See [React Native projects](/lu-cleaner/guides/react-native-projects/).
+The guard refuses to delete any directory that is a git repository (one holding a `.git` folder, file or symlink, or a bare repository), your project roots, and any folder that contains them. Project artifacts are only proposed when their marker file sits next to them (for example `package.json` next to `node_modules`), and lu-cleaner checks that marker again right before deletion. A folder named `build` that is tracked source code is not proposed. See [React Native projects](/lu-cleaner/guides/react-native-projects/).
 
 ### What does `--force` bypass?
 
-`--force` skips three kinds of checks: the "app is running" guards, the "a process is working inside this folder" check, and the worktree checks (uncommitted changes, commits on no branch, lock). It does **not** bypass the safety guard, the open-database check, the check that the path is unchanged since the scan, or the marker-file check. Use it rarely, and after a `--dry-run`.
+`--force` skips three kinds of checks: the "app is running" guards, the "a process is working inside this folder" check, and the worktree checks (uncommitted changes, commits on no branch, lock, nested repositories). It also accepts the items that require it, such as orphaned worktree folders. It does **not** bypass the safety guard, the open-database check, the check that the path is unchanged since the scan, the marker-file check, or the rule that `clean --yes` needs `--risk caution` for caution and warned items. Use it rarely, and after a `--dry-run`.
 
 ## Understanding the results
 
@@ -67,13 +70,19 @@ Right before cleaning, every item is checked again. If something changed or look
 | `… changed since the scan (different inode) — rescan` | The path was replaced since the scan (new clone, symlink…). | Scan again. |
 | `marker [package.json] not found next to … anymore` | The artifact's marker file disappeared. | Scan again. |
 | `blocked by safety guard: …` | The path is protected, outside the allowed areas, a git repository, or a project root. | Nothing: this is intended. Check your `protect` list if it surprises you. |
+| `… contains the mount point … — eject it first` | A mounted volume or disk image lives inside the folder. | Eject it. |
+| `parent directory … is read-only …` | The folder cannot be removed from its parent; nothing was touched. | Fix the permissions, or remove it yourself. |
 | `simulator … is booted now — shut it down first` | The simulator was started after the scan. | `xcrun simctl shutdown all`. |
 | `… exists again` / `a live Claude Code session runs in …` | Data proposed as orphaned belongs to a folder that is back or in use. | Scan again. |
 | `N uncommitted change(s) — commit them or use --force` | Worktree with local changes. | Commit, stash or discard them. |
+| `contains the git repository … (git would delete it along)` / `contains another worktree, …` | A repository or worktree lives inside the worktree. | Move or remove it first. |
+| `needs --force: orphaned …` | An orphaned worktree folder: git can no longer see its uncommitted work. | Check it, then clean it with `--force`, or move it to the Trash. |
+| `main repository … no longer exists …` | The repository was deleted or moved since the scan. | Rescan: the worktree is then listed as orphaned. |
 | `detached HEAD with N commit(s) on no branch — they would be lost…` | Worktree commits would become unreachable. | `git branch <name>` inside the worktree. |
 | `worktree is locked (git worktree lock) — use --force` | The worktree is locked. | `git worktree unlock <path>` if you are sure. |
 | `git refused to remove it (…)` | Git's own checks failed. | Read git's message. |
 | `already gone` | The path no longer exists. | Nothing. |
+| `not possible in Trash mode (it would delete permanently)` / `already in the Trash` | Trash mode only moves files and folders. | Clean without Trash mode if you want them removed. |
 | `not cleanable (…)` | The item is report only. | Nothing. |
 | `cancelled` | You pressed `ctrl+c`. | Run again. |
 
@@ -83,6 +92,7 @@ Right before cleaning, every item is checked again. If something changed or look
 
 - its risk is <span class="risk caution">caution</span> or <span class="risk never">never</span>;
 - it carries a warning: app running, uncommitted changes, unpushed commits, open in an editor, on an external volume…;
+- its scanner vetoes it because deleting it is irreversible or its origin is uncertain: emptying the Trash, orphaned data that may still be wanted, a browser profile with saved logins… (see [Scanner vetoes](/lu-cleaner/concepts/risk-and-smart-select/#scanner-vetoes));
 - it is still being measured;
 - it is a build artifact of a project you worked on in the last 24 hours;
 - it is a <span class="risk safe">safe</span> item smaller than 1 MB;
@@ -99,7 +109,7 @@ You can always select a non-recommended item yourself.
 
 ### Why do sizes differ from Finder or `du`?
 
-lu-cleaner reports the space allocated on disk (blocks), counts a hardlinked file only once, and, when files are shared with other folders, shows how much deleting would really free. Finder shows the logical size of files. For sparse files such as VM disk images, and for folders full of small files, the two can differ a lot. lu-cleaner's figures are close to `du -sh`.
+lu-cleaner reports the space allocated on disk (blocks), counts a hardlinked file only once, and, when data is shared with other folders through hardlinks or APFS clones, shows how much deleting would really free. Finder shows the logical size of files. For sparse files such as VM disk images, and for folders full of small files, the two can differ a lot. lu-cleaner's figures are close to `du -sh`.
 
 ### I cleaned, but my disk is still full
 
@@ -134,7 +144,7 @@ lu-cleaner history --limit 0    # everything
 lu-cleaner history --json
 ```
 
-Every clean appends one line per item to `~/.local/state/lu-cleaner/history.jsonl` (or under `$XDG_STATE_HOME`): time, kind, category, name, path or command, method, status, size and error. Dry runs are not recorded. The history tells you what was removed, not how to get it back.
+Every clean appends one line per item to `~/.local/state/lu-cleaner/history.jsonl` (or under `$XDG_STATE_HOME`): time, kind, category, name, path or command (the location and first paths of a group item), method, status, size, the bytes really freed, and the error or message. Dry runs are not recorded. The history tells you what was removed, not how to get it back.
 
 ### How do I clean only one kind of thing?
 
@@ -151,23 +161,25 @@ lu-cleaner artifacts ~/dev/my-app         # only this project's artifacts
 
 ### Why does `clean --yes` refuse to run?
 
-`clean --yes` refuses to "clean everything". It needs a narrowing filter: `--smart`, `--category/-c` or `--kind/-k`. It also leaves out <span class="risk caution">caution</span> items unless you pass `--risk caution`. These rules exist so that a script, a cron job or a coding agent cannot wipe your sessions or dirty worktrees by accident. See [Automation](/lu-cleaner/guides/automation/).
+`clean --yes` refuses to "clean everything". It needs a narrowing filter: `--smart`, `--category/-c` or `--kind/-k`. A `-k` naming a scanner that spans several categories (`-k catalog`) is not enough on its own, and a tool name is not a category (`-c cursor` is refused: use `-c ai` or a `-k` kind). It also leaves out <span class="risk caution">caution</span> items and items with a warning unless you pass `--risk caution`, and lists the latter under **Held back**. These rules exist so that a script, a cron job or a coding agent cannot wipe your sessions or dirty worktrees by accident. See [Automation](/lu-cleaner/guides/automation/).
 
 ## Trash, permissions and macOS
 
 ### What does Trash mode do?
 
-Instead of deleting, lu-cleaner moves each path to `~/.Trash`, adding a timestamp to the name if one already exists there. Turn it on with `--trash`, with `use_trash = true` in the configuration, or with the `t` key in the picker.
+Instead of deleting, lu-cleaner moves each path to `~/.Trash`, naming it `name 2`, `name 3`… if the name is already taken there (nothing already in the Trash is ever replaced). Turn it on with `--trash`, with `use_trash = true` in the configuration, or with the `t` key in the picker; `--trash=false` turns it off for one run.
 
-- **Space is not freed until you empty the Trash.** The summary says "moved to the Trash" and reminds you.
-- It only applies to items that are deleted by path. Commands (such as `xcrun simctl delete`) and worktree removals behave the same as without Trash mode.
+- **Space is not freed until you empty the Trash.** Summaries and the history count moves to the Trash apart, never as freed, and remind you.
+- **Nothing is deleted permanently.** Only files and folders are moved. Commands (such as `xcrun simctl delete`) and worktree removals cannot be undone, so they are skipped, and so are items already in the Trash.
 - A path on another volume cannot be moved to your Trash, and that item fails.
 
-Use it when you want to double-check, then empty the Trash in Finder, or with lu-cleaner's own "Trash" item in the `system` category.
+Use it when you want to double-check, then empty the Trash in Finder, or with lu-cleaner's own "Trash" item in the `system` category (in delete mode).
 
 ### Does it need Full Disk Access?
 
 No, lu-cleaner works without it. macOS protects a few folders, though: without Full Disk Access, lu-cleaner cannot measure `~/.Trash` or your iPhone/iPad backups, and `analyze` reports unreadable entries. In that case the Trash item asks Finder to empty the Trash instead.
+
+It also never touches the data of other apps (`~/Library/Containers/<app>`, `~/Library/Group Containers/<group>`) without Full Disk Access: on macOS 14 and later, the first access would open a permission prompt and block the scan. What lives there, such as Docker Desktop logs, is listed as report-only with the warning `needs Full Disk Access`, and the analyzer shows those folders locked.
 
 To grant it, open **System Settings › Privacy & Security › Full Disk Access**, enable your terminal app (Terminal, iTerm2, Ghostty…), then restart the terminal.
 
@@ -185,7 +197,7 @@ lu-cleaner never deletes anything outside your home folder and temp folder, so n
 
 ### Do I need to quit my apps first?
 
-It helps. Items owned by an app (Xcode, Simulator, Cursor, Codex, the ChatGPT app, Claude desktop, Android emulators…) show a warning such as "Cursor is running — quit it before cleaning" while that app runs. They are not preselected and are skipped during the clean. Everything else is cleaned normally. `lu-cleaner doctor` lists the running apps that block cleaning.
+It helps. Items owned by an app (Xcode, Simulator, Cursor, Codex, the ChatGPT app, Claude desktop, Android emulators…) show a warning such as "Cursor is running — quit it before cleaning" while that app runs. They are not preselected, `clean --yes` holds them back, and they are skipped during the clean. Everything else is cleaned normally. `lu-cleaner doctor` lists the running apps that block cleaning.
 
 ### Does lu-cleaner send data anywhere?
 

@@ -28,7 +28,7 @@ The information about other tools comes from their public documentation as of Se
 
 | Tool | AI agent worktrees | React Native / iOS / Android artifacts | Simulators and emulators | AI tools data | Checks before deleting |
 |---|---|---|---|---|---|
-| **lu-cleaner** | Finds them, shows status (dirty, unpushed, merged, orphaned), removes with `git worktree remove` | `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `.gradle`, `.cxx`, `.expo`… with marker files and git checks | iOS devices, runtimes, orphan device folders, XCTest recordings, logs; Android AVDs, system images, NDKs | Claude Code, Codex, Cursor, Conductor… with orphan detection | Safety guard, unchanged inode, running apps, open databases, processes inside, typed `yes` for risky items |
+| **lu-cleaner** | Finds them, shows status (dirty, unpushed, merged, orphaned), removes with `git worktree remove` keeping the branch, refuses locked, dirty or nested ones without `--force` | `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `.gradle`, `.cxx`, `.expo`… with marker files and git checks | iOS devices, runtimes, unavailable devices one by one, orphan device folders, XCTest recordings, logs; Android AVDs, system images, NDKs | Claude Code, Codex, Cursor, Conductor… with orphan detection | Safety guard, unchanged inode, running apps, open databases, processes inside, typed `yes` for risky items, the same checks in dry runs |
 | **CleanMyMac** (app) | Not documented | Xcode junk | Not documented | Not documented | Review before cleaning |
 | **CleanMyMac CLI** | Not documented | `node_modules`, `Pods`, `.next`, `target`, `.venv`… plus Xcode, Gradle, CocoaPods caches | Old simulators | Yes (Claude mentioned) | Review, ignore list, recent artifacts not preselected |
 | **mole** | Cleans artifacts *inside* agent worktrees, never the worktrees themselves | `node_modules`, `build`, `dist`, `target`, `.build` | Not documented | Not documented | Dry run, whitelist, recent artifacts not preselected |
@@ -68,7 +68,7 @@ lu-cleaner keeps no state besides its history file, so it does not conflict with
 
 Two things set lu-cleaner apart even where tools overlap:
 
-- **It knows state, not just folder names.** A worktree with uncommitted changes, a simulator that is booted, a Codex logs database that is open, Claude Code data whose folder still exists: lu-cleaner checks each of these before proposing or deleting anything. See the [safety model](/lu-cleaner/concepts/safety/).
+- **It knows state, not just folder names.** A worktree with uncommitted changes or a `.env` found nowhere else, a simulator that is booted, a Codex logs database that is open, Claude Code data whose folder still exists: lu-cleaner checks each of these before proposing or deleting anything. See the [safety model](/lu-cleaner/concepts/safety/).
 - **It explains what comes back and at what cost.** Every item has a [risk level](/lu-cleaner/concepts/risk-and-smart-select/) and a note saying how it is regenerated, from a cache that refills on its own to a model you would have to download again.
 
 ## Related

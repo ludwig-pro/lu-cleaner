@@ -36,7 +36,7 @@ XCTest recordings · iPhone 16 Pro  24.8 GB    3d  <span class="ok">safe</span> 
 iOS 18.5 runtime (22F77)           8.40 GB   now  <span class="warn">moderate</span>
 <span class="warn">! used by 3 simulator(s) — deleting it makes them unavailable</span>
 iOS 17.5 runtime (21F79)           7.90 GB   5mo  <span class="warn">moderate</span>  <span class="acc">★</span>
-Unavailable simulators (4)         2.30 GB   8mo  <span class="ok">safe</span>      <span class="acc">★</span>
+iPhone 14 · iOS 16.4 (unavailable) 2.30 GB   8mo  <span class="ok">safe</span>      <span class="acc">★</span>
 iPad Air · iOS 18.5                1.40 GB    2h  <span class="dim">info</span>
 <span class="warn">! booted — shut it down before deleting it</span>
 
@@ -121,7 +121,7 @@ These fixed locations come from the [catalog](/lu-cleaner/reference/catalog/), w
 | Documentation cache | `~/Library/Developer/Xcode/DocumentationCache/*` and `DocumentationIndex/*` | <span class="risk safe">safe</span> | fetched again when the documentation window opens |
 | Export staging | `$TMPDIR/XcodeDistPipeline.*`, `$TMPDIR/*.xcdistributionlogs` | <span class="risk safe">safe</span> | only when older than 24 hours |
 | Component downloads | `~/Library/Developer/DVTDownloads/*` | <span class="risk moderate">moderate</span> | staging area; installed components are not affected |
-| Device crash logs | `~/Library/Developer/Xcode/iOS Device Logs` (and watchOS) | <span class="risk moderate">moderate</span> | re-imported from devices that still hold them |
+| Device crash logs | `~/Library/Developer/Xcode/iOS Device Logs` (and watchOS) | <span class="risk caution">caution</span> | devices purge their own crash logs, so these copies are often the only ones left; never preselected |
 | Metal toolchain | runs `xcodebuild -deleteComponent metalToolchain` | <span class="risk moderate">moderate</span> | only needed to compile `.metal` files; never preselected |
 | CocoaPods download cache | `~/Library/Caches/CocoaPods` | <span class="risk safe">safe</span> | same as `pod cache clean --all` |
 | CocoaPods trunk index | `~/.cocoapods/repos/trunk` | <span class="risk moderate">moderate</span> | re-fetched lazily; private spec repos are left alone |
@@ -159,11 +159,19 @@ Simulators with a custom name (different from their device type) are flagged in 
 
 ### Unavailable simulators
 
-Simulators whose runtime was removed, or is not supported by the selected Xcode, can no longer boot. They are grouped into a single <span class="risk safe">safe</span> item, `Unavailable simulators (N)`, cleaned with `xcrun simctl delete unavailable` and preselected.
+Simulators whose runtime was removed, or is not supported by the selected Xcode, can no longer boot. Each one is its own item, for example `iPhone 14 · iOS 16.4 (unavailable)`, cleaned with `xcrun simctl delete <udid>` for that device only. lu-cleaner never runs `xcrun simctl delete unavailable`: it would also delete devices that are only unusable right now.
+
+| Unavailable simulator | Risk | Smart select |
+|---|---|---|
+| Its runtime is provably gone, and it holds no apps | <span class="risk safe">safe</span> | yes |
+| It holds apps with their data | <span class="risk caution">caution</span> | never: reinstalling its runtime would bring them back |
+| It may come back: its runtime is still installed or on disk (inside another Xcode, for example), another Xcode is selected, or the runtime image is not mounted after a macOS update | <span class="risk caution">caution</span>, with a warning that says why | never |
+
+Right before deleting, lu-cleaner asks simctl again: a device that became available again, changed runtime or was booted since the scan is skipped.
 
 ### Orphan device folders
 
-Sometimes a folder in `~/Library/Developer/CoreSimulator/Devices/` is unknown to simctl: its `device.plist` is missing or invalid, it is marked deleted, or its runtime is no longer installed. Such a folder cannot be booted or listed, and `xcrun simctl delete unavailable` does not remove it, so lu-cleaner deletes the folder itself.
+Sometimes a folder in `~/Library/Developer/CoreSimulator/Devices/` is unknown to simctl: its `device.plist` is missing or invalid, it is marked deleted, or its runtime is no longer installed. Such a folder cannot be booted or listed, and simctl cannot delete it, so lu-cleaner deletes the folder itself.
 
 Because this bypasses simctl, the checks are conservative:
 
@@ -227,9 +235,10 @@ A simulator runtime is a disk image of several GB managed by macOS in system sto
 | Bundled with Xcode | report only: it goes away with that Xcode |
 | Used by simulators | warning *used by N simulator(s) — deleting it makes them unavailable* |
 | Newest of its platform | warning *newest iOS runtime — needed to run iOS simulators* |
+| Among the `keep_latest` newest runtimes of its platform (only when you raise `keep_latest` above 1) | never preselected |
 | Unused, and a newer runtime of the same platform is installed | preselected |
 
-Runtimes are <span class="risk moderate">moderate</span>: re-downloading one (around 8 GB) takes a while, from Xcode › Settings › Components or with `xcodebuild -downloadPlatform iOS`. They are skipped while Xcode runs. If you delete a runtime that simulators still use, they become unavailable (and show up under *Unavailable simulators* on the next scan); booted ones are shut down by simctl.
+Runtimes are <span class="risk moderate">moderate</span>: re-downloading one (around 8 GB) takes a while, from Xcode › Settings › Components or with `xcodebuild -downloadPlatform iOS`. They are skipped while Xcode runs. If you delete a runtime that simulators still use, they become unavailable (and show up as `… (unavailable)` items on the next scan); booted ones are shut down by simctl.
 
 ## What lu-cleaner only reports
 
@@ -287,10 +296,10 @@ lu-cleaner clean --yes --smart -k ios-simulator-runtime,ios-simulators-unavailab
 ```
 
 :::caution[Always narrow clean --yes]
-Without `--smart`, `lu-cleaner clean --yes -c simulators` includes every selectable item up to <span class="risk moderate">moderate</span> risk: all shut-down simulators without apps and every deletable runtime, **including runtimes your simulators still use**. Warnings are printed in the plan, but they do not stop a non-interactive clean. Prefer `--smart` or `-k`, and always run once with `--dry-run`. Simulators with apps and archives (<span class="risk caution">caution</span>) are only included with `--risk caution`.
+Without `--smart`, `lu-cleaner clean --yes -c simulators` includes every selectable item up to <span class="risk moderate">moderate</span> risk that carries no warning: all shut-down simulators without apps, even ones you still use, and every unused runtime that is not the newest of its platform. Items with a warning (a runtime your simulators still use, the newest runtime, a running Xcode) are held back and listed under `Held back`. Prefer `--smart` or `-k`, and always run once with `--dry-run`. Simulators with apps, unavailable simulators that may come back, archives and device crash logs (<span class="risk caution">caution</span>), and items with a warning, are only included with `--risk caution`.
 :::
 
-Kinds you can pass to `-k`. The provider id `apple` selects every kind of the Xcode and simulator scanner at once; catalog kinds (`apple-*`) are matched by their own id.
+Kinds you can pass to `-k`. The provider id `apple` selects every kind of the Xcode and simulator scanner at once (with `clean --yes`, add `-c` or `--smart`: it spans two categories); catalog kinds (`apple-*`) are matched by their own id.
 
 | Kind | Item |
 |---|---|
@@ -301,7 +310,7 @@ Kinds you can pass to `-k`. The provider id `apple` selects every kind of the Xc
 | `xcode-metal-toolchain` | the Metal toolchain component |
 | `xcode-app` | extra Xcode install (report only) |
 | `ios-simulator` | one simulator device |
-| `ios-simulators-unavailable` | all unavailable simulators |
+| `ios-simulators-unavailable` | one unavailable simulator |
 | `ios-simulator-orphan` | a device folder unknown to simctl |
 | `ios-simulator-attachments` | XCTest recordings of one simulator |
 | `ios-simulator-logs`, `ios-simulator-caches` | unified logs, system caches inside simulators |

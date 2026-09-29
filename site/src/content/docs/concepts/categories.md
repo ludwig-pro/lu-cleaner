@@ -18,18 +18,20 @@ lu-cleaner clean -c worktrees          # picker limited to worktrees
 | ID | Title | Contains | Also accepted by `-c` |
 |---|---|---|---|
 | `worktrees` | Worktrees | Git worktrees created by AI agents and by hand | `wt`, `worktree` |
-| `artifacts` | Project artifacts | `node_modules`, `ios/Pods`, iOS and Android builds, `.expo`, `dist`… inside your projects | `artifact`, `projects`, `node_modules` |
-| `simulators` | iOS Simulators | Simulator devices, runtimes, recordings, logs and caches | `sim`, `simulator`, `ios` |
+| `artifacts` | Project artifacts | `node_modules`, `ios/Pods`, iOS and Android builds, `.expo`, `dist`… inside your projects | `artifact` |
+| `simulators` | iOS Simulators | Simulator devices, runtimes, recordings, logs and caches | `sim`, `simulator` |
 | `xcode` | Xcode | DerivedData, archives, DeviceSupport, CocoaPods, SwiftPM, extra Xcode installs | |
-| `android` | Android | Emulators (AVDs), SDK packages, Gradle, Android Studio, JDKs | `gradle`, `emulators` |
-| `ai` | AI tools | Claude Code, Claude desktop, Codex, Cursor agent, ChatGPT, Conductor… data and caches | `claude`, `codex`, `cursor` |
-| `js` | JS toolchain | npm, Yarn, pnpm, bun caches, node versions, Metro, Expo, test browsers | `node`, `npm` |
+| `android` | Android | Emulators (AVDs), SDK packages, Gradle, Android Studio, JDKs | |
+| `ai` | AI tools | Claude Code, Claude desktop, Codex, Cursor agent, ChatGPT, Conductor… data and caches | |
+| `js` | JS toolchain | npm, Yarn, pnpm, bun caches, node versions, Metro, Expo, test browsers | |
 | `ide` | IDEs | VS Code, Cursor (editor part), Zed, JetBrains, Sublime caches and state | |
-| `containers` | Containers | Docker, colima, Lima, OrbStack, Apple's `container` | `docker` |
-| `langs` | Other toolchains | Homebrew, Go, Rust, Python, Ruby, .NET, JVM caches | |
+| `containers` | Containers | Docker, colima, Lima, OrbStack, Apple's `container` | `container` |
+| `langs` | Other toolchains | Homebrew, Go, Rust, Python, Ruby, .NET, JVM caches | `lang` |
 | `system` | System | Trash, browser and app caches, logs, Downloads, macOS snapshots and swap | |
 
 Category IDs are case-insensitive. Several can be combined with commas or by repeating the flag: `-c js,ai` or `-c js -c ai`.
+
+Tool names are not categories: `-c cursor`, `-c docker` or `-c node_modules` is refused with a hint naming the category the tool belongs to, because that category covers other tools too and a `clean --yes -c cursor` would clean every AI tool. To narrow to one tool or one kind of item, use `--kind`/`-k` with an item kind or a scanner ID (`lu-cleaner scan --json` shows the `kind` of every item).
 
 ## Typical sizes
 
@@ -53,11 +55,11 @@ The ranges below are illustrative, for a Mac used for React Native, iOS and Andr
 
 Every linked git worktree found in your worktree roots (`~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees`…), in your project roots, and through `git worktree list` of each repository. Each item shows the tool that created it, the branch and a status: `clean`, `dirty`, `unpushed`, `merged`, `locked`, `orphan` or `unknown`. Stale worktree metadata (folders deleted without git knowing) appears as a `git worktree prune` item.
 
-A worktree is removed as a whole with `git worktree remove`, which keeps its branch. See [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/).
+A worktree is removed as a whole with `git worktree remove`, which keeps its branch. An `orphan` (its git metadata verifiably gone) is deleted as a plain folder and needs `--force`; a worktree whose main repository cannot be read, or was moved, is report-only. See [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/).
 
 ## Project artifacts
 
-Build and dependency outputs found by walking your project roots, npkill-style, one item per folder: `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `.cxx`, `.expo`, `.next`, `.turbo`, `dist`, `coverage`, Rust `target`, Python `.venv`, Yarn Berry `.yarn/cache` and dozens more. A folder only matches when a marker file sits next to it (`package.json` next to `node_modules`), and generic names like `build` must be ignored by git or contain build output.
+Build and dependency outputs found by walking your project roots, npkill-style, one item per folder: `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `.cxx`, `.expo`, `.next`, `.turbo`, `dist`, `coverage`, Rust `target`, Python `.venv`, Yarn Berry `.yarn/cache` and dozens more. A folder only matches when a marker file sits next to it (`package.json` next to `node_modules`), generic names like `build` must be ignored by git or contain build output, and a folder holding a `.git` entry is never proposed. With `--root` or `lu-cleaner artifacts <dir>`, only those folders are scanned.
 
 Large git-ignored folders that no rule recognizes (200 MB or more, not counting known artifacts inside them) are listed as <span class="risk caution">caution</span> so you can decide. See [React Native projects](/lu-cleaner/guides/react-native-projects/).
 
@@ -67,7 +69,7 @@ Artifacts inside a worktree are listed twice: as part of the worktree's size and
 
 ## iOS Simulators
 
-Simulator devices (one item per device, deleted with `xcrun simctl delete`), unavailable devices, orphan device folders `simctl` no longer knows, runtimes (`xcrun simctl runtime delete`), alternate device sets (SwiftUI previews, parallel-testing clones), XCTest screen recordings left inside simulators, unified logs and system caches of shut-down simulators, CoreSimulator caches. See [iOS simulators and Xcode](/lu-cleaner/guides/ios-simulators-xcode/).
+Simulator devices (one item per device, deleted with `xcrun simctl delete <UDID>`), unavailable devices (one item per device too, <span class="risk caution">caution</span> when they may come back with another Xcode or hold apps with data), orphan device folders `simctl` no longer knows, runtimes (`xcrun simctl runtime delete`), alternate device sets (SwiftUI previews, parallel-testing clones), XCTest screen recordings left inside simulators, unified logs and system caches of shut-down simulators, CoreSimulator caches. See [iOS simulators and Xcode](/lu-cleaner/guides/ios-simulators-xcode/).
 
 ## Xcode
 
@@ -79,11 +81,11 @@ Emulators (AVDs) and their Quick Boot snapshots, SDK system images, NDKs, build-
 
 ## AI tools
 
-Data left by AI coding tools: Claude Code sessions older than 30 days and data of project folders that no longer exist, old Claude Code, cursor-agent and Copilot CLI builds, Codex sessions and logs databases, Cursor agent transcripts and workspace data, Conductor archived contexts, local models (Ollama, LM Studio, Hugging Face, Whisper), desktop apps' caches and VM images. Configuration, credentials, memories and chat databases are protected. See [AI tools data](/lu-cleaner/guides/ai-tools-data/).
+Data left by AI coding tools: Claude Code sessions older than 30 days and data of project folders that no longer exist, old Claude Code, cursor-agent and Copilot CLI builds, Codex sessions and logs databases, Cursor agent transcripts and workspace data, Conductor archived contexts, local models (Ollama, LM Studio, Hugging Face, Whisper), desktop apps' caches and VM images. Configuration, credentials, memories and chat databases are protected, and backups of chat databases are <span class="risk caution">caution</span>. See [AI tools data](/lu-cleaner/guides/ai-tools-data/).
 
 ## JS toolchain
 
-Package-manager caches (npm, Yarn classic and Berry, pnpm, bun, corepack), node versions installed by nvm, fnm, mise, asdf or volta (keeping the ones in use), npx installs, npm global leftovers, Metro, Haste, Jest and Vitest caches, Expo Go simulator builds, Playwright, Puppeteer and Cypress browsers, fnm's stale shell links and watchman watches on deleted folders. See [JS toolchain](/lu-cleaner/guides/js-toolchain/).
+Package-manager caches (npm, Yarn classic and Berry, pnpm, bun, corepack), node versions installed by nvm, fnm, mise, asdf or volta (keeping the ones in use), npx installs, npm global leftovers, Metro, Haste, Jest and Vitest caches, Expo Go simulator builds, Playwright, Puppeteer and Cypress browsers, fnm's stale shell links and watchman watches on deleted folders (live Metro and Jest watches are left alone). The Yarn Berry global cache is <span class="risk caution">caution</span> when Plug'n'Play projects run from it, and so is a pnpm store whose global virtual store your projects link into. See [JS toolchain](/lu-cleaner/guides/js-toolchain/).
 
 ## IDEs
 
@@ -91,7 +93,7 @@ Caches and state of editors: VS Code (and Insiders, VSCodium) cached data of old
 
 ## Containers
 
-Docker build cache, unused images and stopped containers (cleaned with Docker's own `prune` commands), unused volumes (report only), Docker Desktop and OrbStack disk images, colima and Lima VMs, Apple's `container` data, and download caches of VM tools. VM disks are reported with the command that reclaims their space: deleting a VM loses everything inside it.
+Docker build cache, unused images and stopped containers (cleaned with Docker's own `prune` commands), unused volumes (report only), Docker Desktop and OrbStack disk images (listed only with Full Disk Access, since they live in app containers), colima and Lima VMs, Apple's `container` data, and download caches of VM tools. VM disks are reported with the command that reclaims their space: deleting a VM loses everything inside it.
 
 ## Other toolchains
 

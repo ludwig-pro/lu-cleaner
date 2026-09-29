@@ -18,18 +18,20 @@ lu-cleaner clean -c worktrees          # sélecteur limité aux worktrees
 | Identifiant | Titre affiché | Contenu | Aussi accepté par `-c` |
 |---|---|---|---|
 | `worktrees` | Worktrees | Worktrees git créés par les agents d'IA ou à la main | `wt`, `worktree` |
-| `artifacts` | Project artifacts | `node_modules`, `ios/Pods`, builds iOS et Android, `.expo`, `dist`… dans vos projets | `artifact`, `projects`, `node_modules` |
-| `simulators` | iOS Simulators | Appareils de simulateur, runtimes, enregistrements, journaux et caches | `sim`, `simulator`, `ios` |
+| `artifacts` | Project artifacts | `node_modules`, `ios/Pods`, builds iOS et Android, `.expo`, `dist`… dans vos projets | `artifact` |
+| `simulators` | iOS Simulators | Appareils de simulateur, runtimes, enregistrements, journaux et caches | `sim`, `simulator` |
 | `xcode` | Xcode | DerivedData, archives, DeviceSupport, CocoaPods, SwiftPM, installations supplémentaires de Xcode | |
-| `android` | Android | Émulateurs (AVD), paquets du SDK, Gradle, Android Studio, JDK | `gradle`, `emulators` |
-| `ai` | AI tools | Données et caches de Claude Code, Claude desktop, Codex, Cursor agent, ChatGPT, Conductor… | `claude`, `codex`, `cursor` |
-| `js` | JS toolchain | Caches npm, Yarn, pnpm et bun, versions de node, Metro, Expo, navigateurs de test | `node`, `npm` |
+| `android` | Android | Émulateurs (AVD), paquets du SDK, Gradle, Android Studio, JDK | |
+| `ai` | AI tools | Données et caches de Claude Code, Claude desktop, Codex, Cursor agent, ChatGPT, Conductor… | |
+| `js` | JS toolchain | Caches npm, Yarn, pnpm et bun, versions de node, Metro, Expo, navigateurs de test | |
 | `ide` | IDEs | Caches et état de VS Code, Cursor (partie éditeur), Zed, JetBrains, Sublime | |
-| `containers` | Containers | Docker, colima, Lima, OrbStack, `container` d'Apple | `docker` |
-| `langs` | Other toolchains | Caches Homebrew, Go, Rust, Python, Ruby, .NET, JVM | |
+| `containers` | Containers | Docker, colima, Lima, OrbStack, `container` d'Apple | `container` |
+| `langs` | Other toolchains | Caches Homebrew, Go, Rust, Python, Ruby, .NET, JVM | `lang` |
 | `system` | System | Corbeille, caches de navigateurs et d'applications, journaux, `~/Downloads`, snapshots et swap de macOS | |
 
 Les identifiants de catégorie ne sont pas sensibles à la casse. Vous pouvez en combiner plusieurs avec des virgules ou en répétant l'option : `-c js,ai` ou `-c js -c ai`.
+
+Les noms d'outils ne sont pas des catégories : `-c cursor`, `-c docker` ou `-c node_modules` est refusé, avec une indication qui nomme la catégorie à laquelle l'outil appartient, parce que cette catégorie couvre aussi d'autres outils et qu'un `clean --yes -c cursor` nettoierait tous les outils d'IA. Pour vous limiter à un seul outil ou à un seul type d'élément, utilisez `--kind`/`-k` avec un type d'élément ou un identifiant de scanner (`lu-cleaner scan --json` affiche le `kind` de chaque élément).
 
 ## Tailles typiques
 
@@ -53,11 +55,11 @@ Les fourchettes ci-dessous sont indicatives, pour un Mac utilisé pour du dével
 
 Tous les worktrees git liés trouvés dans vos racines de worktrees (`~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees`…), dans vos racines de projets et par `git worktree list` dans chaque dépôt. Chaque élément indique l'outil qui l'a créé, la branche et un statut : `clean`, `dirty`, `unpushed`, `merged`, `locked`, `orphan` ou `unknown`. Les métadonnées de worktrees périmées (dossiers supprimés sans que git le sache) apparaissent sous la forme d'un élément `git worktree prune`.
 
-Un worktree est supprimé en entier avec `git worktree remove`, qui conserve sa branche. Voir [Nettoyer les worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/).
+Un worktree est supprimé en entier avec `git worktree remove`, qui conserve sa branche. Un `orphan` (dont les métadonnées git ont disparu, de façon vérifiée) est supprimé comme un simple dossier et exige `--force` ; un worktree dont le dépôt principal ne peut pas être lu, ou a été déplacé, est en rapport seul. Voir [Nettoyer les worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/).
 
 ## Artefacts de projet
 
-Les sorties de build et les dépendances trouvées en parcourant vos racines de projets, à la manière de npkill, un élément par dossier : `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `.cxx`, `.expo`, `.next`, `.turbo`, `dist`, `coverage`, `target` de Rust, `.venv` de Python, `.yarn/cache` de Yarn Berry et des dizaines d'autres. Un dossier ne correspond que si un fichier marqueur se trouve à côté (`package.json` à côté de `node_modules`), et les noms génériques comme `build` doivent être ignorés par git ou contenir des sorties de build.
+Les sorties de build et les dépendances trouvées en parcourant vos racines de projets, à la manière de npkill, un élément par dossier : `node_modules`, `ios/Pods`, `ios/build`, `android/app/build`, `android/.gradle`, `.cxx`, `.expo`, `.next`, `.turbo`, `dist`, `coverage`, `target` de Rust, `.venv` de Python, `.yarn/cache` de Yarn Berry et des dizaines d'autres. Un dossier ne correspond que si un fichier marqueur se trouve à côté (`package.json` à côté de `node_modules`), les noms génériques comme `build` doivent être ignorés par git ou contenir des sorties de build, et un dossier qui contient une entrée `.git` n'est jamais proposé. Avec `--root` ou `lu-cleaner artifacts <dossier>`, seuls ces dossiers sont analysés.
 
 Les gros dossiers ignorés par git qu'aucune règle ne reconnaît (200 Mo ou plus, sans compter les artefacts connus qu'ils contiennent) sont listés en <span class="risk caution">caution</span> pour que vous décidiez. Voir [Nettoyer les projets React Native](/lu-cleaner/fr/guides/react-native-projects/).
 
@@ -67,7 +69,7 @@ Les artefacts situés dans un worktree sont listés deux fois : dans la taille d
 
 ## Simulateurs iOS
 
-Appareils de simulateur (un élément par appareil, supprimé avec `xcrun simctl delete`), appareils indisponibles, dossiers d'appareils orphelins que `simctl` ne connaît plus, runtimes (`xcrun simctl runtime delete`), ensembles d'appareils alternatifs (aperçus SwiftUI, clones des tests parallèles), enregistrements d'écran XCTest laissés dans les simulateurs, journaux unifiés et caches système des simulateurs éteints, caches CoreSimulator. Voir [Simulateurs iOS et Xcode](/lu-cleaner/fr/guides/ios-simulators-xcode/).
+Appareils de simulateur (un élément par appareil, supprimé avec `xcrun simctl delete <UDID>`), appareils indisponibles (un élément par appareil là aussi, <span class="risk caution">caution</span> quand ils peuvent revenir avec une autre version de Xcode ou contiennent des applications avec des données), dossiers d'appareils orphelins que `simctl` ne connaît plus, runtimes (`xcrun simctl runtime delete`), ensembles d'appareils alternatifs (aperçus SwiftUI, clones des tests parallèles), enregistrements d'écran XCTest laissés dans les simulateurs, journaux unifiés et caches système des simulateurs éteints, caches CoreSimulator. Voir [Simulateurs iOS et Xcode](/lu-cleaner/fr/guides/ios-simulators-xcode/).
 
 ## Xcode
 
@@ -79,11 +81,11 @@ DerivedData, un élément par dossier (Xcode en crée un par chemin de workspace
 
 ## Outils d'IA
 
-Les données laissées par les outils de code IA : sessions Claude Code de plus de 30 jours et données de dossiers de projets qui n'existent plus, anciens builds de Claude Code, cursor-agent et Copilot CLI, sessions et bases de journaux de Codex, transcripts d'agent et données de workspace de Cursor, contextes archivés de Conductor, modèles locaux (Ollama, LM Studio, Hugging Face, Whisper), caches et images de VM des applications de bureau. La configuration, les identifiants, les mémoires et les bases de conversations sont protégés. Voir [Nettoyer les données des outils d'IA](/lu-cleaner/fr/guides/ai-tools-data/).
+Les données laissées par les outils de code IA : sessions Claude Code de plus de 30 jours et données de dossiers de projets qui n'existent plus, anciens builds de Claude Code, cursor-agent et Copilot CLI, sessions et bases de journaux de Codex, transcripts d'agent et données de workspace de Cursor, contextes archivés de Conductor, modèles locaux (Ollama, LM Studio, Hugging Face, Whisper), caches et images de VM des applications de bureau. La configuration, les identifiants, les mémoires et les bases de conversations sont protégés, et les sauvegardes des bases de conversations sont <span class="risk caution">caution</span>. Voir [Nettoyer les données des outils d'IA](/lu-cleaner/fr/guides/ai-tools-data/).
 
 ## Chaîne d'outils JS
 
-Caches des gestionnaires de paquets (npm, Yarn classic et Berry, pnpm, bun, corepack), versions de node installées par nvm, fnm, mise, asdf ou volta (en gardant celles qui servent), installations npx, restes d'installations globales npm, caches Metro, Haste, Jest et Vitest, builds Expo Go pour simulateur, navigateurs Playwright, Puppeteer et Cypress, liens de shell périmés de fnm et surveillances (watches) watchman sur des dossiers supprimés. Voir [Caches de la chaîne d'outils JavaScript et versions de Node](/lu-cleaner/fr/guides/js-toolchain/).
+Caches des gestionnaires de paquets (npm, Yarn classic et Berry, pnpm, bun, corepack), versions de node installées par nvm, fnm, mise, asdf ou volta (en gardant celles qui servent), installations npx, restes d'installations globales npm, caches Metro, Haste, Jest et Vitest, builds Expo Go pour simulateur, navigateurs Playwright, Puppeteer et Cypress, liens de shell périmés de fnm et surveillances (watches) watchman sur des dossiers supprimés (les surveillances actives de Metro et de Jest sont laissées tranquilles). Le cache global de Yarn Berry est <span class="risk caution">caution</span> quand des projets Plug'n'Play s'exécutent à partir de lui, tout comme un store pnpm dont le store virtuel global est lié par vos projets. Voir [Caches de la chaîne d'outils JavaScript et versions de Node](/lu-cleaner/fr/guides/js-toolchain/).
 
 ## IDE
 
@@ -91,7 +93,7 @@ Caches et état des éditeurs : données en cache des anciens builds de VS Code 
 
 ## Conteneurs
 
-Cache de build Docker, images inutilisées et conteneurs arrêtés (nettoyés avec les commandes `prune` de Docker), volumes inutilisés (rapport seul), images disque de Docker Desktop et d'OrbStack, VM colima et Lima, données de `container` d'Apple, et caches de téléchargement des outils de VM. Les disques de VM sont signalés avec la commande qui récupère leur espace : supprimer une VM fait perdre tout ce qu'elle contient.
+Cache de build Docker, images inutilisées et conteneurs arrêtés (nettoyés avec les commandes `prune` de Docker), volumes inutilisés (rapport seul), images disque de Docker Desktop et d'OrbStack (listées uniquement avec l'accès complet au disque, puisqu'elles se trouvent dans des conteneurs d'applications), VM colima et Lima, données de `container` d'Apple, et caches de téléchargement des outils de VM. Les disques de VM sont signalés avec la commande qui récupère leur espace : supprimer une VM fait perdre tout ce qu'elle contient.
 
 ## Autres chaînes d'outils
 

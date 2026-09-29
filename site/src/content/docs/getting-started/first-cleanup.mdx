@@ -55,7 +55,7 @@ Scanners run in parallel and stream their results: categories appear and grow wh
 | Status line | The latest message, otherwise a description of the category under the cursor. |
 | Footer | Selection count and size, the cleaning mode, and the main keys. |
 
-The mode in the footer matters: **delete permanently** frees space immediately, **🗑 Trash mode** (toggled with `t`) moves items to `~/.Trash` and frees nothing until you empty it, and **○ dry-run** touches nothing.
+The mode in the footer matters: **delete permanently** frees space immediately, **🗑 Trash mode** (toggled with `t`) moves files and folders to `~/.Trash`, frees nothing until you empty it and skips worktrees and commands (they cannot be undone), and **○ dry-run** touches nothing.
 
 Press `s` to sort the categories by size, and `space` to select a whole category at once (or, if something in it is already selected, to clear it). That bulk selection deliberately skips items of risk <span class="risk caution">caution</span>: you have to open the category and pick those one by one.
 
@@ -122,6 +122,11 @@ Inside a category, "the view" is the current list, after any `/` filter. On the 
 
 When you select a <span class="risk caution">caution</span> item, the status line tells you what is at stake, for example `⚠ caution: my-app · spike/old-ui — 3 uncommitted changes`.
 
+Two kinds of items cannot be selected yet, and `space` tells you why:
+
+- an item still being measured (`…` in SIZE): its checks are not finished, select it once its size is shown;
+- an item that needs `--force`, such as an orphaned worktree folder whose uncommitted work git can no longer see. Start lu-cleaner with `--force` to delete it, or switch to Trash mode (`t`), which moves it to the Trash where you can still recover it.
+
 ## 4. Read the details
 
 On a terminal of 32 lines or more, a details panel shows the item under the cursor (bottom of the screen above). `enter` toggles it: press it to show the panel on a smaller terminal, or to hide it on a large one.
@@ -130,8 +135,9 @@ On a terminal of 32 lines or more, a details panel shows the item under the curs
 | --- | --- |
 | First line | Name, risk, kind, scanner and number of files. |
 | Path / Paths / Location | Exactly what will be removed. Group items (for example "Metro / Haste file maps (18)") list their first paths. |
-| Method | `delete`, `trash (Trash mode)`, `command: …` (the tool's own cleanup, such as `xcrun simctl delete unavailable`), `worktree` (`git worktree remove`) or `report`. |
-| Reclaim | Shown when part of the size is hardlinked elsewhere and deleting frees less. |
+| Method | `delete`, `trash (Trash mode)`, `command: …` (the tool's own cleanup, such as `xcrun simctl delete <UDID>`), `worktree` (`git worktree remove`) or `report`. In Trash mode, worktrees and commands show `skipped in Trash mode`. |
+| Blocked / Force | Shown for an item that needs `--force`, with the reason. |
+| Reclaim | Shown when part of the data is shared with other files (hardlinks or APFS clones) and deleting frees less than the size. |
 | Age | Date of last use, and whether the item is stale. |
 | Warning | Why an item is risky or was not recommended. |
 | Note | What the item is and how it comes back if you need it again. |
@@ -151,7 +157,7 @@ Press `d` (or `x`). A confirmation shows what is about to happen:
 <span class="acc">│</span>    <span class="warn">moderate </span>   57 items    37.8 GB                                       <span class="acc">│</span>
 <span class="acc">│</span>                                                                          <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Method    </span><span class="bad">delete permanently</span><span class="dim"> — frees space now</span>                          <span class="acc">│</span>
-<span class="acc">│</span>  <span class="dim">Commands  </span><span class="cy">xcrun simctl delete unavailable</span>                               <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Commands  </span><span class="cy">xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>      <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">          </span><span class="cy">git worktree remove …</span>                                         <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Running   </span><span class="bad">Xcode — items guarded by them will be skipped</span>                 <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Largest   </span><span class="dim">my-app · feature/login (2.40 GB), shop-app (2.30 GB), …</span>       <span class="acc">│</span>
@@ -160,17 +166,19 @@ Press `d` (or `x`). A confirmation shows what is about to happen:
 <span class="acc">╰──────────────────────────────────────────────────────────────────────────╯</span>
 </div>
 
-- **Risk breakdown**: how many items of each risk, and their size.
+- **Risk breakdown**: how many items of each risk, and their size. Items inside another selected item are cleaned with it and counted once.
 - **Method**: delete permanently, move to Trash, or dry-run.
-- **Commands**: the external commands that will run, such as `xcrun simctl delete unavailable` or `git worktree remove`.
+- **Skipped** (Trash mode only): worktrees and command items, which cannot be moved to the Trash and would delete permanently. Press `t` to switch back to delete mode if you want them.
+- **Commands**: the external commands that will run, such as `xcrun simctl delete <UDID>` or `git worktree remove`.
 - **Running**: some items refuse to be cleaned while an app uses them (Xcode for DerivedData, Simulator for simulators…). lu-cleaner checks those apps now; items guarded by a running app will be skipped, unless you started lu-cleaner with `--force`.
 - **Largest**: the biggest items of the selection (on terminals of 24 lines or more).
+- **Hidden**: selected items that the current `/` filter hides. They are cleaned too.
 
 Press `y` or `enter` to confirm, `n` or `esc` to cancel. You can also clean before the scan is over: the dialog then warns that sizes may be partial.
 
 ### When the selection contains caution items
 
-If at least one selected item is <span class="risk caution">caution</span>, the dialog turns red and a single key is no longer enough:
+If the selection holds at least one <span class="risk caution">caution</span> item, either selected or lying inside a selected item (cleaning the parent removes it too, and the dialog lists it), or an item cleaned only because of `--force`, the dialog turns red and a single key is no longer enough:
 
 <div class="terminal">
 <span class="bad">╭──────────────────────────────────────────────────────────────────────────╮</span>
@@ -191,7 +199,7 @@ If at least one selected item is <span class="risk caution">caution</span>, the 
 
 Type `yes` and press `enter`, or `esc` to cancel. Caution items may hold something you cannot regenerate: uncommitted work in a worktree, agent sessions, application data. A one-key confirmation is easy to hit by reflex; typing a word makes you stop and read the list.
 
-Confirming is not the last check. A worktree with uncommitted changes, a locked worktree or commits on a detached HEAD is still refused at removal time unless you started lu-cleaner with `--force`. See [Safety](/lu-cleaner/concepts/safety/).
+Confirming is not the last check. A worktree that is locked, has uncommitted or untracked changes, has commits on no branch or contains another repository is still refused at removal time unless you started lu-cleaner with `--force`. See [Safety](/lu-cleaner/concepts/safety/).
 
 ## 6. Follow the progress
 
@@ -249,6 +257,8 @@ Problems are listed first. Two numbers matter:
 - **Measured freed** is the difference in free space on your home volume before and after the cleanup, as reported by the file system.
 
 They are rarely identical, since other apps keep writing to disk. When the measured value is less than half the estimate, the summary suggests running `lu-cleaner doctor` (next section).
+
+In Trash mode, what was moved to the Trash is never counted as freed: it gets its own line, **Moved to Trash … (not freed yet)**, and a reminder to empty the Trash.
 
 Press any key to return to the lists. Cleaned items disappear; skipped and failed items stay listed and selected. To retry them, quit the app that blocked them and press `d` again.
 

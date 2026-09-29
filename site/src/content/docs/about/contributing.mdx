@@ -45,7 +45,7 @@ Stick to `scan`, `--dry-run` and the picker's dry-run mode while you develop. `m
 - cmd/lu-cleaner/main.go entry point, version set with `-ldflags`
 - internal/
   - core/ data model: `Item`, `Risk`, `Method`, `Category`, `Provider`, `Env`, `Filter`, `Recommend`, `TopLevel`
-  - fsx/ concurrent directory sizing (allocated blocks, hardlink aware, `getattrlistbulk`), size and age parsing
+  - fsx/ concurrent directory sizing (allocated blocks, hardlink and APFS clone aware, `getattrlistbulk`), protection of other apps' containers, size and age parsing
   - sysx/ free disk space, running processes, working directories of processes, APFS local snapshots
   - safety/ the `Guard`: last line of defence before any removal
   - config/ `~/.config/lu-cleaner/config.toml`
@@ -81,9 +81,14 @@ The contracts every change must keep:
 
 - **A provider never deletes anything.** It only emits `*core.Item` values. All removals go through `clean.Run`.
 - **Emitting the same `Item.ID` again replaces the previous value.** Use it to show an item with `Sizing: true` first, then its measured version. Never mutate an item after emitting it: emit `it.Clone()` if you keep working on it.
-- **`Size` is the allocated size** (`st_blocks × 512`, hardlinks counted once). Set `Reclaim` (through `SetReclaim`) when deleting frees less.
+- **`Size` is the allocated size** (`st_blocks × 512`, hardlinks counted once). Set `Reclaim` (through `SetReclaim`) when deleting frees less because the data is shared with files outside the item: hardlinks (pnpm store) and APFS clones (bun and pnpm installs, `cp -c`). `fsx.Size` computes both.
 - **`LastUsed` is the best signal of real activity**, not a folder's modification time. It drives ages, `--older-than` and smart select.
-- **Every target is re-validated by `safety.Guard`** right before removal, independently of the scanner that produced it.
+- **`Warn` and `NoRecommend` keep an item out of smart select.** `NoRecommend` is a veto for what must only be cleaned on explicit selection (irreversible, or of uncertain origin). An item with a `Warn` is also held back by `clean --yes` unless `--risk caution`.
+- **`RequireForce` makes the executor refuse the item without `--force`**, in a dry run too (orphaned worktree folders).
+- **Every target is re-validated by `safety.Guard`** right before removal, independently of the scanner that produced it. It refuses any directory holding a `.git` entry (directory, file or symlink) or laid out as a bare repository, unless the item sets `AllowGitRepo`.
+- **Never read below another app's container without Full Disk Access.** On macOS 14 and later, the first `open()` or `stat()` inside `~/Library/Containers/<app>` or `~/Library/Group Containers/<group>` blocks on a permission prompt. Check `fsx.AppDataProtected` (or `fsx.GlobPrefixProtected` for a glob) first; `fsx.Size` already returns `fsx.ErrNeedsFullDiskAccess` there.
+- **Compare paths with `safety.Key`** (case- and Unicode-normalization-insensitive, like APFS), never with plain strings.
+- **Human output never prints a raw control character**: names, paths and messages go through `sanitize` (CLI) or `safeText` (TUI), which turn control characters and bidi overrides into visible escapes.
 
 `internal/cli` receives all of its dependencies through `cli.App` (providers, config, cleaner, TUI, system queries), so its tests run the real commands against fakes. The [How it works](/lu-cleaner/concepts/how-it-works/) and [Safety model](/lu-cleaner/concepts/safety/) pages describe the behavior in more detail.
 
@@ -131,14 +136,14 @@ Most new cache locations are a few lines of data. Use the catalog when the locat
 | `ID` | yes | Unique, kebab-case; becomes the item kind (`--kind`). Prefix it with the domain (`js-`, `ai-`, `xcode-`…) |
 | `Category` | yes | One of the `core.Cat*` categories |
 | `Name` | yes | Human label |
-| `Paths` | yes | Globs starting with `~/` or `$TMPDIR/`, `filepath.Glob` syntax (`*`, `?`, `[…]`), no `**` |
+| `Paths` | yes | Globs starting with `~/` or `$TMPDIR/`, `filepath.Glob` syntax (`*`, `?`, `[…]`), no `**`. Without Full Disk Access, a path inside another app's container becomes a report-only item with a warning |
 | `Note` | yes | One sentence: what it is, and how it comes back after cleaning |
 | `Risk` | yes | `core.RiskSafe`, `RiskModerate`, `RiskCaution` or `RiskNever`. The zero value is `RiskSafe`: choose deliberately |
 | `Method` | no | Default `MethodDelete`. `MethodCommand` needs `Command`; `MethodReport` never cleans; `MethodWorktree` is not allowed here |
 | `Command`, `Requires` | no | Argv of the cleanup command; binary that must be on `PATH` for the entry to be evaluated at all |
 | `Exclude` | no | Base-name globs of matches to drop |
 | `Mode` | no | `Group` (default: all matches form one item) or `Each` (one item per match) |
-| `KeepLatest` | no | With `Mode: Each`, keep the N most recently modified matches out of the list |
+| `KeepLatest` | no | With `Mode: Each`, keep the N most recently modified matches out of the list (raised to the `keep_latest` setting when that is higher) |
 | `OlderThan` | no | Only matches whose modification time is older than this |
 | `ProcessGuard` | no | Processes that must not run while it is cleaned (exact executable name, or a path substring containing `/`) |
 | `MinBytes` | no | Below this size the item is not selectable (and hidden in `Each` mode) |
@@ -218,7 +223,9 @@ Guidelines for scanners:
 - Run external commands through `env.Output` (the `Runner`), with a timeout, and only read-only ones: `brew cleanup -n`, `watchman --no-spawn`, `sqlite3 -readonly` on an immutable URI. `env.Runner` already disables git's optional locks.
 - Measure with `fsx.Size` without options: the engine gives every scan a shared cache, so a folder measured by two scanners is walked once.
 - Consult `env.IsProtected` and `env.Excluded` before proposing a path. Report items living on another volume with `MethodReport` instead of proposing them.
-- Set `Warn` for anything a human should look at first (an app running, a process inside, a version pinned by a project). A warning keeps the item out of smart select.
+- Set `Warn` for anything a human should look at first (an app running, a process inside, a version pinned by a project). A warning keeps the item out of smart select, and out of `clean --yes` without `--risk caution`.
+- Set `NoRecommend` when the item must never be preselected whatever its age: data that does not come back, or whose owner may still want it. Setting `Recommended = false` is not a veto.
+- Check `fsx.AppDataProtected` before touching anything under `~/Library/Containers` or `~/Library/Group Containers`, and report such items instead of reading them.
 - Use `ProcessGuard`, `RequireSibling` and `Recheck` to express conditions the executor must re-verify at clean time. `Recheck` must fail closed.
 - Prefer the owning tool's cleanup command (`MethodCommand`) when the tool keeps its own bookkeeping.
 - A panic inside `Scan` is caught and shown as a scanner error, but not in goroutines the scanner starts itself. Return errors instead of panicking, and stop quickly when `ctx` is cancelled.
@@ -273,7 +280,8 @@ Any pull request that adds or changes something that can be deleted is reviewed 
 - **What if it is in use?** Declare a `ProcessGuard`, a warning, or a `Recheck` for state that can change between scan and clean. Checks fail closed.
 - **Could the path be something else?** Generic names need markers, content signatures, or git-ignore checks. Glob patterns must not match more than intended.
 - **Is the scanner read-only?** No writes and no commands with side effects at scan time.
-- **Is smart select still conservative?** Forcing `Recommended` needs a reason stronger than size.
-- **Does the guard still hold?** Changes to `internal/safety/guard.go` need tests in `guard_test.go`. Adding a protected path is always welcome; removing one needs a very good reason.
+- **Is smart select still conservative?** Forcing `Recommended` needs a reason stronger than size. Irreversible or uncertain data gets `NoRecommend`.
+- **Could the scan block on a macOS prompt?** Nothing below another app's container is read without Full Disk Access.
+- **Does the guard still hold?** Changes to `internal/safety/guard.go` need tests in `internal/safety/`. Adding a protected path is always welcome; removing one needs a very good reason.
 
 Test your change with `--dry-run` on your own machine, and paste the relevant part of `scan` or `clean --dry-run` output in the pull request, with your own paths and names redacted (`~/dev/my-app`, `feature/login`).

@@ -33,11 +33,12 @@ lu-cleaner config path   # print the path of the file
 The file is validated every time it is loaded. lu-cleaner refuses to scan or clean until the file is fixed if it contains:
 
 - an unknown key, such as a typo like `stale_afer`;
-- a size, age or category name that cannot be parsed.
+- a size or age that cannot be parsed;
+- an undefined `$VARIABLE` in `exclude` or `protect`.
 
-This strictness is deliberate: a misspelled `protect` or `exclude` that was silently ignored would leave unprotected the very paths you meant to protect. `config edit` validates the file when the editor exits and reports any error.
+This strictness is deliberate: a misspelled `protect` or `exclude` that was silently ignored, or that expanded to another path, would leave unprotected the very paths you meant to protect. `config edit` checks the file when the editor exits and reports TOML syntax errors and unknown keys; the other errors are reported by the next command that loads it. An unknown name in `disabled_categories` is only a warning, since that key can only hide things.
 
-Paths in every key accept `~` for your home folder. Relative paths are relative to your home folder.
+Paths in every key accept `~` for your home folder. Relative paths are relative to your home folder. `exclude` and `protect` also expand environment variables (`$HOME`, `${TMPDIR}`, any other variable; `$$` is a literal `$`).
 
 ## Example
 
@@ -81,12 +82,12 @@ extra_artifacts = ["tmp-build"]
 | [`max_depth`](#max_depth) | integer | `8` | Depth of the project scan below each root. |
 | [`min_size`](#min_size) | size | `"1MB"` | Hide smaller items in lists. |
 | [`stale_after`](#stale_after) | age | `"14d"` | When an unused item becomes stale. |
-| [`keep_latest`](#keep_latest) | integer | `1` | Versions kept for versioned AI tool CLIs. |
+| [`keep_latest`](#keep_latest) | integer | `1` | Newest versions of versioned installs kept out of smart select. |
 | [`disabled_categories`](#disabled_categories) | list of categories | `[]` | Categories skipped entirely. |
 | [`use_trash`](#use_trash) | boolean | `false` | Move to the Trash instead of deleting. |
 | [`extra_artifacts`](#extra_artifacts) | list of names | `[]` | More project artifact folder names. |
 
-Command-line flags take precedence over the file: `--root` replaces `roots`, `--min-size` replaces `min_size`, and `--trash` turns Trash mode on even when `use_trash = false`.
+Command-line flags take precedence over the file: `--root` replaces `roots` for the project artifacts scan, `--min-size` replaces `min_size`, `--trash` turns Trash mode on even when `use_trash = false`, and `--trash=false` turns it off when `use_trash = true`.
 
 ### `roots`
 
@@ -98,7 +99,8 @@ roots = ["~/dev", "~/work/clients"]
 
 - Folders that do not exist are ignored.
 - A folder nested in another root is dropped: the outer one already covers it.
-- `lu-cleaner --root <dir>` (repeatable) and the positional arguments of `lu-cleaner artifacts <dir>…` replace `roots` for one run. Those must exist, and relative paths are resolved from the current directory.
+- Every root is protected as a whole: lu-cleaner cleans inside it, never the root itself nor a folder containing it.
+- `lu-cleaner --root <dir>` (repeatable) and the positional arguments of `lu-cleaner artifacts <dir>…` replace `roots` for one run, **for the project artifacts scan only**: exactly those folders are scanned, without the worktree roots and the built-in extra folders. The other scanners keep your configured roots, since they read them to learn what your projects use (Node, Ruby and Android SDK versions, main repositories of worktrees). Those folders must exist, relative paths are resolved from the current directory, and `/` is refused.
 
 #### Auto-detection
 
@@ -128,7 +130,7 @@ Extra folders where tools create git worktrees. They are added to the built-in l
 | `~/.superset/worktrees` | Superset |
 | `~/.worktrees` | Manual or other tools |
 
-Only folders that exist are used. Each one is searched, up to four levels deep, for linked worktrees (directories whose `.git` is a file), and scanned for project artifacts like a root.
+Only folders that exist are used. Each one is searched, up to four levels deep, for linked worktrees (directories whose `.git` is a file), and scanned for project artifacts like a root, unless you pass roots on the command line.
 
 You rarely need this key. Worktrees are also found through `git worktree list` on every repository found under your roots, and in the `.claude/worktrees`, `.worktrees` and `worktrees` folders of each repository (and a `<repo>-worktrees` folder next to it). Add a folder here when a tool creates worktrees in a custom location **and** the main repositories are outside your roots.
 
@@ -146,7 +148,9 @@ Paths lu-cleaner never looks inside and never cleans. Use it for folders that ar
 exclude = ["~/dev/legacy-monorepo", "~/datasets"]
 ```
 
-Matching is by whole path components: `~/dev/legacy` excludes `~/dev/legacy/app` but not `~/dev/legacy-app`. Excluded paths are also handed to the safety guard, so nothing inside them, and nothing containing them, can be deleted.
+Matching is by whole path components: `~/dev/legacy` excludes `~/dev/legacy/app` but not `~/dev/legacy-app`. Like APFS, it ignores case and Unicode normalization. Entries are literal paths, never patterns (`~/dev/[wip] shop` is that folder), and an entry that goes through a symlink also covers its real location. Excluded paths are also handed to the safety guard, so nothing inside them, and nothing containing them, can be deleted, and every scanner's output is filtered against them.
+
+`lu-cleaner config show` lists the `exclude` and `protect` entries that do not exist: harmless, but often a typo.
 
 ### `protect`
 
@@ -157,7 +161,7 @@ Paths that are never cleaned, nor anything inside them, nor anything that contai
 protect = ["~/.android/avd/Pixel_8_API_35.avd", "~/Library/Developer/Xcode/Archives"]
 ```
 
-Scanners do not propose protected paths, and the safety guard refuses them at deletion time if they show up anyway.
+Entries follow the same rules as `exclude`: literal paths, case- and Unicode-insensitive, `~` and `$VARS` expanded, symlinks resolved. Scanners do not propose protected paths, and the safety guard refuses them at deletion time if they show up anyway.
 
 **`exclude` or `protect`?** Both prevent deletion. `exclude` also stops lu-cleaner from reading the path at all, which speeds up scans. Use `protect` for one specific thing inside a folder that should otherwise be scanned normally, such as one emulator among many.
 
@@ -195,13 +199,21 @@ Ages accept `h` (hours), `d` (days), `w` (weeks), `m` (months of 30 days) and `y
 
 ### `keep_latest`
 
-How many of the most recent versions to keep for versioned installs, besides the ones that are active, pinned or running. Default `1`, minimum `1`.
+How many of the most recent versions to keep for versioned installs, besides the ones that are active, pinned or running. The kept versions are never preselected by smart select (some are not listed at all). Default `1`, minimum `1`.
 
 ```toml
 keep_latest = 2
 ```
 
-In the current version, `keep_latest` applies to the old versions of AI tool CLIs: Claude Code (standalone, and the copies bundled by the Claude desktop app and by Conductor), cursor-agent, the Cursor `origin` CLI, Conductor's bundled Codex, GitHub Copilot CLI and vibe-kanban. Other versioned tools follow their own rules: for example, a Node.js version is never recommended while it is a default, pinned by a project, on your `PATH` or running, and the newest version of each Android SDK package (NDK, build-tools…) is never recommended. See [Scanners](/lu-cleaner/reference/scanners/).
+`keep_latest` applies to:
+
+- AI tool versions: Claude Code (standalone, and the copies bundled by the Claude desktop app and by Conductor), cursor-agent, the Cursor `origin` CLI, Conductor's bundled agents, GitHub Copilot CLI, vibe-kanban;
+- Android SDK packages (NDK, build-tools, platforms, CMake, sources), JetBrains IDEs and Android Studio;
+- catalog entries that keep their newest copies (Puppeteer and Cypress browsers, Kotlin/Native, Skiko): it raises their own count;
+- Node.js versions, per version manager;
+- iOS simulator runtimes, per platform.
+
+Gradle is not versioned this way. Other rules still apply on top: for example, a Node.js version is never recommended while it is a default, pinned by a project, on your `PATH` or running. See [Scanners](/lu-cleaner/reference/scanners/).
 
 ### `disabled_categories`
 
@@ -211,7 +223,7 @@ Categories skipped entirely: their scanners do not run unless another enabled ca
 disabled_categories = ["containers", "langs", "system"]
 ```
 
-Valid names are `worktrees`, `artifacts`, `simulators`, `xcode`, `android`, `ai`, `js`, `ide`, `containers`, `langs` and `system`. See [Categories](/lu-cleaner/concepts/categories/).
+Valid names are `worktrees`, `artifacts`, `simulators`, `xcode`, `android`, `ai`, `js`, `ide`, `containers`, `langs` and `system`. A tool name (such as `docker`, `cursor` or `node_modules`) disables the whole category it belongs to. An unknown name prints a warning and is ignored. See [Categories](/lu-cleaner/concepts/categories/).
 
 A disabled category passed to `-c` is ignored. When every category you pass is disabled, for example `-c containers` with the configuration above, the command fails with an error that points back to this key.
 
@@ -223,10 +235,10 @@ Move items to `~/.Trash` instead of deleting them:
 use_trash = true
 ```
 
-It is the same as passing `--trash` to every command, and the picker starts in Trash mode (press `t` to switch back to delete mode for the session). Only items that would be deleted are affected: commands such as `xcrun simctl delete unavailable` and `git worktree remove` run as usual.
+It is the same as passing `--trash` to every command, and the picker starts in Trash mode (press `t` to switch back to delete mode for the session); `--trash=false` turns it off for one command. Only files and folders are moved to the Trash: worktree removals and commands such as `xcrun simctl delete <UDID>` would delete permanently, so they are skipped, and so are items already in the Trash.
 
 :::caution
-Moving to the Trash frees **nothing** until you empty it, and the default is `false` for that reason. The summary of each cleanup reminds you of it. The safety of lu-cleaner does not rely on the Trash: use `--dry-run` and the confirmation dialog to check what will be removed.
+Moving to the Trash frees **nothing** until you empty it, and the default is `false` for that reason. Summaries and the history count what was moved to the Trash apart from what was freed. The safety of lu-cleaner does not rely on the Trash: use `--dry-run` and the confirmation dialog to check what will be removed.
 :::
 
 ### `extra_artifacts`
@@ -254,7 +266,7 @@ To clean only these: `lu-cleaner clean --yes -k extra-artifact --dry-run`.
 | `XDG_STATE_HOME` | The history is `$XDG_STATE_HOME/lu-cleaner/history.jsonl`. Default: `~/.local/state`. |
 | `NO_COLOR` | Any non-empty value disables colors, in command output and in the interactive screens (same as `--no-color`). `TERM=dumb` also disables them in command output. |
 | `VISUAL`, `EDITOR` | Editor used by `lu-cleaner config edit`, `VISUAL` first. Without either, the file opens with `open -t`. |
-| `TMPDIR` | Your per-user temporary folder. Caches in it (Metro, Jest, Xcode tools…) are scanned, and the safety guard allows deletions inside it. |
+| `TMPDIR` | Your per-user temporary folder. Caches in it (Metro, Jest, Xcode tools…) are scanned, and the safety guard allows deletions inside your per-user temporary area only when `TMPDIR` is private to you: a shared folder such as `/tmp` never. |
 | `LU_WALKERS` | Maximum number of directories read concurrently while measuring sizes. Default: 3 × the number of CPU cores, at least 8. Lower it to reduce disk pressure during scans. |
 | `LU_NO_BULK` | Any non-empty value measures sizes with one `lstat` call per entry instead of the macOS `getattrlistbulk` bulk call. Slower: only useful to troubleshoot a size difference. |
 

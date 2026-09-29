@@ -36,11 +36,11 @@ In `worktrees` and `artifacts`, which have no category overview, `←`, `tab` an
 | --- | --- |
 | `space` | Item list: select or unselect the item under the cursor. Category overview: select every cleanable item of the category **except** <span class="risk caution">caution</span> ones; if something in the category is already selected, unselect the whole category instead. |
 | `a` | Smart select the view: recommended items on, every other item off. |
-| `A` | Select every cleanable item of the view, <span class="risk caution">caution</span> items included. |
+| `A` | Select every cleanable item of the view, <span class="risk caution">caution</span> items included (items still being measured are left out). |
 | `n` | Unselect every item of the view. |
 | `i` | Invert the selection of the view. |
 
-"The view" is the current item list (after any text filter) when a category is open, and every visible item when you are on the category overview. Report-only items can never be selected: `space` on one shows why in the status line.
+"The view" is the current item list (after any text filter) when a category is open, and every visible item when you are on the category overview. Some items cannot be selected, and `space` on one shows why in the status line: report-only items, items still being measured (`…`), and items that need `--force` (orphaned worktree folders), which become selectable when you started lu-cleaner with `--force` or in Trash mode.
 
 Smart select also runs once, automatically, when the scan finishes: always with `lu-cleaner`, with `lu-cleaner clean` unless you pass `--no-smart`, and with `worktrees`, `artifacts` and `devices` only when you pass `--smart`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
 
@@ -57,7 +57,7 @@ Smart select also runs once, automatically, when the scan finishes: always with 
 | Key | Action |
 | --- | --- |
 | `d` / `x` | Clean the selection. Opens the [confirmation dialog](#confirmation-dialog). |
-| `t` | Toggle Trash mode: selected items are moved to `~/.Trash` instead of being deleted. Space is only freed once you empty the Trash. |
+| `t` | Toggle Trash mode: selected files and folders are moved to `~/.Trash` instead of being deleted; worktrees and commands are skipped, since they would delete permanently. Space is only freed once you empty the Trash. |
 | `o` | Reveal the item under the cursor in Finder (item list only). |
 | `?` | Help overlay. It also lists the scanners that failed, if any. |
 | `q` / `ctrl+c` | Quit. |
@@ -80,12 +80,12 @@ A kept filter stays active while you browse. Press `esc` on the category overvie
 
 ### Confirmation dialog
 
-The keys depend on whether the selection contains <span class="risk caution">caution</span> items.
+The keys depend on whether the selection contains <span class="risk caution">caution</span> items, selected or lying inside a selected item, or items cleaned only because of `--force`.
 
 | Selection | Confirm | Cancel |
 | --- | --- | --- |
-| No caution item | `y` or `enter` | `n`, `esc` or `q` |
-| At least one caution item | type `yes`, then `enter` | `esc` |
+| None of those | `y` or `enter` | `n`, `esc` or `q` |
+| At least one of those | type `yes`, then `enter` | `esc` |
 
 While typing `yes`, `backspace`, `alt+backspace`, `ctrl+w` and `ctrl+u` edit the input. `ctrl+c` quits lu-cleaner without cleaning anything.
 
@@ -115,13 +115,13 @@ While typing `yes`, `backspace`, `alt+backspace`, `ctrl+w` and `ctrl+u` edit the
 
 | Key | Action |
 | --- | --- |
-| `space` | Mark or unmark the entry under the cursor, then move down. |
+| `space` | Mark or unmark the entry under the cursor, then move down. An entry the analyzer never deletes cannot be marked, and the status line says why. |
 | `esc` | Clear every mark. |
 | `d` / `x` / `delete` | Delete the marked entries, or the entry under the cursor when nothing is marked. |
 
 `delete` is the forward-delete key (`fn` + `⌫` on a Mac keyboard). The `⌫` key alone sends `backspace`, which goes to the parent directory.
 
-Deleting always asks you to type `yes` and press `enter` (`esc` cancels), because anything can be selected in the analyzer. Every path still goes through the [safety guard](/lu-cleaner/concepts/safety/), and a linked git worktree is removed with `git worktree remove` instead of being deleted. `--dry-run` and `--trash` apply here too.
+Deleting always asks you to type `yes` and press `enter` (`esc` cancels), because anything can be selected in the analyzer. Every path still goes through the [safety guard](/lu-cleaner/concepts/safety/), and a verified linked git worktree is removed with `git worktree remove` instead of being deleted. Git repositories, submodules, git data and folders that contain a repository are never deleted from the analyzer. Without Full Disk Access, other apps' containers are shown as `🔒 app container — needs Full Disk Access` and never opened. `--dry-run` and `--trash` apply here too.
 
 While a deletion runs, `ctrl+c` cancels the remaining entries and quits once the ones in progress are done. On the result screen, any key returns to the list.
 

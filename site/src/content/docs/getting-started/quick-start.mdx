@@ -95,15 +95,15 @@ It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/).
    Plan: 131 items · 69.0 GB (dry run)
    &nbsp;
    <span class="acc">Dry run:</span> nothing was deleted — 130 items would free 67.7 GB.
-   &nbsp; <span class="dim">Unavailable simulators (4): would run: xcrun simctl delete unavailable</span>
+   &nbsp; <span class="dim">iPhone 11 · iOS 16.4 (unavailable): would run: xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>
    <span class="warn">Skipped:</span> 1
    &nbsp; - codex:my-app › node_modules: in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules
    </div>
 
-   A dry run re-runs the last-moment safety checks of a real run (safety guard, running apps, files in use) without deleting anything. That is why it can already report skipped items: here an agent is still running tests in a worktree, so its `node_modules` is in use. Only the final git checks of a worktree removal (uncommitted changes, lock) wait for the real run.
+   A dry run re-runs every last-moment check of a real run without deleting anything: the safety guard, running apps, files in use, and the git checks of a worktree removal (lock, uncommitted changes, commits on no branch, nested repositories). That is why it can already report skipped items: here an agent started running tests in a worktree after the scan, so its `node_modules` is in use.
 
    :::note[Guard rails]
-   Non-interactive cleaning is deliberately strict. It refuses to run without a narrowing filter (`--smart`, `--category`/`-c` or `--kind`/`-k`), so a bare `lu-cleaner clean --yes` exits with an error instead of cleaning everything. It never includes items of risk <span class="risk caution">caution</span> (dirty worktrees, sessions, user data) unless you pass `--risk caution`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/) for the reasoning.
+   Non-interactive cleaning is deliberately strict. It refuses to run without a narrowing filter (`--smart`, `--category`/`-c` or `--kind`/`-k`), so a bare `lu-cleaner clean --yes` exits with an error instead of cleaning everything. It never includes items of risk <span class="risk caution">caution</span> (dirty worktrees, sessions, user data), nor items the scan flagged with a warning (in use by a process, ignored `.env` files that would be lost…), unless you pass `--risk caution`: those are listed under **Held back** instead. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/) for the reasoning.
    :::
 
 4. **Clean**
@@ -124,6 +124,8 @@ It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/).
    </div>
 
    *Estimated* is the sum of what the cleaned items were expected to free. *Measured* is the change in free space reported by the file system before and after. A small gap is normal (other apps write to disk meanwhile). A large one means something still holds the space: see the next step.
+
+   With `--trash`, files and folders are moved to the Trash instead: the summary counts them apart (`moved to the Trash`), never as freed, and worktrees and command items are skipped, since they cannot be undone.
 
    To clean only part of the recommendation, combine `--smart` with a category:
 
@@ -169,15 +171,18 @@ It assumes lu-cleaner is [installed](/lu-cleaner/getting-started/installation/).
 
    <div class="terminal">
    <span class="dim">$ </span>lu-cleaner history \-\-limit 4
-   <span class="dim">TIME              STATUS   METHOD       SIZE  NAME                         PATH/COMMAND</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  delete    1.42 GB  shop-app › node_modules      <span class="dim">\~/dev/shop-app/node_modules</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  worktree  2.40 GB  my-app · feature/login       <span class="dim">\~/.codex/worktrees/a1b2/my-app</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  command   1.10 GB  Unavailable simulators (4)   <span class="dim">$ xcrun simctl delete unavailable</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="warn">skipped</span>  delete    1.28 GB  codex:my-app › node_modules  <span class="dim">\~/.codex/worktrees/a1b2/my-app/node_modules</span>
+   <span class="dim">TIME              STATUS   METHOD       SIZE    FREED  NAME                                  PATH/COMMAND</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  delete    1.42 GB  1.42 GB  shop-app › node_modules               <span class="dim">\~/dev/shop-app/node_modules</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  worktree  2.40 GB  2.40 GB  my-app · feature/login                <span class="dim">\~/.codex/worktrees/a1b2/my-app</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  command    310 MB   310 MB  iPhone 11 · iOS 16.4 (unavailable)    <span class="dim">$ xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="warn">skipped</span>  delete    1.28 GB           codex:my-app › node_modules           <span class="dim">\~/.codex/worktrees/a1b2/my-app/node_modules</span>
+   &nbsp;   <span class="warn">! in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules</span>
    &nbsp;
    <span class="dim">Showing the last 4 of 131 entries (\-\-limit 0 for all).</span>
    Total freed: 67.7 GB over 130 cleaned items (\~/.local/state/lu-cleaner/history.jsonl)
    </div>
+
+   **FREED** is what was really freed: less than **SIZE** when the data is shared with other files (hardlinks or APFS clones), empty for skipped items. Moves to the Trash free nothing until you empty it, so they are totalled apart.
 
 </Steps>
 

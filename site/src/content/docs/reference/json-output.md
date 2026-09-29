@@ -45,7 +45,8 @@ Without `--top`, the JSON lists **every** item that passes the filters (the text
 | `totals.size` | integer | What cleaning every matching cleanable item would free (really-freed sizes, nested paths counted once) |
 | `totals.recommended` | integer | The same for recommended items |
 | `totals.items` | integer | Number of cleanable items |
-| `totals.by_category` | object | Freeable bytes per category ID |
+| `totals.by_category` | object | Freeable bytes per category ID. Values overlap when items of one category lie inside items of another (artifacts inside worktrees) |
+| `totals.shared_by_category` | object | For each category with such an overlap, the part of its bytes inside items of another category. `size` counts those bytes once. Always present, `{}` when none |
 | `errors` | object | Scanner ID → error message, for scanners that failed. Always present, `{}` when none |
 | `timing_ms` | object | Scanner ID → scan duration in milliseconds |
 | `took_ms` | integer | Total scan duration in milliseconds |
@@ -65,7 +66,7 @@ Totals are computed over all matching items, even when `--top` shortens `items`.
 | `paths` | array | The paths removed, for group items (then `path` is absent) |
 | `location` | string | Where a group or command item acts, for display |
 | `size` | integer | Allocated bytes, hardlinks counted once |
-| `reclaim` | integer | Bytes really freed, only present when less than `size` (hardlinks shared elsewhere) |
+| `reclaim` | integer | Bytes really freed, only present when less than `size` (data shared with files outside the item through hardlinks or APFS clones) |
 | `freed` | integer | Best estimate of bytes freed: `reclaim` when present, else `size`. Always present |
 | `files` | integer | Number of files |
 | `last_used` | string | Best estimate of the last activity |
@@ -79,7 +80,8 @@ Totals are computed over all matching items, even when `--top` shortens `items`.
 | `project` | string | Project or main repository the item belongs to |
 | `meta` | object | Scanner-specific details, all values are strings |
 | `note` | string | What the item is and how it comes back |
-| `warn` | string | Warning; an item with a warning is never recommended |
+| `warn` | string | Warning; an item with a warning is never recommended, and `clean --yes` holds it back unless `--risk caution` |
+| `require_force` | boolean | `true` when cleaning refuses the item without `--force`, in a dry run too (orphaned worktree folders). Omitted otherwise |
 | `recommended` | boolean | Selected by smart select. Always present |
 | `cleanable` | boolean | `false` for report-only, non-selectable and `never` items. Always present |
 
@@ -187,7 +189,8 @@ Abridged and anonymized: three items out of a full scan.
     "size": 61200000000,
     "recommended": 23400000000,
     "items": 214,
-    "by_category": { "artifacts": 18300000000, "simulators": 21500000000, "worktrees": 21400000000 }
+    "by_category": { "artifacts": 18300000000, "simulators": 21500000000, "worktrees": 21400000000 },
+    "shared_by_category": { "artifacts": 1280000000 }
   },
   "errors": {},
   "timing_ms": { "apple": 5120, "artifacts": 9870, "worktrees": 11240 },
@@ -210,7 +213,7 @@ lu-cleaner scan --json | jq '.totals.by_category'
 
 ## `clean --yes --json`
 
-The result of a non-interactive clean or dry run. `--json` requires `--yes` (the interactive picker has no JSON output). `artifacts`, `worktrees` and `devices` produce the same document with `--yes --json`.
+The result of a non-interactive clean or dry run. `--json` requires `--yes` (the interactive picker has no JSON output). `artifacts`, `worktrees` and `devices` produce the same document with `--yes --json`. Items held back because of a warning are not in the document: a `warning: N items with a warning left out (…)` line goes to stderr instead.
 
 ```bash
 lu-cleaner clean --yes --smart --dry-run --json
@@ -222,10 +225,11 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 | Field | Type | Description |
 |---|---|---|
 | `results` | array | One entry per processed item, in completion order. `[]` when nothing matched |
-| `estimated_freed` | integer | Sum of `freed` over the `done` results. Always `0` in a dry run |
+| `estimated_freed` | integer | Space really freed: sum of `freed` over the `done` results, plus what failed deletions freed before failing. Moves to the Trash are never counted. Always `0` in a dry run |
+| `trashed` | integer | Bytes moved to the Trash by `done` results: still used until the Trash is emptied. Always present |
 | `disk_before`, `disk_after` | object | Home volume `total`, `free`, `used` before and after the run |
 | `measured_freed` | integer | `disk_after.free − disk_before.free`: what the filesystem reports. Can be lower than estimated (snapshots, Trash, open files) and is noise in a dry run |
-| `trash` | boolean | Items were moved to the Trash instead of deleted |
+| `trash` | boolean | Trash mode: files and folders were moved to the Trash, worktree and command items were skipped |
 | `dry_run` | boolean | Nothing was executed |
 | `took` | integer | Total duration, in nanoseconds |
 
@@ -235,14 +239,16 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 |---|---|---|
 | `item` | object | The item, with the same fields as in `scan --json` minus the computed ones (`category_title`, `age_days`, `cleanable`, `freed`). `recommended` only appears when the scanner forced it |
 | `status` | string | `done`, `dry-run`, `skipped` or `failed` |
-| `freed` | integer | Estimated bytes freed for `done` and `dry-run` results, `0` otherwise |
-| `message` | string | What happened (`would delete …`, `would run: xcrun simctl delete …`, `moved to …`, `git worktree removed (branch kept)`) or why the item was skipped |
+| `method` | string | Method actually used, or that would be in a dry run: `trash` for a `delete` item cleaned in Trash mode |
+| `freed` | integer | Estimated bytes really freed for `done` and `dry-run` results, what a `failed` deletion freed before failing, `0` otherwise. A move to the Trash frees nothing: its size is in `trashed` |
+| `trashed` | integer | Bytes moved to the Trash (or that would be, in a dry run). Omitted when `0` |
+| `message` | string | What happened (`would delete …`, `would run: xcrun simctl delete …`, `would move to Trash: …`, `moved to …`, `git worktree removed (branch kept)`, `orphaned worktree directory removed`) or why the item was skipped (`needs --force: …`, `not possible in Trash mode (it would delete permanently)`…) |
 | `error` | string | Failure reason, for `failed` results |
 | `took` | integer | Duration, in nanoseconds |
 
 ### Example
 
-`lu-cleaner clean --yes -c js,xcode --dry-run --json` with Xcode open, abridged to two results:
+`lu-cleaner clean --yes -c js,xcode --risk caution --dry-run --json` with Xcode open, abridged to two results. Without `--risk caution`, the DerivedData item, which carries a warning, would be held back instead of skipped:
 
 ```json
 {
@@ -263,6 +269,7 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
         "note": "npm's content cache; the next `npm install` / `npx` re-downloads what it needs. Existing node_modules are unaffected."
       },
       "status": "dry-run",
+      "method": "delete",
       "freed": 1140000000,
       "message": "would delete /Users/me/.npm/_cacache",
       "took": 8167084
@@ -282,12 +289,14 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
         "warn": "Xcode is running — quit it before cleaning"
       },
       "status": "skipped",
+      "method": "delete",
       "freed": 0,
       "message": "Xcode is running — quit it first (or use --force)",
       "took": 2140
     }
   ],
   "estimated_freed": 0,
+  "trashed": 0,
   "disk_before": { "total": 500000000000, "free": 43000000000, "used": 457000000000 },
   "disk_after": { "total": 500000000000, "free": 42999920000, "used": 457000080000 },
   "measured_freed": -80000,
@@ -297,7 +306,7 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 }
 ```
 
-In a dry run, add up the per-result `freed` values to get what the run would free:
+In a dry run, add up the per-result `freed` values to get what the run would free (and `trashed` for what it would move to the Trash):
 
 ```bash
 lu-cleaner clean --yes --smart --dry-run --json \
@@ -322,7 +331,7 @@ lu-cleaner doctor --json --no-scan  # disk, snapshots, Trash and running apps on
 | `trash` | object | `path`, `size`, `files`, `readable` (`false` without Full Disk Access), optional `note` |
 | `running` | array | Apps that block some cleanups: `app`, `processes`, `impact` |
 | `scanned` | boolean | `false` with `--no-scan` |
-| `categories` | array | Per category: `id`, `title`, `size`, `recommended`, `items` (empty with `--no-scan`) |
+| `categories` | array | Per category: `id`, `title`, `size`, `recommended`, `items`, and `shared` (bytes inside items of another category) when not `0`. Empty with `--no-scan` |
 | `total`, `recommended` | integer | Freeable bytes, all and recommended |
 | `errors` | object | Scanner errors, when any |
 | `use_trash` | boolean | `use_trash` setting of the configuration |
@@ -361,10 +370,23 @@ lu-cleaner history --json --limit 0   # all entries
 |---|---|---|
 | `path` | string | The history file |
 | `total` | integer | Number of entries in the file |
-| `freed` | integer | Sum of `size` over all `done` entries of the file (not only the ones shown) |
+| `freed` | integer | Sum of `freed` over all entries of the file (not only the ones shown): the space really freed. Moves to the Trash are not counted |
+| `trashed` | integer | Sum of `size` over the `done` moves to the Trash: still used until the Trash is emptied |
 | `entries` | array | Newest first, at most `--limit` (30 by default, `0` = all) |
 
-Each entry: `time`, `kind`, `category`, `name`, `path` (path items) or `command` (command items), `method` (`trash` when Trash mode turned a deletion into a move), `status` (`done`, `skipped` or `failed`; dry runs are never recorded), `size` (the item's measured size) and `error`.
+Each entry has these fields:
+
+| Field | Description |
+|---|---|
+| `time`, `kind`, `category`, `name` | When, and which item |
+| `path` | The path removed, for single-path items |
+| `location`, `paths`, `count` | For a group item: its display location, its first 50 paths and the total number of paths |
+| `command` | The command run, for command items |
+| `method` | Method actually used: `trash` when Trash mode turned a deletion into a move |
+| `status` | `done`, `skipped` or `failed`; dry runs are never recorded |
+| `size` | The item's measured size |
+| `freed` | Bytes really freed: less than `size` when data is shared through hardlinks or APFS clones, what a failed deletion freed before failing, `0` for moves to the Trash, skipped items and other failures. Always present |
+| `error`, `message` | Failure reason, and what happened or why the item was skipped |
 
 ```json
 {
@@ -377,7 +399,8 @@ Each entry: `time`, `kind`, `category`, `name`, `path` (path items) or `command`
       "command": "xcrun simctl delete A1B2C3D4-0000-4000-8000-000000000001",
       "method": "command",
       "status": "done",
-      "size": 18341888
+      "size": 18341888,
+      "freed": 18341888
     },
     {
       "time": "2026-09-27T18:46:20.112004+02:00",
@@ -387,23 +410,25 @@ Each entry: `time`, `kind`, `category`, `name`, `path` (path items) or `command`
       "path": "/Users/me/dev/shop-app/node_modules",
       "method": "delete",
       "status": "done",
-      "size": 1210000000
+      "size": 1210000000,
+      "freed": 84000000
     }
   ],
   "freed": 37100000000,
   "path": "/Users/me/.local/state/lu-cleaner/history.jsonl",
-  "total": 88
+  "total": 88,
+  "trashed": 0
 }
 ```
 
-The file itself is JSON Lines with the same entry format, oldest first, so you can also read it directly: `jq -s 'map(select(.status == "done")) | length' ~/.local/state/lu-cleaner/history.jsonl`.
+The file itself is JSON Lines with the same entry format, oldest first, so you can also read it directly: `jq -s 'map(select(.status == "done")) | length' ~/.local/state/lu-cleaner/history.jsonl`. Lines written by older versions have no `freed` field: `history` then assumes the full size for a done permanent removal and `0` otherwise.
 
 ## Other commands
 
 | Command | Output |
 |---|---|
 | `catalog --json` | Array of catalog entries: `id`, `category`, `name`, `paths`, `risk`, `method`, `mode` (`group` or `each`) and, when set, `exclude`, `command`, `requires`, `process_guard`, `note`, `older_than`, `keep_latest`, `allow_git_repo`, `recommended`, `min_bytes`, `files` |
-| `config show --json` | Effective configuration: `path`, `exists`, `config` (the file's values), resolved `roots` and `roots_source`, `worktree_roots`, `exclude`, `protect`, `stale_after`, `min_size` (bytes), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
+| `config show --json` | Effective configuration: `path`, `exists`, `config` (the file's values), resolved `roots` and `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (the `exclude` and `protect` entries that do not exist), `stale_after`, `min_size` (bytes), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
 | `analyze [path] --json` | `root`, `total` and `entries` (every direct child: `name`, `path`, `dir`, `size`, `files`, `unreadable`) |
 | `version --json` | `version`, `go`, `os`, `arch` |
 
@@ -413,8 +438,9 @@ The file itself is JSON Lines with the same entry format, oldest first, so you c
 |---|---|
 | `0` | Success. Items skipped for safety reasons do not change the exit code; check `results[].status`. |
 | `1` | Runtime failure: an invalid configuration file, an I/O error, or at least one item `failed` during a clean. |
-| `2` | Usage error: unknown command or flag, invalid value (`--min-size`, `--older-than`, `--risk`, `--category`, `--sort`, `--top`), `clean --yes` without `--smart`, `-c` or `-k`, `clean --json` without `--yes`, `clean` without a terminal and without `--yes`, a category disabled in the configuration. |
-| `130` | Interrupted by <kbd>Ctrl</kbd>+<kbd>C</kbd> or `SIGTERM`. |
+| `2` | Usage error: unknown command or flag, invalid value (`--min-size`, `--older-than`, `--risk` including `never`, `--category` including a tool name such as `cursor`, `--sort`, `--top`, `--limit`, an unknown `artifacts --target` kind), `clean --yes` without `--smart`, `-c` or `-k` (or with only a `-k` naming a scanner that spans several categories), `clean --json` without `--yes`, `clean` without a terminal and without `--yes`, a `--root` that is not a directory or is `/`, a category disabled in the configuration. |
+| `130` | Interrupted by <kbd>Ctrl</kbd>+<kbd>C</kbd>. |
+| `143` | Interrupted by `SIGTERM`. |
 
 A scanner that fails does not change the exit code either: the scan continues, the error is printed on stderr and listed in `errors`.
 
@@ -424,6 +450,6 @@ A scanner that fails does not change the exit code either: the scan continues, t
 - Expect **additive** changes in any release: new fields, new item kinds, new `meta` keys, new categories. Write consumers that ignore what they do not know.
 - `kind`, `category`, `risk`, `method` and `status` values are identifiers meant for scripts. `name`, `note`, `warn`, `message` and every `meta` value are human text and may change wording.
 - `meta` keys depend on the scanner and on what it could observe; test for presence instead of assuming a key exists.
-- Text output (tables, colors, the `★` column) is for humans only. It is plain and emoji-free when stdout is not a terminal, but its layout is not a contract.
+- Text output (tables, colors, the `★` column) is for humans only. It is plain and emoji-free when stdout is not a terminal, but its layout is not a contract. Neither text nor JSON ever carries a raw control character from a file name: text shows a visible escape (`\x1b`), JSON escapes it as `\u001b`.
 
 See [Automation](/lu-cleaner/guides/automation/) for complete scripts.

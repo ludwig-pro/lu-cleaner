@@ -55,7 +55,7 @@ Les scanners tournent en parallèle et transmettent leurs résultats au fil de l
 | Ligne d'état | Le dernier message, ou à défaut une description de la catégorie sous le curseur. |
 | Pied de page | Nombre et taille des éléments sélectionnés, mode de nettoyage et principales touches. |
 
-Le mode affiché dans le pied de page compte : **delete permanently** libère l'espace immédiatement, **🗑 Trash mode** (activé ou désactivé avec `t`) déplace les éléments dans `~/.Trash` et ne libère rien tant que vous ne l'avez pas vidée, et **○ dry-run** ne touche à rien.
+Le mode affiché dans le pied de page compte : **delete permanently** libère l'espace immédiatement, **🗑 Trash mode** (activé ou désactivé avec `t`) déplace les fichiers et dossiers dans `~/.Trash`, ne libère rien tant que vous ne l'avez pas vidée et ignore les worktrees et les commandes (ils ne peuvent pas être annulés), et **○ dry-run** ne touche à rien.
 
 Appuyez sur `s` pour trier les catégories par taille, et sur `space` pour sélectionner une catégorie entière d'un coup (ou, si une partie est déjà sélectionnée, pour la vider). Cette sélection groupée ignore volontairement les éléments de risque <span class="risk caution">caution</span> : vous devez ouvrir la catégorie et les choisir un par un.
 
@@ -122,6 +122,11 @@ Dans une catégorie, « la vue » est la liste affichée, après un éventuel fi
 
 Quand vous sélectionnez un élément <span class="risk caution">caution</span>, la ligne d'état vous indique ce qui est en jeu, par exemple `⚠ caution: my-app · spike/old-ui — 3 uncommitted changes`.
 
+Deux sortes d'éléments ne peuvent pas encore être sélectionnés, et `space` vous dit pourquoi :
+
+- un élément encore en cours de mesure (`…` dans SIZE) : ses vérifications ne sont pas terminées, sélectionnez-le une fois sa taille affichée ;
+- un élément qui exige `--force`, comme un dossier de worktree orphelin dont git ne voit plus le travail non commité. Lancez lu-cleaner avec `--force` pour le supprimer, ou passez en mode Corbeille (`t`), qui le déplace dans la Corbeille où vous pouvez encore le récupérer.
+
 ## 4. Lire les détails
 
 Sur un terminal de 32 lignes ou plus, un panneau de détails présente l'élément sous le curseur (en bas de l'écran ci-dessus). `enter` l'affiche ou le masque : appuyez dessus pour afficher le panneau sur un terminal plus petit, ou pour le masquer sur un grand.
@@ -130,8 +135,9 @@ Sur un terminal de 32 lignes ou plus, un panneau de détails présente l'éléme
 | --- | --- |
 | Première ligne | Nom, risque, type, scanner et nombre de fichiers. |
 | Path / Paths / Location | Exactement ce qui sera supprimé. Les éléments groupés (par exemple « Metro / Haste file maps (18) ») listent leurs premiers chemins. |
-| Method | `delete`, `trash (Trash mode)`, `command: …` (le nettoyage propre à l'outil, comme `xcrun simctl delete unavailable`), `worktree` (`git worktree remove`) ou `report`. |
-| Reclaim | Affichée quand une partie de la taille est partagée par des liens physiques (hardlinks) ailleurs et que la suppression libère moins. |
+| Method | `delete`, `trash (Trash mode)`, `command: …` (le nettoyage propre à l'outil, comme `xcrun simctl delete <UDID>`), `worktree` (`git worktree remove`) ou `report`. En mode Corbeille, les worktrees et les commandes affichent `skipped in Trash mode`. |
+| Blocked / Force | Affichée pour un élément qui exige `--force`, avec la raison. |
+| Reclaim | Affichée quand une partie des données est partagée avec d'autres fichiers (liens physiques ou clones APFS) et que la suppression libère moins que la taille. |
 | Age | Date de dernière utilisation, et si l'élément est inactif (stale). |
 | Warning | Pourquoi un élément est risqué ou n'a pas été recommandé. |
 | Note | Ce qu'est l'élément et comment il revient si vous en avez de nouveau besoin. |
@@ -151,7 +157,7 @@ Appuyez sur `d` (ou `x`). Une fenêtre de confirmation montre ce qui va se passe
 <span class="acc">│</span>    <span class="warn">moderate </span>   57 items    37.8 GB                                       <span class="acc">│</span>
 <span class="acc">│</span>                                                                          <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Method    </span><span class="bad">delete permanently</span><span class="dim"> — frees space now</span>                          <span class="acc">│</span>
-<span class="acc">│</span>  <span class="dim">Commands  </span><span class="cy">xcrun simctl delete unavailable</span>                               <span class="acc">│</span>
+<span class="acc">│</span>  <span class="dim">Commands  </span><span class="cy">xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>      <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">          </span><span class="cy">git worktree remove …</span>                                         <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Running   </span><span class="bad">Xcode — items guarded by them will be skipped</span>                 <span class="acc">│</span>
 <span class="acc">│</span>  <span class="dim">Largest   </span><span class="dim">my-app · feature/login (2.40 GB), shop-app (2.30 GB), …</span>       <span class="acc">│</span>
@@ -160,17 +166,19 @@ Appuyez sur `d` (ou `x`). Une fenêtre de confirmation montre ce qui va se passe
 <span class="acc">╰──────────────────────────────────────────────────────────────────────────╯</span>
 </div>
 
-- **Répartition par risque** : combien d'éléments de chaque niveau de risque, et leur taille.
+- **Répartition par risque** : combien d'éléments de chaque niveau de risque, et leur taille. Les éléments situés dans un autre élément sélectionné sont nettoyés avec lui et comptés une seule fois.
 - **Method** : suppression définitive, déplacement vers la Corbeille, ou simulation.
-- **Commands** : les commandes externes qui seront lancées, comme `xcrun simctl delete unavailable` ou `git worktree remove`.
+- **Skipped** (mode Corbeille uniquement) : les worktrees et les éléments de type commande, qui ne peuvent pas être déplacés dans la Corbeille et seraient supprimés définitivement. Appuyez sur `t` pour revenir au mode suppression si vous les voulez.
+- **Commands** : les commandes externes qui seront lancées, comme `xcrun simctl delete <UDID>` ou `git worktree remove`.
 - **Running** : certains éléments refusent d'être nettoyés tant qu'une application les utilise (Xcode pour DerivedData, Simulator pour les simulateurs…). lu-cleaner vérifie ces applications à ce moment-là ; les éléments protégés par une application en cours d'exécution seront ignorés, sauf si vous avez lancé lu-cleaner avec `--force`.
 - **Largest** : les plus gros éléments de la sélection (sur les terminaux de 24 lignes ou plus).
+- **Hidden** : les éléments sélectionnés que le filtre `/` actuel masque. Ils sont nettoyés eux aussi.
 
 Appuyez sur `y` ou `enter` pour confirmer, sur `n` ou `esc` pour annuler. Vous pouvez aussi nettoyer avant la fin de l'analyse : la fenêtre signale alors que les tailles peuvent être partielles.
 
 ### Quand la sélection contient des éléments caution
 
-Si au moins un élément sélectionné est <span class="risk caution">caution</span>, la fenêtre passe au rouge et une seule touche ne suffit plus :
+Si la sélection contient au moins un élément <span class="risk caution">caution</span>, qu'il soit sélectionné ou situé dans un élément sélectionné (nettoyer le parent le supprime aussi, et la fenêtre le liste), ou un élément nettoyé uniquement grâce à `--force`, la fenêtre passe au rouge et une seule touche ne suffit plus :
 
 <div class="terminal">
 <span class="bad">╭──────────────────────────────────────────────────────────────────────────╮</span>
@@ -191,7 +199,7 @@ Si au moins un élément sélectionné est <span class="risk caution">caution</s
 
 Tapez `yes` puis appuyez sur `enter`, ou sur `esc` pour annuler. Les éléments caution peuvent contenir quelque chose que vous ne pourrez pas régénérer : du travail non commité dans un worktree, des sessions d'agent, des données d'application. Une confirmation en une touche se déclenche facilement par réflexe ; taper un mot vous oblige à vous arrêter et à relire la liste.
 
-La confirmation n'est pas la dernière vérification. Un worktree qui contient des modifications non commitées, qui est verrouillé ou qui porte des commits sur une HEAD détachée est encore refusé au moment de la suppression, sauf si vous avez lancé lu-cleaner avec `--force`. Voir [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
+La confirmation n'est pas la dernière vérification. Un worktree verrouillé, qui contient des modifications non commitées ou des fichiers non suivis, qui porte des commits sur aucune branche ou qui contient un autre dépôt est encore refusé au moment de la suppression, sauf si vous avez lancé lu-cleaner avec `--force`. Voir [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
 
 ## 6. Suivre la progression
 
@@ -249,6 +257,8 @@ Les problèmes sont listés en premier. Deux chiffres comptent :
 - **Measured freed** est la différence d'espace libre sur le volume de votre dossier personnel entre avant et après le nettoyage, telle que la signale le système de fichiers.
 
 Ils sont rarement identiques, puisque d'autres applications continuent d'écrire sur le disque. Quand la valeur mesurée est inférieure à la moitié de l'estimation, le récapitulatif suggère de lancer `lu-cleaner doctor` (section suivante).
+
+En mode Corbeille, ce qui a été déplacé dans la Corbeille n'est jamais compté comme libéré : cela apparaît sur sa propre ligne, **Moved to Trash … (not freed yet)**, avec un rappel de vider la Corbeille.
 
 Appuyez sur n'importe quelle touche pour revenir aux listes. Les éléments nettoyés disparaissent ; les éléments ignorés ou en échec restent listés et sélectionnés. Pour réessayer, quittez l'application qui les bloquait et appuyez de nouveau sur `d`.
 

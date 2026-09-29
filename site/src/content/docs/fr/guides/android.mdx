@@ -53,6 +53,8 @@ Un paquet du SDK ou une version de Gradle ne vaut la peine d'être supprimé que
 
 Quand un projet React Native n'a pas de `node_modules`, la version de `react-native` de son `package.json` donne le NDK par défaut de cette version. Les versions de Gradle installées avec Homebrew ou SDKMAN comptent aussi comme utilisées.
 
+Ce parcours utilise toujours vos racines configurées (ou détectées automatiquement). Les racines passées en ligne de commande (`--root`, `lu-cleaner artifacts <root>`) ne restreignent que le scan des artefacts : avec un seul projet comme racine, toutes les versions utilisées par vos autres projets sembleraient inutilisées.
+
 :::caution[Quand l'utilisation est inconnue, rien n'est présélectionné]
 Le parcours des projets s'arrête au bout de 20 secondes ou de 250 000 dossiers. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas présélectionnés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
 :::
@@ -115,7 +117,7 @@ Si vous avez enregistré vous-même des snapshots nommés, l'élément devient `
 Les NDK, build-tools, plateformes, CMake et sources suivent les mêmes règles de conservation :
 
 - **Utilisé par un projet** : conservé. L'élément affiche `used_by` (dans le panneau de détails et dans les métadonnées `--json`) et n'est jamais présélectionné.
-- **Version installée la plus récente** : toujours conservée.
+- **Version installée la plus récente** : toujours conservée. Réglez `keep_latest` dans la [configuration](/lu-cleaner/fr/reference/configuration/) pour conserver davantage de versions parmi les plus récentes (1 par défaut).
 - **Tout le reste** : présélectionné, à condition que le parcours des projets soit allé jusqu'au bout.
 
 Les images système suivent plutôt les émulateurs : une image utilisée par un AVD ne peut pas être sélectionnée, et une image inutilisée est présélectionnée.
@@ -176,7 +178,7 @@ Les démons Gradle sont des processus JVM nommés `java` : lu-cleaner ne peut do
 
 Les éléments propres à une version (distributions, caches par version) ne sont signalés que si un démon de cette version tourne, ou si la version d'un démon ne peut pas être lue. Les caches partagés (transforms, jars, build cache, `modules-2`, autres caches, JDK de toolchain, divers) sont signalés dès qu'un démon tourne.
 
-Pourquoi c'est important : un démon en cours d'exécution garde les fichiers supprimés ouverts, donc leur espace n'est pas libéré avant qu'il se termine, et un build en cours peut échouer à mi-chemin. L'avertissement n'arrête pas un nettoyage que vous sélectionnez explicitement : arrêtez donc les démons d'abord. `./gradlew --stop` arrête les démons de la version de Gradle de ce projet ; `pkill -f GradleDaemon` les arrête tous.
+Pourquoi c'est important : un démon en cours d'exécution garde les fichiers supprimés ouverts, donc leur espace n'est pas libéré avant qu'il se termine, et un build en cours peut échouer à mi-chemin. `clean --yes` retient ces éléments, sauf si vous passez `--risk caution`, mais l'avertissement n'arrête pas un nettoyage que vous sélectionnez vous-même dans le sélecteur : arrêtez donc les démons d'abord. `./gradlew --stop` arrête les démons de la version de Gradle de ce projet ; `pkill -f GradleDaemon` les arrête tous.
 
 ## Android Studio
 
@@ -185,10 +187,12 @@ Pourquoi c'est important : un démon en cours d'exécution garde les fichiers su
 | Caches de la version installée, `~/Library/Caches/Google/AndroidStudio<version>` | `android-studio-cache` | <span class="risk moderate">moderate</span> | reconstruits au lancement suivant (la réindexation prend plusieurs minutes) ; ignorés tant qu'Android Studio tourne |
 | Caches d'une version qui n'est plus installée | `android-studio-cache` | <span class="risk safe">safe</span> | plus rien ne les lit ; présélectionnés |
 | Journaux, `~/Library/Logs/Google/AndroidStudio*` | `android-studio-logs` | <span class="risk safe">safe</span> | `idea.log` et rapports de crash |
-| Réglages d'une ancienne version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | lus uniquement pour migrer les réglages lors d'une mise à jour ; présélectionnés quand la version actuelle a ses propres réglages |
+| Réglages d'une ancienne version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | lus uniquement pour migrer les réglages lors d'une mise à jour ; présélectionnés quand la version actuelle a ses propres réglages, jamais tant qu'une version installée n'a pas encore été lancée (elle les importe à son premier lancement) |
 | Cache du dépôt du SDK, ancien build cache et dumps de crash de l'émulateur dans `~/.android` | `android-user-cache` | <span class="risk safe">safe</span> | uniquement le contenu de `cache`, `build-cache` et `breakpad` |
 
-Le dossier de réglages de la version que vous utilisez n'est jamais proposé. lu-cleaner détermine les versions installées à partir du `product-info.json` de chaque `Android Studio*.app` trouvée dans `/Applications`, `~/Applications` et les résultats de Spotlight. S'il n'en trouve aucune (emplacement personnalisé, JetBrains Toolbox…), le dossier de réglages utilisé le plus récemment est considéré comme celui de la version actuelle, par prudence.
+Le dossier de réglages de la version que vous utilisez n'est jamais proposé. lu-cleaner détermine les versions installées à partir du `product-info.json` de chaque `Android Studio*.app` trouvée dans `/Applications`, `~/Applications` et les résultats de Spotlight. S'il n'en trouve aucune (emplacement personnalisé, JetBrains Toolbox…), le dossier de réglages utilisé le plus récemment est considéré comme celui de la version actuelle, par prudence. Avec `keep_latest` au-dessus de 1, ce nombre de versions utilisées récemment comptent comme actuelles.
+
+Un dossier de caches peut contenir `LocalHistory`, l'historique des modifications de vos fichiers tenu par l'IDE. Il n'est jamais proposé : l'élément vise alors les autres entrées du dossier.
 
 Dans `~/.android`, `adbkey`, `debug.keystore` et les réglages de l'émulateur ne sont jamais touchés : ils figurent sur la liste protégée du garde-fou.
 
@@ -268,7 +272,7 @@ lu-cleaner clean --yes -k android-gradle-tmp,android-gradle-daemon-logs
 ```
 
 :::caution[Restreignez toujours clean --yes]
-Sans `--smart`, `lu-cleaner clean --yes -c android` inclut tous les éléments sélectionnables jusqu'au risque <span class="risk moderate">moderate</span>, **y compris les NDK, build-tools et versions de Gradle que vos projets utilisent**, ainsi que tout le cache des dépendances. Les avertissements sont affichés dans le plan, mais n'arrêtent pas un nettoyage non interactif. Préférez `--smart` ou `-k`, et lancez une première fois avec `--dry-run`. Les AVD et le dépôt Maven local (<span class="risk caution">caution</span>) ne sont inclus qu'avec `--risk caution`.
+Sans `--smart`, `lu-cleaner clean --yes -c android` inclut tous les éléments sélectionnables jusqu'au risque <span class="risk moderate">moderate</span> qui ne portent aucun avertissement, **y compris les NDK, build-tools et versions de Gradle que vos projets utilisent**, ainsi que tout le cache des dépendances. Les éléments qui portent un avertissement (démon Gradle en cours d'exécution, Android Studio en cours d'exécution…) sont retenus et listés sous `Held back`. Préférez `--smart` ou `-k`, et lancez une première fois avec `--dry-run`. Les AVD, le dépôt Maven local (<span class="risk caution">caution</span>) et les éléments qui portent un avertissement ne sont inclus qu'avec `--risk caution`.
 :::
 
 Tous les types ci-dessus peuvent être passés à `-k`, et l'identifiant de fournisseur `android` sélectionne d'un coup tous les types du scanner Android. Les entrées du catalogue de la section précédente ont leurs propres identifiants (`android-maven-local`, `android-konan-dependencies`…), listés dans le [catalogue](/lu-cleaner/reference/catalog/). Les métadonnées de chaque élément (`used_by`, `kept`, `api`, `abi`, `version`, `real_path`…) sont disponibles dans `lu-cleaner scan --json` ; voir [Sortie JSON](/lu-cleaner/fr/reference/json-output/).

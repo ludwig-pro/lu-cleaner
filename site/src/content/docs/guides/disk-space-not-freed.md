@@ -25,12 +25,12 @@ After a clean, lu-cleaner prints two numbers:
 
 | Number | What it is |
 |---|---|
-| **Estimated** | The sum, over the items that were cleaned, of what deleting each one should free: its allocated size on disk, minus files that are hardlinked from somewhere else. |
+| **Estimated** | The sum, over the items that were removed for good, of what deleting each one should free: its allocated size on disk, minus the data it shares with files outside it through hardlinks or APFS clones (see [below](#hardlinks-and-apfs-clones)). Moves to the Trash are not part of it. |
 | **Measured** | How much the volume's free space grew between the start and the end of the run, as reported by the filesystem (`statfs`, the same number `df` shows). |
 
 The two rarely match exactly. The measured number also includes everything else that happened on the disk during the run: a build writing files, a download, swap growing. It can even be negative. When the estimate is above 1 GB and the measured gain is less than half of it, lu-cleaner suggests running `doctor`. The interactive picker shows the same two lines ("Estimated freed" and "Measured freed") in its summary.
 
-With `--json`, the summary contains `estimated_freed`, `measured_freed`, `disk_before` and `disk_after` (in bytes). See [JSON output](/lu-cleaner/reference/json-output/). A dry run deletes nothing, so it measures nothing.
+With `--json`, the summary contains `estimated_freed`, `trashed` (bytes moved to the Trash), `measured_freed`, `disk_before` and `disk_after` (in bytes). See [JSON output](/lu-cleaner/reference/json-output/). A dry run deletes nothing, so it measures nothing. `lu-cleaner history` keeps the estimate of each past item in its `FREED` column.
 
 ## `lu-cleaner doctor`
 
@@ -75,9 +75,17 @@ The rest of this page covers each cause, from the most common to the least.
 
 ## The Trash
 
-Files moved to the Trash still use disk space until the Trash is emptied. This applies to anything you drag to the Trash in Finder, and to lu-cleaner's Trash mode (`--trash`, `use_trash = true`, or the `t` key in the picker). After a Trash-mode clean, lu-cleaner says "moved to the Trash" instead of "freed" and reminds you to empty it.
+Files moved to the Trash still use disk space until the Trash is emptied. This applies to anything you drag to the Trash in Finder, to lu-cleaner's Trash mode (`--trash`, `use_trash = true`, or the `t` key in the picker), and to Xcode archives, which lu-cleaner always moves to the Trash. lu-cleaner counts these moves apart from what it freed:
 
-To empty it, use Finder, or let lu-cleaner do it. The Trash is an item of the `system` category:
+```text frame="terminal" title="lu-cleaner clean --yes --smart --trash"
+✓ 12 items cleaned · 4.20 GB moved to the Trash (estimated)
+  Disk free: 21.3 GB → 21.3 GB (0 B measured)
+  Space is only freed once the Trash is emptied.
+```
+
+Trash mode never deletes anything permanently: worktree removals and commands (`simctl`, `docker`, `brew`…) are skipped, and so are items already in the Trash.
+
+To empty the Trash, use Finder, or let lu-cleaner do it. The Trash is an item of the `system` category. Emptying it cannot be undone, so smart select never preselects it:
 
 ```bash
 lu-cleaner clean -c system          # select "Trash (N items)"
@@ -85,7 +93,9 @@ lu-cleaner clean --yes -k trash --dry-run
 ```
 
 :::note[Full Disk Access]
-macOS protects `~/.Trash`. Without Full Disk Access for your terminal, lu-cleaner cannot list or measure it. It then shows "Trash (size unknown)", and cleaning that item asks Finder to empty the Trash (Finder may ask you for the Automation permission). To grant access, open **System Settings › Privacy & Security › Full Disk Access**, enable your terminal app, then restart it.
+macOS protects `~/.Trash`. Without Full Disk Access for your terminal, lu-cleaner cannot list or measure it. It then shows "Trash (size unknown — needs Full Disk Access)", and cleaning that item asks Finder to empty the Trash (Finder may ask you for the Automation permission). To grant access, open **System Settings › Privacy & Security › Full Disk Access**, enable your terminal app, then restart it.
+
+Without Full Disk Access, lu-cleaner also never reads inside other apps' containers (`~/Library/Containers/<app>`, `~/Library/Group Containers/<group>`): macOS would block the scan on a permission prompt. Items there are reported as needing Full Disk Access, and the Docker Desktop and OrbStack disk images are not listed.
 :::
 
 ## APFS local snapshots
@@ -120,9 +130,14 @@ Several tools share file contents between folders instead of copying them:
 
 Deleting one side frees only the blocks nobody else uses. If you delete a pnpm project's `node_modules`, the files are still in the store. If you prune the store, the files are still in the projects that use them.
 
-**Hardlinks** can be measured. lu-cleaner counts a hardlinked file once and computes what deleting an item really frees. When that is less than its size, the item says so ("Hardlinked with the pnpm store: only 120 MB is really freed"), the JSON output has a `reclaim` field, and totals and the estimate use the real figure.
+lu-cleaner measures both mechanisms and computes what deleting an item really frees:
 
-**Clones** cannot be detected cheaply, so lu-cleaner counts them as fully reclaimable. That makes the estimate too high for bun caches, pnpm on APFS and copied simulators. To actually get the space back, remove both sides: the `node_modules` folders of old projects, then the unreferenced packages in the store (`pnpm store prune`, which lu-cleaner offers as a <span class="risk safe">safe</span> command item). See [JS toolchain](/lu-cleaner/guides/js-toolchain/).
+- a **hardlinked** file counts once, and counts for nothing when another link lives outside the item;
+- an **APFS clone** counts only its private blocks, unless every file sharing its data is inside the item.
+
+When the result is less than the size, the item says so ("Shared with other files (hardlinks or APFS clones of the pnpm store): only 120 MB is really freed"), the size shows a `*`, the JSON output has a `reclaim` field, and totals and the estimate use the real figure.
+
+It is still an estimate. Data shared between two items that are measured separately, such as the bun cache and a `node_modules` installed from it, is freed only when both are deleted. To actually get the space back, remove both sides: the `node_modules` folders of old projects, then the unreferenced packages in the store (`pnpm store prune`, which lu-cleaner offers as a <span class="risk safe">safe</span> command item). See [JS toolchain](/lu-cleaner/guides/js-toolchain/).
 
 ## Files still open
 
@@ -186,7 +201,7 @@ Some items live on another disk: an Android SDK or a model store moved to an ext
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | Measured gain close to zero right after a big clean | APFS local snapshots | Wait about 24 h, or `tmutil thinlocalsnapshots / 999999999999 4` |
-| lu-cleaner said "moved to the Trash" | Trash mode | Empty the Trash |
+| lu-cleaner said "moved to the Trash" | Trash mode, or Xcode archives | Empty the Trash |
 | Removed `node_modules` but freed little | pnpm / bun / Yarn Berry sharing | Also prune the store (`pnpm store prune`) |
 | Space comes back after quitting an app | Open files | Quit the app, `./gradlew --stop`, shut down simulators |
 | Finder shows more free space than lu-cleaner | Purgeable space | Trust `df -h ~` |

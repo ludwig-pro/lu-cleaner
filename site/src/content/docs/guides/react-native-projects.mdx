@@ -11,7 +11,7 @@ A React Native checkout carries several gigabytes of generated files: `node_modu
 
 ```bash
 lu-cleaner artifacts                       # picker over every project and worktree
-lu-cleaner artifacts ~/dev/my-app          # this root instead of your configured ones
+lu-cleaner artifacts ~/dev/my-app          # only this folder (no worktree or extra folders)
 lu-cleaner artifacts --list --all          # print the full list instead
 lu-cleaner artifacts --older-than 30d      # projects untouched for a month
 ```
@@ -45,6 +45,8 @@ The scanner also knows artifacts of other stacks, such as Flutter, Rust, Swift P
 lu-cleaner artifacts -t node_modules -t ios-pods
 ```
 
+`-t` only accepts artifact kinds and a few aliases (`pods`, `pod`, `cocoapods`, `node-modules`): a typo is a usage error, not an empty scan.
+
 ## How it decides that a folder is disposable
 
 A folder named `build` can be Xcode output, or a folder of source code that someone named `build`. lu-cleaner only proposes a folder when three checks pass. Each check exists to rule out a specific mistake.
@@ -55,12 +57,16 @@ A folder named `build` can be Xcode output, or a folder of source code that some
 | **It holds no file tracked by git** | Committed `ios/Pods`, a vendored `node_modules`, a Yarn zero-install cache | Someone committed these files on purpose. Deleting them would change the repository, not free a cache. |
 | **Generic names must be git-ignored** | `build`, `dist`, `out`, `coverage`, `.yarn/*`, `vendor/bundle` | A project that ignores the folder declares it disposable. Unambiguous build output also qualifies, such as Xcode's `XCBuildData` or a `CACHEDIR.TAG` file, as long as the folder is untracked. Outside a git repository, generic folders must contain recognizable build output. |
 
+Outside git, a JS output folder (`build`, `dist`, `out`, `web-build`) that only holds what hand-written files also look like (`.js` files, `index.html`, assets), with nothing a bundler alone writes (source maps, hashed bundle names such as `main.3f2a1b9c.js`, `asset-manifest.json`, `_next`…), is only proposed as <span class="risk caution">caution</span>. It carries the warning `not under git: nothing proves it is build output — check before deleting` and is never preselected.
+
 The scanner also has hard limits:
 
+- A folder that holds a `.git` entry of any kind (a repository, a linked worktree such as a `gh-pages` branch checked out as `dist`, a submodule) or a bare repository is a checkout, never an artifact. A generic output with a checkout somewhere inside is report-only: `contains a git repository (…) — not proposed`.
 - It never follows symlinks, and it never walks into another volume from a root.
 - It never walks into an artifact, a `.git` folder, `~/Library`, the Trash, or app bundles such as `.app` and `.xcodeproj`.
 - It skips hidden folders, except `.claude/worktrees` and `.worktrees`, where agents keep their checkouts.
 - An artifact on an external volume is listed but cannot be selected, because deleting it frees nothing on your internal disk.
+- Right before deletion, a folder that became a checkout since the scan (`git init`, `git clone` or `git worktree add` into it) is left alone.
 
 Some folders match a rule's name and markers but hold tracked files, such as committed `ios/Pods`. They are listed as report-only with a reason, for example `not proposed: contains files tracked by git (ios/Pods/Manifest.lock)`. They have no size, so to see them, open the picker with `lu-cleaner artifacts --min-size 0` and press `H`.
 
@@ -79,12 +85,14 @@ In a monorepo, a shared package often points its `package.json` (`main`, `module
 | Warning | Meaning |
 |---|---|
 | `in use: process 4242 runs inside the project (dev server, agent, shell?)` | Something runs in the project, such as Metro or an agent. Its dependencies could disappear under it. |
+| `xcodebuild is running — quit it before cleaning` | `ios/Pods`, `ios/build` and DerivedData are skipped while `xcodebuild` runs. |
+| `not under git: nothing proves it is build output — check before deleting` | A generic JS output outside git with only weak evidence (see above). |
 | `contains built app binaries (app-release.apk…)` | A build folder directly holds `.apk`, `.aab` or `.ipa` files. Keep it if you still need that build. |
 
-Items with a warning can still be selected by hand.
+Items with a warning can still be selected by hand. `--yes` holds them back unless you pass `--risk caution`.
 
 :::caution[Stop dev servers before a scripted clean]
-`--yes` without `--smart` does not leave out items with a warning. Right before deleting, lu-cleaner skips a folder that a process works in, or that a process loads a program or a native `.node` module from. A Metro server that runs from the project root and only reads JavaScript files from `node_modules` doesn't trigger this check. Stop it first.
+The in-use warning reflects the processes running at scan time. Right before deleting, lu-cleaner skips a folder that a process works in, or that a process loads a program or a native `.node` module from. A Metro server started after the scan, from the project root, that only reads JavaScript files from `node_modules` doesn't trigger this check. Stop it first.
 :::
 
 ## Monorepos
@@ -120,22 +128,22 @@ Each `node_modules` is a separate item. Its note gives the command to reinstall 
 
 ## Hardlinks, clones and the "really freed" figure
 
-pnpm, bun and Yarn Berry can install `node_modules` as links into a shared store instead of real copies. Deleting such a `node_modules` only frees the files that exist nowhere else. lu-cleaner measures this for **hardlinks** and shows two figures:
+pnpm, bun and Yarn Berry can install `node_modules` as links into a shared store, or as APFS clones of it (copy-on-write copies that share disk blocks until one side changes; bun does this by default on macOS), instead of real copies. Deleting such a `node_modules` only frees the data that exists nowhere else. lu-cleaner measures both mechanisms and shows two figures:
 
 - **Size** is the allocated size, with each hardlinked file counted once.
-- **Reclaim** is what deleting the folder really frees. It leaves out files that also have links outside the folder, such as in the pnpm store.
+- **Reclaim** is what deleting the folder really frees. It leaves out files that also have links outside the folder, such as in the pnpm store, and counts a clone only for its private blocks, unless every copy of its data is inside the folder.
 
 When the two differ:
 
 - the `scan` table marks the size with `*`;
-- the picker's details show `only 120 MB really freed (of 1.40 GB): hardlinked elsewhere`;
-- the item note names the store, for example `Hardlinked with the pnpm store: only 120 MB is really freed`;
+- the picker's details show `only 120 MB really freed (of 1.40 GB): shared with other files (hardlinks or APFS clones)`;
+- the item note names the store, for example `Shared with other files (hardlinks or APFS clones of the pnpm store): only 120 MB is really freed`;
 - the JSON output has `reclaim` and `freed` fields ([JSON output](/lu-cleaner/reference/json-output/)).
 
 The totals and the plan use the reclaim figure.
 
-:::note[APFS clones are counted as freed]
-Some package managers copy files as APFS clones: copy-on-write copies that share disk blocks until one side changes. bun does this by default on macOS. Clones cannot be detected cheaply, so they count as fully reclaimable, and the estimate can be higher than what you get. After a real clean, compare with the summary line `Disk free: A → B (C measured)`, which comes from the file system. If the gap is large, see [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
+:::note[It is still an estimate]
+Data shared between two items that are measured separately, such as the bun cache and a `node_modules` installed from it, is freed only once both are deleted. After a real clean, compare with the summary line `Disk free: A → B (C measured)`, which comes from the file system. If the gap is large, see [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
 :::
 
 The reverse is also true: while projects still link to the global store, deleting the store frees little. See [JS toolchain](/lu-cleaner/guides/js-toolchain/).
@@ -144,9 +152,12 @@ The reverse is also true: while projects still link to the global store, deletin
 
 An artifact's age is the age of its **project**, not of the folder itself. Installs and builds touch the artifact folder all the time, so its own date says nothing about whether you still work on the project. lu-cleaner takes the most recent modification time of these, and ignores the artifact folders themselves:
 
-- the project's top-level files and folders (sources, lockfiles, configs);
-- the top-level files and folders of the package that owns the artifact;
-- the git index, `HEAD` and reflog.
+- the project's top-level files (lockfiles, configs…);
+- the top-level files of the package that owns the artifact;
+- the git index, `HEAD` and reflog;
+- every file with uncommitted changes, and every untracked file, anywhere in the work tree: editing `src/components/Button.tsx` counts even before you commit it.
+
+Folder dates are ignored: deleting `android/.gradle` changes the date of `android/`, and would otherwise make the project look active right after a clean. Outside a git repository, lu-cleaner looks for the newest source file in a bounded walk of the project instead.
 
 `--older-than` accepts `h`, `d`, `w`, `m` (30 days) and `y`:
 
@@ -171,7 +182,7 @@ Smart select (the `a` key, or `--smart`) applies these rules to artifacts:
 - It never picks anything from a project that was active in the last **24 hours**.
 - It picks <span class="risk safe">safe</span> outputs (Xcode and Gradle builds, `.expo`, `.cxx`…) once the project has been idle for **1 day**.
 - It picks <span class="risk moderate">moderate</span> items (`node_modules`, `Pods`…) once the project has been idle for longer than `stale_after`, which is 14 days by default.
-- It picks a Yarn Berry `.yarn/cache` that Yarn no longer reads (`.yarnrc.yml` sets `enableGlobalCache: true`) without waiting for `stale_after`.
+- It picks a Yarn Berry `.yarn/cache` that Yarn no longer reads (`.yarnrc.yml` sets `enableGlobalCache: true` as a top-level key) without waiting for `stale_after`.
 - It never picks items with a warning or of <span class="risk caution">caution</span> risk.
 
 ## Rebuild when you need the project again
@@ -204,7 +215,7 @@ Projects also accumulate large folders that no rule knows, and AI agents make th
 
 - The risk is <span class="risk caution">caution</span>, because lu-cleaner cannot tell what the folder contains. It is never smart-selected. `clean --yes` leaves it out unless you pass `--risk caution`, and the picker asks you to type `yes`.
 - Its age is the date of the last file written inside, not the project's activity.
-- If it contains a git checkout, it is report-only.
+- If it contains a git checkout or a worktree, it is report-only.
 - Tool and editor folders are never reported: `.git`, `.claude`, `.cursor`, `.codex`, `.conductor`, `.vscode`, `.idea`, `.env`, `worktrees` and similar.
 - Its size includes the known artifacts found inside it. Those artifacts are also listed as items of their own.
 
@@ -214,9 +225,11 @@ Open it with `o` (reveal in Finder) before you decide.
 
 | Source | What it adds |
 |---|---|
-| Project roots | `roots` in the [configuration](/lu-cleaner/reference/configuration/), or, when empty, existing folders among `~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/repos`, `~/conductor/repos` and others. `--root` or the arguments of `lu-cleaner artifacts` replace this list for one run. |
-| Worktree folders | Always scanned, even when you pass roots: `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees` and the others listed in [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/), plus `worktree_roots` |
+| Project roots | `roots` in the [configuration](/lu-cleaner/reference/configuration/), or, when empty, existing folders among `~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/repos`, `~/conductor/repos` and others. |
+| Worktree folders | `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees` and the others listed in [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/), plus `worktree_roots` |
 | Extra folders | `~/Documents/Codex`, `~/conductor/archived-contexts` and `~/.gemini/antigravity/scratch`, where tools copy projects. Only dependency and build rules apply there. |
+
+Roots given on the command line (the arguments of `lu-cleaner artifacts`, or `--root`) replace all three sources for one run: only those folders are scanned, and artifacts outside them are dropped. `/` is refused as a root. They narrow the artifacts scan only: the other scanners keep your configured roots to learn which Node, Gradle or NDK versions your projects use.
 
 The walk goes down to `max_depth` levels, 8 by default, below each root. Each linked worktree it meets gets the full depth again. Artifacts inside iCloud-synced Desktop and Documents get a note, because deleting them also removes them from iCloud.
 

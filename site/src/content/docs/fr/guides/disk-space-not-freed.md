@@ -25,12 +25,12 @@ Après un nettoyage, lu-cleaner affiche deux chiffres :
 
 | Chiffre | Ce qu'il représente |
 |---|---|
-| **Estimé** (`estimated`) | La somme, sur les éléments nettoyés, de ce que la suppression de chacun devrait libérer : sa taille allouée sur le disque, moins les fichiers qui ont un lien physique ailleurs. |
+| **Estimé** (`estimated`) | La somme, sur les éléments supprimés définitivement, de ce que la suppression de chacun devrait libérer : sa taille allouée sur le disque, moins les données qu'il partage avec des fichiers situés en dehors de lui par des liens physiques ou des clones APFS (voir [plus bas](#liens-physiques-et-clones-apfs)). Les déplacements dans la Corbeille n'en font pas partie. |
 | **Mesuré** (`measured`) | L'augmentation de l'espace libre du volume entre le début et la fin de l'exécution, telle que la rapporte le système de fichiers (`statfs`, le même chiffre que celui de `df`). |
 
 Les deux correspondent rarement à l'octet près. Le chiffre mesuré inclut aussi tout ce qui s'est passé sur le disque pendant l'exécution : un build qui écrit des fichiers, un téléchargement, le swap qui grossit. Il peut même être négatif. Lorsque l'estimation dépasse 1 Go et que le gain mesuré en représente moins de la moitié, lu-cleaner suggère de lancer `doctor`. Le sélecteur interactif affiche les deux mêmes lignes (« Estimated freed » et « Measured freed ») dans son récapitulatif.
 
-Avec `--json`, le récapitulatif contient `estimated_freed`, `measured_freed`, `disk_before` et `disk_after` (en octets). Voir [Sortie JSON](/lu-cleaner/fr/reference/json-output/). Une simulation (`--dry-run`) ne supprime rien, elle ne mesure donc rien.
+Avec `--json`, le récapitulatif contient `estimated_freed`, `trashed` (octets déplacés dans la Corbeille), `measured_freed`, `disk_before` et `disk_after` (en octets). Voir [Sortie JSON](/lu-cleaner/fr/reference/json-output/). Une simulation (`--dry-run`) ne supprime rien, elle ne mesure donc rien. `lu-cleaner history` conserve l'estimation de chaque élément passé dans sa colonne `FREED`.
 
 ## `lu-cleaner doctor`
 
@@ -75,9 +75,17 @@ La suite de cette page passe en revue chaque cause, de la plus fréquente à la 
 
 ## La Corbeille
 
-Les fichiers placés dans la Corbeille occupent toujours de l'espace disque tant qu'elle n'est pas vidée. Cela vaut pour tout ce que vous faites glisser dans la Corbeille depuis le Finder, et pour le mode Corbeille de lu-cleaner (`--trash`, `use_trash = true` ou la touche `t` dans le sélecteur). Après un nettoyage en mode Corbeille, lu-cleaner indique « moved to the Trash » au lieu de « freed » et vous rappelle de la vider.
+Les fichiers placés dans la Corbeille occupent toujours de l'espace disque tant qu'elle n'est pas vidée. Cela vaut pour tout ce que vous faites glisser dans la Corbeille depuis le Finder, pour le mode Corbeille de lu-cleaner (`--trash`, `use_trash = true` ou la touche `t` dans le sélecteur), et pour les archives Xcode, que lu-cleaner déplace toujours dans la Corbeille. lu-cleaner compte ces déplacements à part de ce qu'il a libéré :
 
-Pour la vider, utilisez le Finder, ou laissez lu-cleaner s'en charger. La Corbeille est un élément de la catégorie `system` :
+```text frame="terminal" title="lu-cleaner clean --yes --smart --trash"
+✓ 12 items cleaned · 4.20 GB moved to the Trash (estimated)
+  Disk free: 21.3 GB → 21.3 GB (0 B measured)
+  Space is only freed once the Trash is emptied.
+```
+
+Le mode Corbeille ne supprime jamais rien définitivement : les suppressions de worktrees et les commandes (`simctl`, `docker`, `brew`…) sont ignorées, tout comme les éléments qui se trouvent déjà dans la Corbeille.
+
+Pour vider la Corbeille, utilisez le Finder, ou laissez lu-cleaner s'en charger. La Corbeille est un élément de la catégorie `system`. La vider est irréversible, donc la sélection intelligente ne la présélectionne jamais :
 
 ```bash
 lu-cleaner clean -c system          # sélectionnez "Trash (N items)"
@@ -85,7 +93,9 @@ lu-cleaner clean --yes -k trash --dry-run
 ```
 
 :::note[Accès complet au disque]
-macOS protège `~/.Trash`. Sans l'accès complet au disque pour votre terminal, lu-cleaner ne peut ni en lister le contenu ni le mesurer. Il affiche alors « Trash (size unknown) », et le nettoyage de cet élément demande au Finder de vider la Corbeille (le Finder peut vous demander l'autorisation Automatisation). Pour accorder l'accès, ouvrez **Réglages Système › Confidentialité et sécurité › Accès complet au disque**, activez votre application de terminal, puis redémarrez-la.
+macOS protège `~/.Trash`. Sans l'accès complet au disque pour votre terminal, lu-cleaner ne peut ni en lister le contenu ni le mesurer. Il affiche alors « Trash (size unknown — needs Full Disk Access) », et le nettoyage de cet élément demande au Finder de vider la Corbeille (le Finder peut vous demander l'autorisation Automatisation). Pour accorder l'accès, ouvrez **Réglages Système › Confidentialité et sécurité › Accès complet au disque**, activez votre application de terminal, puis redémarrez-la.
+
+Sans l'accès complet au disque, lu-cleaner ne lit jamais non plus l'intérieur des conteneurs des autres applications (`~/Library/Containers/<app>`, `~/Library/Group Containers/<group>`) : macOS bloquerait le scan sur une demande d'autorisation. Les éléments qui s'y trouvent sont signalés comme nécessitant l'accès complet au disque, et les images disque de Docker Desktop et d'OrbStack ne sont pas listées.
 :::
 
 ## Instantanés locaux APFS
@@ -120,9 +130,14 @@ Plusieurs outils partagent le contenu des fichiers entre dossiers au lieu de le 
 
 Supprimer l'un des côtés ne libère que les blocs que personne d'autre n'utilise. Si vous supprimez le `node_modules` d'un projet pnpm, les fichiers restent dans le store. Si vous purgez le store, les fichiers restent dans les projets qui les utilisent.
 
-**Les liens physiques** sont mesurables. lu-cleaner ne compte qu'une fois un fichier qui a plusieurs liens physiques et calcule ce que la suppression d'un élément libère réellement. Lorsque c'est moins que sa taille, l'élément l'indique (« Hardlinked with the pnpm store: only 120 MB is really freed »), la sortie JSON comporte un champ `reclaim`, et les totaux comme l'estimation utilisent le chiffre réel.
+lu-cleaner mesure les deux mécanismes et calcule ce que la suppression d'un élément libère réellement :
 
-**Les clones** ne peuvent pas être détectés à faible coût, donc lu-cleaner les considère comme entièrement récupérables. L'estimation est alors trop élevée pour les caches de bun, pnpm sur APFS et les simulateurs copiés. Pour récupérer réellement l'espace, supprimez les deux côtés : les dossiers `node_modules` des anciens projets, puis les paquets non référencés du store (`pnpm store prune`, que lu-cleaner propose comme élément de commande <span class="risk safe">safe</span>). Voir [Outils JavaScript](/lu-cleaner/fr/guides/js-toolchain/).
+- un fichier avec des **liens physiques** n'est compté qu'une fois, et ne compte pour rien quand un autre lien se trouve en dehors de l'élément ;
+- un **clone APFS** ne compte que ses blocs privés, sauf si tous les fichiers qui partagent ses données se trouvent dans l'élément.
+
+Lorsque le résultat est inférieur à la taille, l'élément l'indique (« Shared with other files (hardlinks or APFS clones of the pnpm store): only 120 MB is really freed »), la taille affiche un `*`, la sortie JSON comporte un champ `reclaim`, et les totaux comme l'estimation utilisent le chiffre réel.
+
+Cela reste une estimation. Les données partagées entre deux éléments mesurés séparément, comme le cache de bun et un `node_modules` installé à partir de lui, ne sont libérées que lorsque les deux sont supprimés. Pour récupérer réellement l'espace, supprimez les deux côtés : les dossiers `node_modules` des anciens projets, puis les paquets non référencés du store (`pnpm store prune`, que lu-cleaner propose comme élément de commande <span class="risk safe">safe</span>). Voir [Outils JavaScript](/lu-cleaner/fr/guides/js-toolchain/).
 
 ## Fichiers encore ouverts
 
@@ -186,7 +201,7 @@ Certains éléments se trouvent sur un autre disque : un SDK Android ou un stock
 | Symptôme | Cause probable | Que faire |
 |---|---|---|
 | Gain mesuré proche de zéro juste après un gros nettoyage | Instantanés locaux APFS | Attendre environ 24 h, ou `tmutil thinlocalsnapshots / 999999999999 4` |
-| lu-cleaner a indiqué « moved to the Trash » | Mode Corbeille | Vider la Corbeille |
+| lu-cleaner a indiqué « moved to the Trash » | Mode Corbeille, ou archives Xcode | Vider la Corbeille |
 | `node_modules` supprimé mais peu d'espace libéré | Partage par pnpm / bun / Yarn Berry | Purger aussi le store (`pnpm store prune`) |
 | L'espace revient après avoir quitté une application | Fichiers ouverts | Quitter l'application, `./gradlew --stop`, éteindre les simulateurs |
 | Le Finder affiche plus d'espace libre que lu-cleaner | Espace purgeable | Se fier à `df -h ~` |

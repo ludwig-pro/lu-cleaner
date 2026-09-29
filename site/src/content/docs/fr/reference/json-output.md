@@ -45,7 +45,8 @@ Sans `--top`, le JSON liste **tous** les éléments qui passent les filtres (le 
 | `totals.size` | integer | Ce que libérerait le nettoyage de tous les éléments nettoyables correspondants (tailles réellement libérées, chemins imbriqués comptés une fois) |
 | `totals.recommended` | integer | La même chose pour les éléments recommandés |
 | `totals.items` | integer | Nombre d'éléments nettoyables |
-| `totals.by_category` | object | Octets libérables par identifiant de catégorie |
+| `totals.by_category` | object | Octets libérables par identifiant de catégorie. Les valeurs se recouvrent quand des éléments d'une catégorie se trouvent dans des éléments d'une autre (artefacts dans des worktrees) |
+| `totals.shared_by_category` | object | Pour chaque catégorie concernée par un tel recouvrement, la part de ses octets située dans des éléments d'une autre catégorie. `size` compte ces octets une seule fois. Toujours présent, `{}` s'il n'y en a pas |
 | `errors` | object | Identifiant de scanner → message d'erreur, pour les scanners qui ont échoué. Toujours présent, `{}` s'il n'y en a aucun |
 | `timing_ms` | object | Identifiant de scanner → durée d'analyse en millisecondes |
 | `took_ms` | integer | Durée totale de l'analyse en millisecondes |
@@ -65,7 +66,7 @@ Les totaux sont calculés sur tous les éléments correspondants, même quand `-
 | `paths` | array | Les chemins supprimés, pour les éléments groupés (`path` est alors absent) |
 | `location` | string | Où agit un élément groupé ou un élément commande, pour l'affichage |
 | `size` | integer | Octets alloués, liens physiques comptés une fois |
-| `reclaim` | integer | Octets réellement libérés, présent seulement quand c'est moins que `size` (liens physiques partagés ailleurs) |
+| `reclaim` | integer | Octets réellement libérés, présent seulement quand c'est moins que `size` (données partagées avec des fichiers extérieurs à l'élément par des liens physiques ou des clones APFS) |
 | `freed` | integer | Meilleure estimation des octets libérés : `reclaim` s'il est présent, sinon `size`. Toujours présent |
 | `files` | integer | Nombre de fichiers |
 | `last_used` | string | Meilleure estimation de la dernière activité |
@@ -79,7 +80,8 @@ Les totaux sont calculés sur tous les éléments correspondants, même quand `-
 | `project` | string | Projet ou dépôt principal auquel appartient l'élément |
 | `meta` | object | Détails propres au scanner ; toutes les valeurs sont des chaînes |
 | `note` | string | Ce qu'est l'élément et comment il revient |
-| `warn` | string | Avertissement ; un élément qui porte un avertissement n'est jamais recommandé |
+| `warn` | string | Avertissement ; un élément qui porte un avertissement n'est jamais recommandé, et `clean --yes` le retient sauf avec `--risk caution` |
+| `require_force` | boolean | `true` quand le nettoyage refuse l'élément sans `--force`, en simulation aussi (dossiers de worktrees orphelins). Omis sinon |
 | `recommended` | boolean | Sélectionné par la sélection intelligente. Toujours présent |
 | `cleanable` | boolean | `false` pour les éléments en rapport seul, non sélectionnables et `never`. Toujours présent |
 
@@ -187,7 +189,8 @@ Abrégé et anonymisé : trois éléments tirés d'une analyse complète.
     "size": 61200000000,
     "recommended": 23400000000,
     "items": 214,
-    "by_category": { "artifacts": 18300000000, "simulators": 21500000000, "worktrees": 21400000000 }
+    "by_category": { "artifacts": 18300000000, "simulators": 21500000000, "worktrees": 21400000000 },
+    "shared_by_category": { "artifacts": 1280000000 }
   },
   "errors": {},
   "timing_ms": { "apple": 5120, "artifacts": 9870, "worktrees": 11240 },
@@ -210,7 +213,7 @@ lu-cleaner scan --json | jq '.totals.by_category'
 
 ## `clean --yes --json`
 
-Le résultat d'un nettoyage non interactif ou d'une simulation. `--json` exige `--yes` (le sélecteur interactif n'a pas de sortie JSON). `artifacts`, `worktrees` et `devices` produisent le même document avec `--yes --json`.
+Le résultat d'un nettoyage non interactif ou d'une simulation. `--json` exige `--yes` (le sélecteur interactif n'a pas de sortie JSON). `artifacts`, `worktrees` et `devices` produisent le même document avec `--yes --json`. Les éléments retenus à cause d'un avertissement ne figurent pas dans le document : une ligne `warning: N items with a warning left out (…)` est écrite sur stderr à la place.
 
 ```bash
 lu-cleaner clean --yes --smart --dry-run --json
@@ -222,10 +225,11 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 | Champ | Type | Description |
 |---|---|---|
 | `results` | array | Une entrée par élément traité, dans l'ordre de fin de traitement. `[]` quand rien ne correspond |
-| `estimated_freed` | integer | Somme de `freed` sur les résultats `done`. Toujours `0` en simulation |
+| `estimated_freed` | integer | Espace réellement libéré : somme de `freed` sur les résultats `done`, plus ce que les suppressions en échec ont libéré avant d'échouer. Les déplacements dans la Corbeille ne sont jamais comptés. Toujours `0` en simulation |
+| `trashed` | integer | Octets déplacés dans la Corbeille par les résultats `done` : toujours occupés tant que la Corbeille n'est pas vidée. Toujours présent |
 | `disk_before`, `disk_after` | object | `total`, `free` et `used` du volume personnel avant et après l'exécution |
 | `measured_freed` | integer | `disk_after.free − disk_before.free` : ce que rapporte le système de fichiers. Peut être inférieur à l'estimation (snapshots, Corbeille, fichiers ouverts) et n'est que du bruit en simulation |
-| `trash` | boolean | Les éléments ont été déplacés dans la Corbeille au lieu d'être supprimés |
+| `trash` | boolean | Mode Corbeille : les fichiers et dossiers ont été déplacés dans la Corbeille, les éléments de type worktree et commande ont été ignorés |
 | `dry_run` | boolean | Rien n'a été exécuté |
 | `took` | integer | Durée totale, en nanosecondes |
 
@@ -235,14 +239,16 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 |---|---|---|
 | `item` | object | L'élément, avec les mêmes champs que dans `scan --json`, sauf les champs calculés (`category_title`, `age_days`, `cleanable`, `freed`). `recommended` n'apparaît que lorsque le scanner l'a forcé |
 | `status` | string | `done`, `dry-run`, `skipped` ou `failed` |
-| `freed` | integer | Octets libérés estimés pour les résultats `done` et `dry-run`, `0` sinon |
-| `message` | string | Ce qui s'est passé (`would delete …`, `would run: xcrun simctl delete …`, `moved to …`, `git worktree removed (branch kept)`) ou la raison pour laquelle l'élément a été ignoré |
+| `method` | string | Méthode réellement utilisée, ou qui le serait en simulation : `trash` pour un élément `delete` nettoyé en mode Corbeille |
+| `freed` | integer | Octets réellement libérés estimés pour les résultats `done` et `dry-run`, ce qu'une suppression `failed` a libéré avant d'échouer, `0` sinon. Un déplacement dans la Corbeille ne libère rien : sa taille figure dans `trashed` |
+| `trashed` | integer | Octets déplacés dans la Corbeille (ou qui le seraient, en simulation). Omis quand il vaut `0` |
+| `message` | string | Ce qui s'est passé (`would delete …`, `would run: xcrun simctl delete …`, `would move to Trash: …`, `moved to …`, `git worktree removed (branch kept)`, `orphaned worktree directory removed`) ou la raison pour laquelle l'élément a été ignoré (`needs --force: …`, `not possible in Trash mode (it would delete permanently)`…) |
 | `error` | string | Raison de l'échec, pour les résultats `failed` |
 | `took` | integer | Durée, en nanosecondes |
 
 ### Exemple
 
-`lu-cleaner clean --yes -c js,xcode --dry-run --json` avec Xcode ouvert, abrégé à deux résultats :
+`lu-cleaner clean --yes -c js,xcode --risk caution --dry-run --json` avec Xcode ouvert, abrégé à deux résultats. Sans `--risk caution`, l'élément DerivedData, qui porte un avertissement, serait retenu au lieu d'être ignoré :
 
 ```json
 {
@@ -263,6 +269,7 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
         "note": "npm's content cache; the next `npm install` / `npx` re-downloads what it needs. Existing node_modules are unaffected."
       },
       "status": "dry-run",
+      "method": "delete",
       "freed": 1140000000,
       "message": "would delete /Users/me/.npm/_cacache",
       "took": 8167084
@@ -282,12 +289,14 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
         "warn": "Xcode is running — quit it before cleaning"
       },
       "status": "skipped",
+      "method": "delete",
       "freed": 0,
       "message": "Xcode is running — quit it first (or use --force)",
       "took": 2140
     }
   ],
   "estimated_freed": 0,
+  "trashed": 0,
   "disk_before": { "total": 500000000000, "free": 43000000000, "used": 457000000000 },
   "disk_after": { "total": 500000000000, "free": 42999920000, "used": 457000080000 },
   "measured_freed": -80000,
@@ -297,7 +306,7 @@ lu-cleaner clean --yes -c artifacts --older-than 30d --json
 }
 ```
 
-En simulation, additionnez les valeurs `freed` des résultats pour obtenir ce que l'exécution libérerait :
+En simulation, additionnez les valeurs `freed` des résultats pour obtenir ce que l'exécution libérerait (et `trashed` pour ce qu'elle déplacerait dans la Corbeille) :
 
 ```bash
 lu-cleaner clean --yes --smart --dry-run --json \
@@ -322,7 +331,7 @@ lu-cleaner doctor --json --no-scan  # disque, snapshots, Corbeille et applicatio
 | `trash` | object | `path`, `size`, `files`, `readable` (`false` sans Accès complet au disque), `note` facultatif |
 | `running` | array | Applications qui bloquent certains nettoyages : `app`, `processes`, `impact` |
 | `scanned` | boolean | `false` avec `--no-scan` |
-| `categories` | array | Par catégorie : `id`, `title`, `size`, `recommended`, `items` (vide avec `--no-scan`) |
+| `categories` | array | Par catégorie : `id`, `title`, `size`, `recommended`, `items`, et `shared` (octets situés dans des éléments d'une autre catégorie) quand il ne vaut pas `0`. Vide avec `--no-scan` |
 | `total`, `recommended` | integer | Octets libérables, au total et pour les éléments recommandés |
 | `errors` | object | Erreurs des scanners, s'il y en a |
 | `use_trash` | boolean | Réglage `use_trash` de la configuration |
@@ -361,10 +370,23 @@ lu-cleaner history --json --limit 0   # toutes les entrées
 |---|---|---|
 | `path` | string | Le fichier d'historique |
 | `total` | integer | Nombre d'entrées dans le fichier |
-| `freed` | integer | Somme de `size` sur toutes les entrées `done` du fichier (pas seulement celles affichées) |
+| `freed` | integer | Somme de `freed` sur toutes les entrées du fichier (pas seulement celles affichées) : l'espace réellement libéré. Les déplacements dans la Corbeille ne sont pas comptés |
+| `trashed` | integer | Somme de `size` sur les déplacements dans la Corbeille `done` : toujours occupés tant que la Corbeille n'est pas vidée |
 | `entries` | array | Les plus récentes d'abord, au plus `--limit` (30 par défaut, `0` = toutes) |
 
-Chaque entrée contient `time`, `kind`, `category`, `name`, `path` (éléments à chemin) ou `command` (éléments commande), `method` (`trash` quand le mode Corbeille a transformé une suppression en déplacement), `status` (`done`, `skipped` ou `failed` ; les simulations ne sont jamais enregistrées), `size` (la taille mesurée de l'élément) et `error`.
+Chaque entrée contient ces champs :
+
+| Champ | Description |
+|---|---|
+| `time`, `kind`, `category`, `name` | Quand, et quel élément |
+| `path` | Le chemin supprimé, pour les éléments à un seul chemin |
+| `location`, `paths`, `count` | Pour un élément groupé : son emplacement affiché, ses 50 premiers chemins et le nombre total de chemins |
+| `command` | La commande exécutée, pour les éléments commande |
+| `method` | Méthode réellement utilisée : `trash` quand le mode Corbeille a transformé une suppression en déplacement |
+| `status` | `done`, `skipped` ou `failed` ; les simulations ne sont jamais enregistrées |
+| `size` | La taille mesurée de l'élément |
+| `freed` | Octets réellement libérés : moins que `size` quand des données sont partagées par des liens physiques ou des clones APFS, ce qu'une suppression en échec a libéré avant d'échouer, `0` pour les déplacements dans la Corbeille, les éléments ignorés et les autres échecs. Toujours présent |
+| `error`, `message` | Raison de l'échec, et ce qui s'est passé ou la raison pour laquelle l'élément a été ignoré |
 
 ```json
 {
@@ -377,7 +399,8 @@ Chaque entrée contient `time`, `kind`, `category`, `name`, `path` (éléments �
       "command": "xcrun simctl delete A1B2C3D4-0000-4000-8000-000000000001",
       "method": "command",
       "status": "done",
-      "size": 18341888
+      "size": 18341888,
+      "freed": 18341888
     },
     {
       "time": "2026-09-27T18:46:20.112004+02:00",
@@ -387,23 +410,25 @@ Chaque entrée contient `time`, `kind`, `category`, `name`, `path` (éléments �
       "path": "/Users/me/dev/shop-app/node_modules",
       "method": "delete",
       "status": "done",
-      "size": 1210000000
+      "size": 1210000000,
+      "freed": 84000000
     }
   ],
   "freed": 37100000000,
   "path": "/Users/me/.local/state/lu-cleaner/history.jsonl",
-  "total": 88
+  "total": 88,
+  "trashed": 0
 }
 ```
 
-Le fichier lui-même est au format JSON Lines, avec le même format d'entrée et les plus anciennes d'abord, si bien que vous pouvez aussi le lire directement : `jq -s 'map(select(.status == "done")) | length' ~/.local/state/lu-cleaner/history.jsonl`.
+Le fichier lui-même est au format JSON Lines, avec le même format d'entrée et les plus anciennes d'abord, si bien que vous pouvez aussi le lire directement : `jq -s 'map(select(.status == "done")) | length' ~/.local/state/lu-cleaner/history.jsonl`. Les lignes écrites par des versions plus anciennes n'ont pas de champ `freed` : `history` suppose alors la taille entière pour une suppression définitive `done`, et `0` sinon.
 
 ## Autres commandes
 
 | Commande | Sortie |
 |---|---|
 | `catalog --json` | Tableau des entrées du catalogue : `id`, `category`, `name`, `paths`, `risk`, `method`, `mode` (`group` ou `each`) et, quand ils sont définis, `exclude`, `command`, `requires`, `process_guard`, `note`, `older_than`, `keep_latest`, `allow_git_repo`, `recommended`, `min_bytes`, `files` |
-| `config show --json` | Configuration effective : `path`, `exists`, `config` (les valeurs du fichier), `roots` résolues et `roots_source`, `worktree_roots`, `exclude`, `protect`, `stale_after`, `min_size` (en octets), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
+| `config show --json` | Configuration effective : `path`, `exists`, `config` (les valeurs du fichier), `roots` résolues et `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (les entrées `exclude` et `protect` qui n'existent pas), `stale_after`, `min_size` (en octets), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
 | `analyze [path] --json` | `root`, `total` et `entries` (chaque enfant direct : `name`, `path`, `dir`, `size`, `files`, `unreadable`) |
 | `version --json` | `version`, `go`, `os`, `arch` |
 
@@ -413,8 +438,9 @@ Le fichier lui-même est au format JSON Lines, avec le même format d'entrée et
 |---|---|
 | `0` | Succès. Les éléments ignorés pour des raisons de sécurité ne changent pas le code de sortie ; consultez `results[].status`. |
 | `1` | Échec à l'exécution : fichier de configuration invalide, erreur d'entrée/sortie, ou au moins un élément `failed` pendant un nettoyage. |
-| `2` | Erreur d'utilisation : commande ou option inconnue, valeur invalide (`--min-size`, `--older-than`, `--risk`, `--category`, `--sort`, `--top`), `clean --yes` sans `--smart`, `-c` ni `-k`, `clean --json` sans `--yes`, `clean` sans terminal et sans `--yes`, catégorie désactivée dans la configuration. |
-| `130` | Interrompu par <kbd>Ctrl</kbd>+<kbd>C</kbd> ou `SIGTERM`. |
+| `2` | Erreur d'utilisation : commande ou option inconnue, valeur invalide (`--min-size`, `--older-than`, `--risk` y compris `never`, `--category` y compris un nom d'outil comme `cursor`, `--sort`, `--top`, `--limit`, un type inconnu pour `artifacts --target`), `clean --yes` sans `--smart`, `-c` ni `-k` (ou avec seulement un `-k` qui nomme un scanner couvrant plusieurs catégories), `clean --json` sans `--yes`, `clean` sans terminal et sans `--yes`, un `--root` qui n'est pas un dossier ou qui vaut `/`, catégorie désactivée dans la configuration. |
+| `130` | Interrompu par <kbd>Ctrl</kbd>+<kbd>C</kbd>. |
+| `143` | Interrompu par `SIGTERM`. |
 
 Un scanner qui échoue ne change pas non plus le code de sortie : l'analyse continue, l'erreur est affichée sur stderr et listée dans `errors`.
 
@@ -424,6 +450,6 @@ Un scanner qui échoue ne change pas non plus le code de sortie : l'analyse cont
 - Attendez-vous à des changements **additifs** à chaque version : nouveaux champs, nouveaux types d'éléments, nouvelles clés `meta`, nouvelles catégories. Écrivez des consommateurs qui ignorent ce qu'ils ne connaissent pas.
 - Les valeurs de `kind`, `category`, `risk`, `method` et `status` sont des identifiants destinés aux scripts. `name`, `note`, `warn`, `message` et toutes les valeurs de `meta` sont du texte destiné aux humains, dont la formulation peut changer.
 - Les clés de `meta` dépendent du scanner et de ce qu'il a pu observer ; testez leur présence au lieu de supposer qu'une clé existe.
-- La sortie texte (tableaux, couleurs, colonne `★`) est réservée aux humains. Elle est brute et sans emoji quand stdout n'est pas un terminal, mais sa mise en forme n'est pas un contrat.
+- La sortie texte (tableaux, couleurs, colonne `★`) est réservée aux humains. Elle est brute et sans emoji quand stdout n'est pas un terminal, mais sa mise en forme n'est pas un contrat. Ni le texte ni le JSON ne transportent jamais un caractère de contrôle brut issu d'un nom de fichier : le texte affiche un échappement visible (`\x1b`), le JSON l'échappe sous la forme `\u001b`.
 
 Voir [Automatisation et scripts](/lu-cleaner/fr/guides/automation/) pour des scripts complets.

@@ -36,11 +36,11 @@ Dans `worktrees` et `artifacts`, qui n'ont pas de vue d'ensemble des catégories
 | --- | --- |
 | `space` | Liste des éléments : sélectionner ou désélectionner l'élément sous le curseur. Vue d'ensemble des catégories : sélectionner tous les éléments nettoyables de la catégorie **sauf** les éléments <span class="risk caution">caution</span> ; si une partie de la catégorie est déjà sélectionnée, désélectionner plutôt toute la catégorie. |
 | `a` | Sélection intelligente sur la vue : les éléments recommandés sont sélectionnés, tous les autres désélectionnés. |
-| `A` | Sélectionner tous les éléments nettoyables de la vue, éléments <span class="risk caution">caution</span> compris. |
+| `A` | Sélectionner tous les éléments nettoyables de la vue, éléments <span class="risk caution">caution</span> compris (les éléments encore en cours de mesure sont laissés de côté). |
 | `n` | Désélectionner tous les éléments de la vue. |
 | `i` | Inverser la sélection de la vue. |
 
-« La vue » désigne la liste d'éléments affichée (après un éventuel filtre de texte) quand une catégorie est ouverte, et tous les éléments visibles quand vous êtes sur la vue d'ensemble des catégories. Les éléments en rapport seul ne peuvent jamais être sélectionnés : `space` sur l'un d'eux en indique la raison dans la ligne d'état.
+« La vue » désigne la liste d'éléments affichée (après un éventuel filtre de texte) quand une catégorie est ouverte, et tous les éléments visibles quand vous êtes sur la vue d'ensemble des catégories. Certains éléments ne peuvent pas être sélectionnés, et `space` sur l'un d'eux en indique la raison dans la ligne d'état : les éléments en rapport seul, les éléments encore en cours de mesure (`…`), et les éléments qui exigent `--force` (dossiers de worktrees orphelins), qui deviennent sélectionnables quand vous avez lancé lu-cleaner avec `--force` ou en mode Corbeille.
 
 La sélection intelligente s'exécute aussi une fois, automatiquement, à la fin de l'analyse : toujours avec `lu-cleaner`, avec `lu-cleaner clean` sauf si vous passez `--no-smart`, et avec `worktrees`, `artifacts` et `devices` uniquement si vous passez `--smart`. Voir [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
 
@@ -57,7 +57,7 @@ La sélection intelligente s'exécute aussi une fois, automatiquement, à la fin
 | Touche | Action |
 | --- | --- |
 | `d` / `x` | Nettoyer la sélection. Ouvre la [fenêtre de confirmation](#fenêtre-de-confirmation). |
-| `t` | Activer ou désactiver le mode Corbeille : les éléments sélectionnés sont déplacés dans `~/.Trash` au lieu d'être supprimés. L'espace n'est libéré qu'une fois la Corbeille vidée. |
+| `t` | Activer ou désactiver le mode Corbeille : les fichiers et dossiers sélectionnés sont déplacés dans `~/.Trash` au lieu d'être supprimés ; les worktrees et les commandes sont ignorés, puisqu'ils supprimeraient définitivement. L'espace n'est libéré qu'une fois la Corbeille vidée. |
 | `o` | Afficher l'élément sous le curseur dans le Finder (liste des éléments uniquement). |
 | `?` | Aide. Elle liste aussi les scanners qui ont échoué, le cas échéant. |
 | `q` / `ctrl+c` | Quitter. |
@@ -80,12 +80,12 @@ Un filtre conservé reste actif pendant que vous naviguez. Appuyez sur `esc` sur
 
 ### Fenêtre de confirmation
 
-Les touches dépendent de la présence d'éléments <span class="risk caution">caution</span> dans la sélection.
+Les touches dépendent de la présence, dans la sélection, d'éléments <span class="risk caution">caution</span>, sélectionnés ou situés dans un élément sélectionné, ou d'éléments nettoyés uniquement grâce à `--force`.
 
 | Sélection | Confirmer | Annuler |
 | --- | --- | --- |
-| Aucun élément caution | `y` ou `enter` | `n`, `esc` ou `q` |
-| Au moins un élément caution | taper `yes`, puis `enter` | `esc` |
+| Aucun de ces éléments | `y` ou `enter` | `n`, `esc` ou `q` |
+| Au moins un de ces éléments | taper `yes`, puis `enter` | `esc` |
 
 Pendant la saisie de `yes`, `backspace`, `alt+backspace`, `ctrl+w` et `ctrl+u` modifient la saisie. `ctrl+c` quitte lu-cleaner sans rien nettoyer.
 
@@ -115,13 +115,13 @@ Pendant la saisie de `yes`, `backspace`, `alt+backspace`, `ctrl+w` et `ctrl+u` m
 
 | Touche | Action |
 | --- | --- |
-| `space` | Marquer ou démarquer l'entrée sous le curseur, puis descendre. |
+| `space` | Marquer ou démarquer l'entrée sous le curseur, puis descendre. Une entrée que l'analyseur ne supprime jamais ne peut pas être marquée, et la ligne d'état indique pourquoi. |
 | `esc` | Effacer toutes les marques. |
 | `d` / `x` / `delete` | Supprimer les entrées marquées, ou l'entrée sous le curseur si rien n'est marqué. |
 
 `delete` est la touche d'effacement vers l'avant (`fn` + `⌫` sur un clavier Mac). La touche `⌫` seule envoie `backspace`, qui remonte au dossier parent.
 
-La suppression vous demande toujours de taper `yes` puis d'appuyer sur `enter` (`esc` annule), car on peut tout sélectionner dans l'analyseur. Chaque chemin passe tout de même par le [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/), et un worktree git lié est retiré avec `git worktree remove` au lieu d'être supprimé. `--dry-run` et `--trash` s'appliquent ici aussi.
+La suppression vous demande toujours de taper `yes` puis d'appuyer sur `enter` (`esc` annule), car on peut tout sélectionner dans l'analyseur. Chaque chemin passe tout de même par le [garde-fou de sécurité](/lu-cleaner/fr/concepts/safety/), et un worktree git lié vérifié est retiré avec `git worktree remove` au lieu d'être supprimé. Les dépôts git, les sous-modules, les données git et les dossiers qui contiennent un dépôt ne sont jamais supprimés depuis l'analyseur. Sans accès complet au disque, les conteneurs des autres applications sont affichés sous la forme `🔒 app container — needs Full Disk Access` et ne sont jamais ouverts. `--dry-run` et `--trash` s'appliquent ici aussi.
 
 Pendant une suppression, `ctrl+c` annule les entrées restantes et quitte une fois celles en cours terminées. Sur l'écran de résultat, n'importe quelle touche ramène à la liste.
 

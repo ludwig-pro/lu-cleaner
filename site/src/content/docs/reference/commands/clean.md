@@ -17,9 +17,14 @@ unless --no-smart), pre-filtered by --category, --kind, --min-size,
 --older-than and --risk.
 
 With --yes, runs non-interactively: scan, filter, print the plan, clean.
-A narrowing filter is mandatory (--smart, --category or --kind) and items of
-risk "caution" (user data, dirty worktrees, sessions…) are only included with
-an explicit --risk caution. Use --dry-run first.
+A narrowing filter is mandatory (--smart, --category or --kind). Items of
+risk "caution" (user data, dirty worktrees, sessions…) and items the scan
+flagged with a warning (in use by a running process, ignored .env files that
+would be lost, runtime used by booted simulators…) are only included with an
+explicit --risk caution. Use --dry-run first.
+
+With --trash (or use_trash), files and folders go to the Trash; worktrees and
+commands (simctl, docker, brew…) cannot be undone, so they are skipped.
 
 ## Usage
 
@@ -49,16 +54,16 @@ lu-cleaner clean -y -k node_modules --min-size 200MB
 |---|---|---|---|
 | `-c`, `--category` | stringSlice |  | only these categories (repeatable, comma-separated): worktrees, artifacts, simulators, xcode, android, ai, js, ide, containers, langs, system |
 | `-n`, `--dry-run` |  |  | show what would be cleaned, delete nothing |
-| `--force` |  |  | ignore running-app guards and dirty/unpushed worktree checks |
+| `--force` |  |  | ignore running-app and in-use guards, and the worktree checks (locked, uncommitted changes, commits on no branch, nested worktrees) |
 | `--json` |  |  | machine-readable JSON output |
 | `-k`, `--kind` | stringSlice |  | only these item kinds or provider ids (repeatable, comma-separated) |
 | `--min-size` | string |  | hide items smaller than this, e.g. 100MB (default: config min_size; 0 for clean --yes) |
 | `--no-color` |  |  | disable colors (also honours NO_COLOR) |
 | `--older-than` | string |  | only items unused for longer than this, e.g. 30d, 2w, 6m |
-| `--risk` | string |  | highest risk allowed: safe\|moderate\|caution (default: moderate for clean --yes, everything otherwise) |
-| `--root` | stringArray |  | project root to scan for artifacts (repeatable, overrides config roots) |
+| `--risk` | string |  | highest risk allowed: safe\|moderate\|caution (default: moderate for clean --yes, everything otherwise); with --yes, caution also admits items with a warning |
+| `--root` | stringArray |  | project root to scan for artifacts (repeatable): replaces the config roots for the artifacts scan only, the other scanners keep them to see what your projects use |
 | `--smart` |  |  | only recommended items (safe caches, stale regenerable data) |
-| `--trash` |  |  | move to ~/.Trash instead of deleting (space is freed only once the Trash is emptied) |
+| `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |
 

@@ -23,15 +23,17 @@ NAME                              TOOL       BRANCH               STATUS       S
 my-app · feature/login            codex      feature/login        <span class="ok">merged</span>    2.40 GB   9d  <span class="dim">~/.codex/worktrees/a1b2/my-app</span>
 my-app · c3d4                     codex      (detached)           <span class="ok">clean</span>     1.90 GB   3w  <span class="dim">~/.codex/worktrees/c3d4/my-app</span>
 shop-app · fix-cart               conductor  fix-cart             <span class="bad">dirty</span>     1.20 GB   2d  <span class="dim">~/conductor/workspaces/shop-app/fix-cart</span>
+<span class="warn">! 3 uncommitted changes · active Conductor workspace — archive it in Conductor instead</span>
 my-app · worktree-onboarding      claude     worktree-onboarding  <span class="bad">unpushed</span>   850 MB   5d  <span class="dim">~/dev/my-app/.claude/worktrees/onboarding</span>
-my-app · prune 1 stale worktree…                                                0 B    —  <span class="dim">~/dev/my-app</span>
+<span class="warn">! 2 unpushed commits (branch worktree-onboarding is kept)</span>
+my-app · prune 1 stale worktree…                                                  ?    —  <span class="dim">~/dev/my-app</span>
 &nbsp;
 Total 6.35 GB in 5 items · <span class="acc">★ 4.30 GB</span> recommended (3 items)
 Disk: <span class="dim">38.2 GB free of 494 GB (92% used)</span>
 → run: lu-cleaner clean --smart -c worktrees
 </div>
 
-The table has no warnings column. To see why a worktree is flagged, open it in the picker (`enter` shows its details) or run `lu-cleaner scan -c worktrees --all`, which prints each warning under its row.
+Each warning is printed under its row, with details such as the repositories nested in a worktree. The picker shows the same information in the details panel (`enter`). The size of the prune item is `?` because what `git worktree prune` frees is only known after it runs.
 
 ## Where each tool puts its worktrees
 
@@ -55,7 +57,7 @@ lu-cleaner finds worktrees in four ways, so it also catches worktrees that are n
 3. It runs `git worktree list` in every repository it found. This finds that repository's worktrees wherever they are.
 4. It looks inside the usual nested folders (`.claude/worktrees`, `.worktrees`, `worktrees`, `<repo>-worktrees`).
 
-If several of these methods reach the same worktree, it is counted only once: lu-cleaner compares the folder's device and inode.
+If several of these methods reach the same worktree, it is counted only once: lu-cleaner compares the folder's device and inode. Submodules, and worktrees of submodules, are not linked worktrees of your repositories and are left out.
 
 :::tip[Your agent uses another folder?]
 Add the folder to `worktree_roots`. This list is added to the built-in one:
@@ -69,7 +71,10 @@ Some worktrees are listed but cannot be selected:
 
 - **On an external volume.** Removing it frees nothing on your internal disk.
 - **Main repository on a volume that is not mounted.** Its status is `unknown` until you plug the volume in.
+- **Git data that cannot be read**, because of permissions or macOS privacy protection. Its state is unknown, so it is only reported. Fix the access (for example, grant Full Disk Access to your terminal), then scan again.
+- **Main repository moved or renamed.** Git still tracks the worktree, so it is not an orphan. The warning gives the `git -C <new location> worktree repair <path>` command that relinks it.
 - **Outside your home folder**, for example in `/tmp`. The safety guard only deletes inside your home folder and your per-user temp folder. The item shows the exact `git -C … worktree remove …` command to run yourself.
+- **Your current directory.** Run lu-cleaner from another folder.
 
 ## Worktree statuses
 
@@ -77,16 +82,17 @@ Each worktree gets one status. When several could apply, the one highest in this
 
 | Status | What it means | Risk | Removed without `--force`? |
 |---|---|---|---|
-| `orphan` | Git no longer tracks the folder. Its main repository was deleted, its entry was pruned, or the folder is a copy of another worktree. | <span class="risk caution">caution</span> | Yes, as a plain folder: git cannot inspect it |
+| `orphan` | Git no longer tracks the folder. Its main repository was deleted, its entry was pruned, or the folder is a copy of another worktree. | <span class="risk caution">caution</span> | No. With `--force`, it is deleted as a plain folder: git cannot inspect it. |
 | `locked` | Locked with `git worktree lock`. Tools often do this while an agent runs. | <span class="risk caution">caution</span> | No |
 | `dirty` | Has uncommitted changes, including untracked files | <span class="risk caution">caution</span> | No |
-| `unpushed` | Has commits that no remote contains: ahead of its upstream, or no upstream at all | <span class="risk moderate">moderate</span> on a branch, <span class="risk caution">caution</span> on a detached HEAD | On a branch, yes: the branch keeps the commits. On a detached HEAD, only if another branch or a tag contains them. |
+| `unpushed` | Has commits that no remote contains: ahead of its upstream, or no upstream at all | <span class="risk moderate">moderate</span> on a branch, <span class="risk caution">caution</span> on a detached HEAD | On a branch, yes: the branch keeps the commits. On a detached HEAD, only if another branch, a tag or a remote-tracking branch contains them. |
 | `merged` | Everything is already in the default branch (`origin/HEAD`, `origin/main`, `origin/master`, `main` or `master`), including commits that were rebased or cherry-picked onto it | <span class="risk moderate">moderate</span> | Yes |
 | `clean` | No local changes and everything is pushed, but not merged yet | <span class="risk moderate">moderate</span> | Yes |
-| `unknown` | `git status` failed or timed out, or the worktree or its main repository is on another volume | <span class="risk caution">caution</span> or report-only | Only if git can read it at clean time |
+| `unknown` | `git status` failed or timed out; the worktree is on another volume; its git data or main repository cannot be read; its main repository is on an unmounted volume or was moved | <span class="risk caution">caution</span> or report-only | Only if git can read it at clean time |
 
 Some notes on these statuses:
 
+- **Orphan means verifiably gone.** A worktree is an orphan only when its git data (and, for a deleted main repository, the repository itself) is missing and the folder above it can be read. When it cannot be read (permissions, macOS privacy protection, unmounted volume), the worktree is `unknown` and only reported. `git worktree prune` is never run for such an entry either.
 - **Detached HEAD is normal for Codex.** Codex often checks out a detached HEAD. That is fine as long as the commit is also on a branch, a tag or a remote: the worktree is then `clean` or `merged`. It only becomes a problem when the agent made commits that exist nowhere else.
 - **Squash-merged pull requests usually show as `unpushed`.** Suppose a branch with several commits was squash-merged. Its commits don't match the default branch one by one, and once the PR branch is deleted on the remote, the warning says `upstream branch deleted`. Removal is still safe, because the local branch is kept. Check that the PR is merged, then select the worktree by hand.
 
@@ -97,8 +103,9 @@ Some conditions make a worktree <span class="risk caution">caution</span> whatev
 | `in use by …`: a process has its current directory inside (shell, dev server, agent) | caution |
 | `open in Cursor` / `open in VS Code`: an editor window shows this folder | caution |
 | `N active Codex threads`, `active Claude desktop session`, `active Conductor workspace — archive it in Conductor instead` | caution |
-| `moved: git records it at …`: the folder was moved by hand | caution. Run the suggested `git worktree repair`. |
-| `ignored .env files would be lost: …` | Stays moderate but is never smart-selected. Git ignores these files, so `git worktree remove` deletes them. |
+| `moved: git records it at …`: the folder was moved by hand | caution. Removal is refused until you run the suggested `git worktree repair`. |
+| `ignored secret/local files would be lost: …` | caution. Git ignores these files, so `git worktree remove` deletes them: `.env` and `.env.*`, `.envrc`, `.npmrc`, keystores, signing keys and certificates, provisioning profiles, `google-services.json`, `GoogleService-Info.plist`, `*.local.*` overrides, `settings.local.json`, `CLAUDE.local.md`… A file identical to the same file in the main checkout does not count, nor do templates such as `.env.example`. |
+| `contains another git repository or worktree: …` | caution. Removal is refused without `--force`, because git would delete the nested checkout too. |
 | `N unpushed commits (branch … is kept)` | Stays moderate but is never smart-selected |
 | `current directory` | Cannot be selected at all |
 
@@ -107,12 +114,12 @@ Some conditions make a worktree <span class="risk caution">caution</span> whatev
 Smart select picks a worktree only when all of these are true. Smart select is the `a` key in the picker and `--smart` on the command line.
 
 - Its status is `clean` or `merged`, so its risk is <span class="risk moderate">moderate</span>.
-- It has **no warning at all**: no unpushed commits, no ignored `.env` files, and no process, editor window or active agent session using it.
+- It has **no warning at all**: no unpushed commits, no ignored secret files, no nested repository, and no process, editor window or active agent session using it.
 - It has been idle for at least **7 days**, or **1 day** if it is merged into the default branch. If your `stale_after` setting is shorter than 7 days, it applies instead.
 
 "Idle" means the time since the worktree's last activity. lu-cleaner takes the most recent of these events: the worktree's creation, its last commit, changes to its index and HEAD, the modification times of its changed files, and the last activity of the Codex thread or Claude desktop session using it. It ignores the folder's own modification time, because Expo, Xcode and indexers update it even when nobody works there.
 
-Stale worktree entries (see [below](#stale-worktree-entries)) are always recommended.
+Stale worktree entries (see [below](#stale-worktree-entries)) are always recommended. Orphans never are.
 
 See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/) for the rules that apply to the other categories.
 
@@ -127,10 +134,10 @@ To see which option frees what, check the worktree's details. In the picker, pre
 | The task is finished: branch merged or pushed, nothing open in it | Remove the worktree | Frees the checkout and its artifacts. The branch stays in the repository. |
 | You will come back to the task, or its agent thread or workspace is still active | Remove only the artifacts | Keeps the sources and the tool's state. A reinstall brings the dependencies back. |
 | The worktree is `dirty` | Remove only the artifacts, or commit or stash first | Removing the worktree is refused anyway |
-| It holds git-ignored `.env` files you still need | Copy them out first, or remove only the artifacts | `git worktree remove` deletes ignored files |
+| It holds git-ignored `.env` files or keys you still need | Copy them out first, or remove only the artifacts | `git worktree remove` deletes ignored files |
 | Detached HEAD with commits that are on no branch | Run `git branch <name>` inside it, then remove it | Otherwise those commits become unreachable |
 | It is a Conductor workspace | Archive it in Conductor | Conductor keeps its archive commit and its own view stays consistent |
-| `orphan` | Look inside first. Delete it if nothing is worth recovering | Git cannot tell whether it contains unique work |
+| `orphan` | Look inside first. Delete it with `--force` if nothing is worth recovering | Git cannot tell whether it contains unique work |
 
 ### Remove only the artifacts
 
@@ -170,16 +177,22 @@ You can select a worktree and some artifacts inside it at the same time. The art
 1. **Everything is checked again.** Your scan may be minutes old, so lu-cleaner checks the worktree again right before it acts:
    - The folder must be the same folder as during the scan (same inode).
    - It must pass the [safety guard](/lu-cleaner/concepts/safety/).
-   - It must not contain your current directory.
+   - It must not contain your current directory, nor a mounted volume or disk image.
    - No other process may have its current directory in it or run a program from it.
+   - No Codex thread, Claude desktop session or Conductor workspace may have started using it since the scan.
+   - Git must still record the worktree at this path. A folder that was moved or copied by hand is refused, with the `git worktree repair` command to run.
 
    If any check fails, the item is skipped with the reason.
 
 2. **lu-cleaner's own git checks run.** Unless you pass `--force`, removal is refused in these cases:
    - The worktree is locked.
+   - It contains another worktree of the same repository, or any other git repository (a folder with a `.git` entry, or a bare repository), even in an ignored folder. Git would delete it along. Dependency folders such as `node_modules` and `Pods` are not searched.
    - HEAD is detached and some of its commits are on no branch, tag or remote-tracking ref.
-   - `git status --porcelain` reports anything.
+   - `git status` reports any change, tracked or untracked. lu-cleaner passes explicit flags, so a `status.showUntrackedFiles = no` setting in your git config cannot hide untracked files.
+   - Its main repository no longer exists, so git cannot look for uncommitted work.
    - lu-cleaner cannot tell whether commits would be lost, or cannot read the git status.
+
+   `--dry-run` runs these same checks and reports the same refusals.
 
 3. **Git removes the checkout.** lu-cleaner runs `git worktree remove <path>` from the main repository, **without** `--force`. Git applies its own refusals as a second line of defense: modified or untracked files, locks, submodules. Ignored files such as `node_modules`, `Pods` and `.env` do not block the removal, and they are deleted with the checkout. Git also removes the worktree's entry in the main repository's `.git/worktrees/`.
 
@@ -191,8 +204,12 @@ You can select a worktree and some artifacts inside it at the same time. The art
 
 </Steps>
 
+When you select a worktree and another worktree nested inside it, both are kept in the plan and the inner one is removed first, with its own checks. If the inner one is not removed, the outer one is kept too.
+
+Worktrees are never moved to the Trash: in Trash mode (`--trash`, `use_trash`, or `t` in the picker), they are skipped with `not possible in Trash mode (it would delete permanently)`.
+
 :::danger[`--force` bypasses the safety checks]
-With `--force`, lu-cleaner skips its own checks, including the check for processes working inside. It runs `git worktree remove --force --force`, which also removes dirty and locked worktrees. Uncommitted changes and commits made on a detached HEAD are then **lost**. Use it only on a worktree you have inspected yourself, never in a script.
+With `--force`, lu-cleaner skips its own git checks, and the check for processes working inside. It runs `git worktree remove --force --force`, which also removes dirty and locked worktrees, and the worktrees or repositories nested inside. Uncommitted changes and commits made on a detached HEAD are then **lost**. `--force` also deletes orphaned folders. Use it only on a worktree you have inspected yourself, never in a script.
 :::
 
 ### Stale worktree entries
@@ -201,11 +218,18 @@ A worktree folder is sometimes deleted with `rm`, by Cursor or Conductor, or by 
 
 - Risk is <span class="risk safe">safe</span>, and the item is always recommended.
 - Cleaning it runs `git -C ~/dev/my-app worktree prune`.
-- Some entries may still belong to a checkout on an unmounted volume, or to a checkout that was moved. `git worktree prune` would drop those too, so in that case lu-cleaner only deletes the other entries' metadata folders instead of running the command.
+- An entry counts as stale only when its checkout verifiably no longer exists. Some entries may belong to a checkout on an unmounted volume, to a checkout that cannot be read, or to a checkout that was moved. `git worktree prune` would drop those too, so in that case lu-cleaner only deletes the verified entries' metadata folders instead of running the command.
+- Both variants are verified again right before cleaning.
 
 ### Orphaned worktrees
 
-An orphan is a folder that still has a `.git` file, but git no longer knows it. Git cannot remove it, and cannot tell whether it contains work that exists nowhere else. lu-cleaner marks orphans as <span class="risk caution">caution</span>. It deletes them as plain folders, after the safety guard. The item's note suggests how to recover the code: clone the remote again, or relink the folder with `git worktree repair` when only its entry was pruned. In the picker, you must type `yes` to confirm a selection that contains caution items.
+An orphan is a folder that still has a `.git` file, but git no longer knows it. Git cannot remove it, and cannot tell whether it contains work that exists nowhere else. So an orphan:
+
+- is <span class="risk caution">caution</span> and never preselected;
+- is deleted as a plain folder, after the safety guard, **only with `--force`**. Without it, the item is skipped with `needs --force: orphaned: …`, in a dry run too. In Trash mode it can be moved to the Trash instead, which you can undo;
+- is checked again right before deletion: same `.git` file, git data still missing, and no other repository or worktree inside. An orphan that contains another repository is only reported: `rm -rf` would take that repository with it.
+
+The item's note suggests how to recover the code: clone the remote again, copy the changes into a new worktree when only its entry was pruned, or relink the folder with `git worktree repair` when you moved the main repository. In the picker, you must type `yes` to confirm a selection that contains caution items or items that need `--force`.
 
 ## What the tools see afterwards
 
@@ -236,10 +260,10 @@ lu-cleaner clean --yes -k codex-worktree --older-than 30d --dry-run
 ```
 
 :::caution[Always add `--smart` or `--older-than`]
-Without them, `worktrees --yes` takes **every** worktree up to moderate risk. That includes clean worktrees you are using today, worktrees with unpushed commits on a branch, and worktrees whose ignored `.env` files would be lost. Run with `--dry-run` first and read the plan.
+Without them, `worktrees --yes` takes **every** clean or merged worktree without a warning, including the ones you worked in today. Run with `--dry-run` first and read the plan.
 :::
 
-Caution worktrees (dirty, locked, orphaned, in use, with an active session) are left out unless you pass `--risk caution`. Even then, dirty, locked and detached-commit worktrees are still refused at clean time unless you also pass `--force`.
+Caution worktrees (dirty, locked, orphaned, in use, with an active session, with secret files or a nested repository) are left out unless you pass `--risk caution`. So are worktrees with a warning, such as unpushed commits on a branch: the plan lists them under `Held back`. Even with `--risk caution`, dirty, locked, nested and detached-commit worktrees are still refused at clean time, and orphans are not deleted, unless you also pass `--force`.
 
 ## When a removal is skipped
 
@@ -250,10 +274,15 @@ A skipped item is not a failure: the command still exits with code 0. The summar
 | `N uncommitted change(s) — commit them or use --force` | Commit, stash or discard the changes, or remove only the artifacts |
 | `detached HEAD with N commit(s) on no branch — they would be lost; …` | Run `git branch <name>` inside the worktree, then run the removal again |
 | `worktree is locked (git worktree lock) — use --force` | If the tool that locked it is done, run `git worktree unlock <path>` |
+| `contains another worktree, …` or `contains the git repository …` | Remove or move the nested checkout first |
+| `needs --force: orphaned: …` | Look inside the folder, then run again with `--force` if nothing is worth keeping |
+| `git records this worktree at …, not here: …` | Run the suggested `git worktree repair` (moved folder), or delete the copy yourself |
 | `in use: process 1234 is working inside …` | Quit the shell, dev server or agent running there |
+| `1 active Codex thread since the scan — rescan` (or a Claude desktop session, a Conductor workspace) | An agent started using it: archive the thread or session first |
 | `current directory is inside …` | Run lu-cleaner from another folder |
 | `… changed since the scan (different inode) — rescan` | Scan again: the folder was replaced |
-| `git refused to remove it (…)` | Read git's message; it has its own reasons |
+| `not possible in Trash mode (it would delete permanently)` | Run again without `--trash` (or with `--trash=false` when `use_trash` is set) |
+| `git refused to remove it (…) — use --force` | Read git's message; it has its own reasons |
 
 ## Related
 

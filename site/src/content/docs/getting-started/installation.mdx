@@ -88,12 +88,13 @@ The rest of this documentation spells out `lu-cleaner` in full.
 
 ## Grant Full Disk Access (optional)
 
-macOS privacy protection (TCC) prevents any app from reading a few folders unless you grant it **Full Disk Access**. lu-cleaner works without it, but two measurements are then unavailable:
+macOS privacy protection (TCC) prevents any app from reading a few folders unless you grant it **Full Disk Access**. lu-cleaner works without it, but a few folders are then out of reach:
 
 | Folder | Without Full Disk Access |
 | --- | --- |
 | `~/.Trash` | The Trash is listed as *Trash (size unknown — needs Full Disk Access)*. Cleaning it asks Finder to empty it instead of deleting the files directly (Finder may ask you for an Automation permission). `lu-cleaner doctor` reports the Trash size as unknown. |
 | `~/Library/Application Support/MobileSync/Backup` | iPhone and iPad backups made by Finder are listed as *iPhone/iPad backups (size unknown)*. They are report-only either way: lu-cleaner never deletes device backups. |
+| Other apps' containers: `~/Library/Containers/<app>`, `~/Library/Group Containers/<group>` | Never read, measured or cleaned. On macOS 14 and later, touching them would open a system permission prompt and block the scan until someone answers. Catalog entries stored there (Docker Desktop logs, the Microsoft Teams cache, the Apple Music artwork cache…) are listed as report-only with the warning `needs Full Disk Access`, the Docker Desktop and OrbStack disk images are not shown, and `analyze` shows these folders as `🔒 app container — needs Full Disk Access`. |
 
 `lu-cleaner analyze` also warns when some entries are unreadable and their sizes are partial.
 
@@ -148,7 +149,7 @@ rm -rf ~/.local/state/lu-cleaner   # history.jsonl
 Finally, delete the `alias luc=lu-cleaner` line from `~/.zshrc` if you added it. lu-cleaner leaves nothing else behind.
 
 :::caution
-If you cleaned with `--trash` or `use_trash = true`, the items are still in `~/.Trash`. They keep using disk space until you empty the Trash.
+If you cleaned with `--trash` or `use_trash = true`, the files and folders moved there are still in `~/.Trash`. They keep using disk space until you empty the Trash.
 :::
 
 ## Next steps

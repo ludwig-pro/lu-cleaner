@@ -95,15 +95,15 @@ Il suppose que lu-cleaner est [installé](/lu-cleaner/fr/getting-started/install
    Plan: 131 items · 69.0 GB (dry run)
    &nbsp;
    <span class="acc">Dry run:</span> nothing was deleted — 130 items would free 67.7 GB.
-   &nbsp; <span class="dim">Unavailable simulators (4): would run: xcrun simctl delete unavailable</span>
+   &nbsp; <span class="dim">iPhone 11 · iOS 16.4 (unavailable): would run: xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>
    <span class="warn">Skipped:</span> 1
    &nbsp; - codex:my-app › node_modules: in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules
    </div>
 
-   Une simulation rejoue les vérifications de dernière minute d'un vrai nettoyage (garde-fou de sécurité, applications en cours d'exécution, fichiers utilisés) sans rien supprimer. C'est pour cela qu'elle peut déjà signaler des éléments ignorés : ici, un agent exécute encore des tests dans un worktree, donc son `node_modules` est utilisé. Seules les dernières vérifications git de la suppression d'un worktree (modifications non commitées, verrou) attendent le vrai nettoyage.
+   Une simulation rejoue toutes les vérifications de dernière minute d'un vrai nettoyage sans rien supprimer : le garde-fou de sécurité, les applications en cours d'exécution, les fichiers utilisés, et les vérifications git de la suppression d'un worktree (verrou, modifications non commitées, commits sur aucune branche, dépôts imbriqués). C'est pour cela qu'elle peut déjà signaler des éléments ignorés : ici, un agent a lancé des tests dans un worktree après l'analyse, donc son `node_modules` est utilisé.
 
    :::note[Garde-fous]
-   Le nettoyage non interactif est volontairement strict. Il refuse de s'exécuter sans filtre qui restreint la sélection (`--smart`, `--category`/`-c` ou `--kind`/`-k`) : un simple `lu-cleaner clean --yes` se termine donc par une erreur au lieu de tout nettoyer. Il n'inclut jamais les éléments de risque <span class="risk caution">caution</span> (worktrees modifiés, sessions, données utilisateur), sauf si vous passez `--risk caution`. Les raisons sont expliquées dans [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
+   Le nettoyage non interactif est volontairement strict. Il refuse de s'exécuter sans filtre qui restreint la sélection (`--smart`, `--category`/`-c` ou `--kind`/`-k`) : un simple `lu-cleaner clean --yes` se termine donc par une erreur au lieu de tout nettoyer. Il n'inclut jamais les éléments de risque <span class="risk caution">caution</span> (worktrees modifiés, sessions, données utilisateur), ni les éléments que l'analyse a signalés par un avertissement (utilisés par un processus, fichiers `.env` ignorés par git qui seraient perdus…), sauf si vous passez `--risk caution` : ceux-là sont listés sous **Held back** à la place. Les raisons sont expliquées dans [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/).
    :::
 
 4. **Nettoyer**
@@ -124,6 +124,8 @@ Il suppose que lu-cleaner est [installé](/lu-cleaner/fr/getting-started/install
    </div>
 
    *Estimated* (estimé) est la somme de ce que les éléments nettoyés devaient libérer. *Measured* (mesuré) est la variation de l'espace libre signalée par le système de fichiers entre avant et après. Un léger écart est normal (d'autres applications écrivent sur le disque pendant ce temps). Un écart important signifie que quelque chose retient encore l'espace : voir l'étape suivante.
+
+   Avec `--trash`, les fichiers et dossiers sont déplacés dans la Corbeille à la place : le récapitulatif les compte à part (`moved to the Trash`), jamais comme libérés, et les worktrees et les éléments de type commande sont ignorés, puisqu'ils ne peuvent pas être annulés.
 
    Pour ne nettoyer qu'une partie de la recommandation, combinez `--smart` avec une catégorie :
 
@@ -169,15 +171,18 @@ Il suppose que lu-cleaner est [installé](/lu-cleaner/fr/getting-started/install
 
    <div class="terminal">
    <span class="dim">$ </span>lu-cleaner history \-\-limit 4
-   <span class="dim">TIME              STATUS   METHOD       SIZE  NAME                         PATH/COMMAND</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  delete    1.42 GB  shop-app › node_modules      <span class="dim">\~/dev/shop-app/node_modules</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  worktree  2.40 GB  my-app · feature/login       <span class="dim">\~/.codex/worktrees/a1b2/my-app</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  command   1.10 GB  Unavailable simulators (4)   <span class="dim">$ xcrun simctl delete unavailable</span>
-   <span class="dim">2026-09-29 10:42</span>  <span class="warn">skipped</span>  delete    1.28 GB  codex:my-app › node_modules  <span class="dim">\~/.codex/worktrees/a1b2/my-app/node_modules</span>
+   <span class="dim">TIME              STATUS   METHOD       SIZE    FREED  NAME                                  PATH/COMMAND</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  delete    1.42 GB  1.42 GB  shop-app › node_modules               <span class="dim">\~/dev/shop-app/node_modules</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  worktree  2.40 GB  2.40 GB  my-app · feature/login                <span class="dim">\~/.codex/worktrees/a1b2/my-app</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="ok">done   </span>  command    310 MB   310 MB  iPhone 11 · iOS 16.4 (unavailable)    <span class="dim">$ xcrun simctl delete 5A1F0C2E-7B3D-4E8A-9C61-2F4B8D0E1A37</span>
+   <span class="dim">2026-09-29 10:42</span>  <span class="warn">skipped</span>  delete    1.28 GB           codex:my-app › node_modules           <span class="dim">\~/.codex/worktrees/a1b2/my-app/node_modules</span>
+   &nbsp;   <span class="warn">! in use: process 51234 runs a program or library from \~/.codex/worktrees/a1b2/my-app/node_modules</span>
    &nbsp;
    <span class="dim">Showing the last 4 of 131 entries (\-\-limit 0 for all).</span>
    Total freed: 67.7 GB over 130 cleaned items (\~/.local/state/lu-cleaner/history.jsonl)
    </div>
+
+   **FREED** est ce qui a réellement été libéré : moins que **SIZE** quand les données sont partagées avec d'autres fichiers (liens physiques ou clones APFS), vide pour les éléments ignorés. Les déplacements vers la Corbeille ne libèrent rien tant que vous ne l'avez pas vidée : ils sont donc totalisés à part.
 
 </Steps>
 

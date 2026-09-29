@@ -17,7 +17,8 @@ When stdin or stdout is not a terminal (a pipe, a scheduled job, an AI agent's s
 - `worktrees`, `artifacts` and `devices` print their list instead of opening the picker. `--list` does the same on a terminal.
 - `clean` refuses to run without `--yes` and exits with code 2. Nothing is ever deleted without an explicit selection or `--yes`.
 - Colors are only used when stdout is a terminal. `--no-color` and the `NO_COLOR` variable also turn them off.
-- The progress spinner only shows on a terminal. Warnings, such as a scanner that failed, go to stderr as `warning: provider …: …`.
+- The progress spinner only shows on a terminal. Warnings, such as a scanner that failed or a `--kind` that matched nothing, go to stderr as `warning: …`.
+- Text output never contains raw control characters: names, paths and messages taken from the disk are printed with visible escapes such as `\x1b`, so a crafted folder name cannot inject terminal sequences into your logs. JSON output escapes them as `\uXXXX`.
 
 ## JSON output
 
@@ -27,9 +28,9 @@ Add `--json` to get machine-readable output on stdout:
 |---|---|
 | `lu-cleaner scan --json` | Disk usage, every matching item, totals by category, scanner errors and timings |
 | `lu-cleaner worktrees --json`, `artifacts --json`, `devices --json` | The same report, limited to their categories |
-| `lu-cleaner clean --yes … --json` | One result per item (`done`, `dry-run`, `skipped` or `failed`), estimated and measured bytes freed, disk before and after |
+| `lu-cleaner clean --yes … --json` | One result per item (`done`, `dry-run`, `skipped` or `failed`) with its message, estimated and measured bytes freed, bytes moved to the Trash (`trashed`), disk before and after |
 | `lu-cleaner doctor --json` | Disk usage, APFS snapshots, Trash, running apps that block a cleanup, tips |
-| `lu-cleaner history --json` | Past cleanups, with the history file path |
+| `lu-cleaner history --json` | Past cleanups (paths, outcome, message, bytes really freed), with the history file path |
 | `lu-cleaner catalog --json`, `config show --json`, `analyze <path> --json`, `version --json` | Known paths, effective configuration, directory sizes, build info |
 
 Sizes are integers in bytes. In `scan --json`, each item has `risk`, `method`, `recommended`, `cleanable`, `freed` and `age_days`, and a `meta` object with scanner-specific details, such as a worktree's `status` and `branch` or the `package_manager` of a `node_modules`. The [JSON output reference](/lu-cleaner/reference/json-output/) documents every field.
@@ -53,19 +54,19 @@ lu-cleaner clean --yes --smart --dry-run --json | jq '[.results[] | select(.stat
 
 `clean --yes` scans, filters, prints the plan and cleans, with no picker and no confirmation. `worktrees --yes`, `artifacts --yes` and `devices --yes` follow the same rules, limited to their categories.
 
-1. **A narrowing filter is mandatory.** Pass `--smart`, `--category`/`-c` or `--kind`/`-k`. Without one, lu-cleaner refuses to run and exits with code 2: `clean --yes` alone would mean "delete everything that was found". `worktrees`, `artifacts` and `devices` count as narrowed by their category.
-2. **Caution items are left out unless you ask for them.** The highest risk allowed is <span class="risk moderate">moderate</span>, unless you pass `--risk caution`. Caution items may hold data you care about: dirty worktrees, sessions, unknown git-ignored folders, simulators with data. <span class="risk never">never</span> items are report-only and are never cleaned.
+1. **A narrowing filter is mandatory.** Pass `--smart`, `--category`/`-c` or `--kind`/`-k`. Without one, lu-cleaner refuses to run and exits with code 2: `clean --yes` alone would mean "delete everything that was found". A `-k` naming a scanner that spans several categories (`apple`, `ai`, `system`, `catalog`) does not count: add `-c` or `--smart`. `worktrees`, `artifacts` and `devices` count as narrowed by their category.
+2. **Caution items and items with a warning are left out unless you ask for them.** The highest risk allowed is <span class="risk moderate">moderate</span>, unless you pass `--risk caution`. Caution items may hold data you care about: dirty worktrees, sessions, unknown git-ignored folders, simulators with data. Items with a warning (an app running, a process in the project, unpushed commits, a runtime still used by simulators…) are treated the same way: the plan lists them under `Held back` (on stderr with `--json`). <span class="risk never">never</span> items are report-only and are never cleaned.
 3. **No minimum size.** `--min-size` defaults to 0, while lists use the `min_size` setting, 1 MB by default.
 4. **The plan is printed first.** You can see every item before anything is deleted, unless you use `--json`.
-5. **`--dry-run` (`-n`) runs the same checks as a real clean**: safety guard, marker files, inode identity, running apps, processes working inside, open databases. It reports what would be skipped, but deletes nothing. One exception: the git checks of a worktree (uncommitted changes, lock, commits on no branch) only run during the real removal.
-6. **Nested items are cleaned once.** If a folder and a folder inside it both match, only the outer one is kept in the plan.
+5. **`--dry-run` (`-n`) runs the same checks as a real clean**: safety guard, marker files, inode identity, running apps, processes working inside, open databases, the re-checks of each scanner, and the git checks of worktrees (lock, nested checkouts, commits on no branch, uncommitted changes). It reports what would be skipped, including items that need `--force`, but deletes nothing. Only git's own refusals during `git worktree remove` are not simulated.
+6. **Nested items are cleaned once.** If a folder and a folder inside it both match, only the outer one is kept in the plan. The exception is a worktree nested in another selected worktree: the inner one is removed first, with its own checks, and the outer one is kept if the inner one stays.
 
 Two flags change what "clean" means. Scripts should almost never use them:
 
 | Flag | Effect |
 |---|---|
-| `--trash` | Moves items to `~/.Trash` instead of deleting them. **No space is freed** until the Trash is emptied. |
-| `--force` | Ignores running-app guards, processes working inside, and the dirty, locked and detached-HEAD checks of worktrees. Work can be lost. |
+| `--trash` | Moves files and folders to `~/.Trash` instead of deleting them. **No space is freed** until the Trash is emptied: summaries and the history report these moves apart from freed space. Worktree removals and commands (`simctl`, `docker`, `brew`…) would delete permanently, so they are skipped, and so is anything already in the Trash. `--trash=false` overrides `use_trash`. |
+| `--force` | Ignores running-app guards, processes working inside, and the worktree checks (lock, uncommitted changes, commits on no branch, nested worktrees and repositories). It also lets lu-cleaner delete orphaned worktree folders. Work can be lost. |
 
 Useful combinations:
 
@@ -80,7 +81,7 @@ lu-cleaner clean --yes -k node_modules --older-than 60d  # node_modules of proje
 Without `--smart`, a category filter takes **every** item of that category up to moderate risk. That includes the `node_modules` of the project you opened this morning. Add `--older-than` or `--smart`, and read the `--dry-run` plan first.
 :::
 
-Every real clean is added to `~/.local/state/lu-cleaner/history.jsonl`, or `$XDG_STATE_HOME/lu-cleaner/` if that variable is set. Read it with `lu-cleaner history`. To give a job its own settings, point `LU_CLEANER_CONFIG` to another config file. See [Configuration](/lu-cleaner/reference/configuration/).
+Every real clean is added to `~/.local/state/lu-cleaner/history.jsonl`, or `$XDG_STATE_HOME/lu-cleaner/` if that variable is set. Each line records the item's path (or the first 50 paths of a group), its outcome and message (why it was skipped, for example), and the bytes really freed: less than the size for data shared through hardlinks or APFS clones, and 0 for moves to the Trash. Read it with `lu-cleaner history`. To give a job its own settings, point `LU_CLEANER_CONFIG` to another config file. See [Configuration](/lu-cleaner/reference/configuration/).
 
 ## Exit codes
 
@@ -88,8 +89,11 @@ Every real clean is added to `~/.local/state/lu-cleaner/history.jsonl`, or `$XDG
 |---|---|
 | `0` | Success, including dry runs, "nothing to clean", and runs where some items were **skipped** |
 | `1` | Runtime error, or at least one item **failed** to clean |
-| `2` | Usage error: unknown command or flag, invalid value, `clean --yes` without a narrowing filter, `clean` without a terminal and without `--yes`, `clean --json` without `--yes` |
-| `130` | Interrupted by Ctrl-C or SIGTERM |
+| `2` | Usage error: unknown command or flag, invalid value, `clean --yes` without a narrowing filter, `clean` without a terminal and without `--yes`, `clean --json` without `--yes`, an unknown artifact kind for `artifacts -t`, `/` as a root |
+| `130` | Interrupted by Ctrl-C |
+| `143` | Interrupted by SIGTERM |
+
+The first Ctrl-C or SIGTERM cancels the run: pending items are skipped. A second one ends the process at once, even in the middle of a long deletion.
 
 A skipped item is not an error. It was left alone on purpose: an app is running, a process works inside it, the worktree has uncommitted changes. If your script needs to know about skipped items, read `.results[] | select(.status == "skipped")` in the JSON output.
 
@@ -106,9 +110,8 @@ set -eu
 
 # Scheduled jobs start with a minimal PATH: add where lu-cleaner, git and jq live.
 export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-# cron does not set TMPDIR. Without it, lu-cleaner cannot find the caches
-# kept in your per-user temp folder (Metro, Jest...).
-export TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)"
+# No need to set TMPDIR: when it is missing (cron, launchd), lu-cleaner asks
+# macOS for your per-user temp folder (Metro, Jest... caches live there).
 
 logs="$HOME/Library/Logs/lu-cleaner"
 mkdir -p "$logs"
@@ -186,7 +189,7 @@ cron skips jobs while the Mac is asleep, which is why launchd is the better choi
 </Tabs>
 
 :::note[Background jobs have fewer permissions]
-A scheduled job doesn't inherit the Full Disk Access you may have granted to your terminal app. Some sizes can then be unknown, such as the Trash, and the report may differ slightly from a run in your terminal.
+A scheduled job doesn't inherit the Full Disk Access you may have granted to your terminal app. Some sizes can then be unknown, such as the Trash. lu-cleaner never reads inside other apps' containers (`~/Library/Containers`, `~/Library/Group Containers`) without Full Disk Access, because macOS would block on a permission prompt: those items are reported as needing Full Disk Access, or left out. The report may therefore differ slightly from a run in your terminal.
 :::
 
 ### Why the scheduled job only cleans safe items
@@ -197,7 +200,7 @@ If you uncomment the last line of the script, keep `--smart --risk safe`:
 - <span class="risk moderate">moderate</span> items cost you time to get back: a reinstall, a download, a rebuild. You should decide when to pay that cost.
 - <span class="risk caution">caution</span> items can hold data, so they are never cleaned without `--risk caution`.
 
-If Xcode or the Simulator is running at that time, the items they guard are skipped and the exit code stays 0. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
+If Xcode or the Simulator is running at that time, the items they guard are held back (or skipped, when the app started after the scan) and the exit code stays 0. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/).
 
 ## Use lu-cleaner from an AI coding agent
 

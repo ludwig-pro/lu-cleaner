@@ -38,7 +38,7 @@ Items are **upserted by ID**: a scanner first emits an item with its size still 
 | `apple` | DerivedData, archives, DeviceSupport, simulators, runtimes, extra Xcode installs | xcode, simulators |
 | `android` | AVDs, snapshots, SDK packages, Gradle user home, Android Studio, JDKs | android |
 | `ai` | Claude Code, Codex, Cursor, Conductor… sessions by age, orphaned data, old binaries, local models | ai, ide |
-| `js` | Node versions, npx, pnpm and Yarn Berry stores, Expo Go builds, Playwright browsers, temp dirs | js |
+| `js` | Node versions, npx, pnpm and Yarn Berry stores, Expo Go builds, Playwright browsers, temp dirs, stale watchman watches | js |
 | `system` | Trash, Docker and VMs, Homebrew, Go/Rust/Ruby, VS Code, JetBrains, Zed, Downloads, macOS facts | system, containers, langs, ide |
 | `catalog` | About 200 well-known cache, log and tool-data locations | every category except worktrees and artifacts |
 
@@ -53,11 +53,15 @@ There are two kinds of knowledge in lu-cleaner:
 
 ### Where lu-cleaner looks
 
-- **Project roots** hold your checkouts. They come from `--root`, the `roots` config key, or are auto-detected (`~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/conductor/repos`…). The artifacts and worktrees scanners walk them, up to `max_depth` levels (8 by default).
-- **Worktree roots** are the folders where AI tools create worktrees: `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees`, `~/.worktrees`… plus any `worktree_roots` you configure.
+- **Project roots** hold your checkouts. They come from the `roots` config key, or are auto-detected (`~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/conductor/repos`…). The artifacts and worktrees scanners walk them, up to `max_depth` levels (8 by default).
+- **Worktree roots** are the folders where AI tools create worktrees: `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees`, `~/.worktrees`… plus any `worktree_roots` you configure. They are also scanned for project artifacts.
 - **Fixed locations** in `~/Library`, dot-folders of your home and your per-user temporary folder (`$TMPDIR`), for caches, SDKs, simulators and tool data.
 
+Roots given on the command line (`--root <dir>`, or `lu-cleaner artifacts <dir>`) narrow the **project artifacts** scan to exactly those folders: no worktree roots, no built-in extra folders, and any artifact outside them is dropped. The other scanners keep the configured roots, because they read them to learn what your projects use (Node, Ruby and Android SDK versions, main repositories of worktrees): with `--root ~/dev/one-project` alone, every version used by your other projects would look unused. `/` is refused as a root.
+
 Anything whose real location is on another volume (an external SSD behind a symlink, for example) is shown for information only, with the warning `on external volume — no internal gain`: deleting it would not free space on your internal disk.
+
+Without Full Disk Access, the data of other apps (`~/Library/Containers/<app>`, `~/Library/Group Containers/<group>`) is never read: on macOS 14 and later, the first access would block on a system permission prompt. Catalog entries there are listed as report-only with the warning `needs Full Disk Access`. See [Installation](/lu-cleaner/getting-started/installation/#grant-full-disk-access-optional).
 
 ## Measuring sizes
 
@@ -65,7 +69,7 @@ Sizes answer one question: *how much free space will I get back?* That drives se
 
 - **Allocated size, not apparent size.** lu-cleaner counts the blocks a file really occupies on disk (`st_blocks × 512`), like `du`. A sparse 64 GB disk image that uses 3 GB counts as 3 GB.
 - **Hardlinks are counted once.** A file with several hardlinks inside the same tree is counted once. When some of its links live *outside* the measured tree, deleting the tree frees nothing for that file. lu-cleaner then reports a smaller **really freed** size (`reclaim` in JSON). Typical case: a `node_modules` installed by pnpm is hardlinked to the pnpm store. It may measure 1.2 GB while deleting it frees 80 MB.
-- **APFS clones are not detected.** Detecting them would cost too much, so they count as reclaimable. `lu-cleaner doctor` explains the consequences.
+- **APFS clones count only their private bytes.** A cloned file (bun and pnpm installs, `cp -c`, Finder duplicates) shares its data blocks with the original: deleting it frees only the blocks it no longer shares, unless every file sharing that data is inside the deleted tree. The really freed size is an estimate: data shared between two trees measured separately (the bun cache and a `node_modules` installed from it) comes back only once both are deleted.
 - **Symlinks are never followed** and other mounted filesystems are never entered while measuring.
 - **Units are decimal** (1 GB = 1,000,000,000 bytes), like Finder and `df -H`.
 
@@ -87,11 +91,12 @@ Every line in the picker, the `scan` table and the JSON output is an item. The p
 | Name | `name` | Short human label, e.g. `my-app · feature/login` or `node v18.20.4 (nvm)`. |
 | Path / Location | `path`, `paths`, `location` | What gets removed. A **group item** removes several paths at once (`Metro / Haste file maps (18)`); a **command item** shows where its command acts. |
 | Size | `size` | Allocated bytes on disk, hardlinks counted once. |
-| Reclaim ("really freed") | `reclaim`, `freed` | What deleting really frees when it is less than the size. `scan` marks such sizes with `*`. |
+| Reclaim ("really freed") | `reclaim`, `freed` | What deleting really frees when it is less than the size (data shared through hardlinks or APFS clones). `scan` marks such sizes with `*`. |
 | Age / last used | `last_used`, `age_days` | Best estimate of the last real activity, not the folder's modification date. |
 | Risk | `risk` | What you lose: `safe`, `moderate`, `caution` or `never`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/). |
 | Method | `method` | How it is cleaned: `delete`, `trash`, `command`, `worktree` or `report`. |
 | ★ | `recommended` | Preselected by smart select. |
+| Needs `--force` | `require_force` | Refused without `--force`, in a dry run too (orphaned worktree folders). |
 | Warning | `warn` | Something that deserves attention (dirty worktree, app running, newest version kept…). |
 | Note | `note` | What the item is and how it comes back after cleaning. |
 | Meta | `meta` | Scanner-specific details: branch, dirty count, API level, projects using it… |
@@ -113,24 +118,24 @@ This date drives `--older-than`, the *stale* marking (yellow age in the picker) 
 
 1. **Selection.** In the picker you select items (<kbd>space</kbd>, <kbd>a</kbd> for smart select) and press <kbd>d</kbd>. With `clean --yes`, the filters and `--smart` decide (see [the `clean` command](/lu-cleaner/reference/commands/clean/)). Nested selections are merged: if you select a worktree *and* the `node_modules` inside it, only the worktree is processed and nothing is counted twice.
 
-2. **Confirmation** (picker only). A dialog sums up the selection by risk, the method (delete permanently, move to Trash or dry-run), the commands that will run and the apps currently running that would block some items. If any selected item is `caution`, you must type `yes`.
+2. **Confirmation** (picker only). A dialog sums up the selection by risk, the method (delete permanently, move to Trash or dry-run), the commands that will run and the apps currently running that would block some items. If the selection holds a `caution` item (selected, or inside a selected item) or an item that needs `--force`, you must type `yes`.
 
-3. **Re-checks.** Right before acting on an item, the pipeline re-validates it: running apps, the item's own re-check (for example "this simulator is still shut down"), then for every path its inode identity, open SQLite databases, the safety guard, marker files and processes working inside. A failed check **skips** the item with a reason; it never deletes part of it. Details in [Safety model](/lu-cleaner/concepts/safety/).
+3. **Re-checks.** Right before acting on an item, the pipeline re-validates it: running apps, the item's own re-check (for example "this simulator is still shut down"), then for every path its inode identity, open SQLite databases, the safety guard, marker files, mounted volumes and processes working inside, and for a worktree the git checks (lock, uncommitted changes, commits on no branch, nested repositories). A failed check **skips** the item with a reason; it never deletes part of it. Details in [Safety model](/lu-cleaner/concepts/safety/).
 
-4. **Execution.** File deletions and Trash moves run four at a time. Commands (`xcrun simctl delete …`, `pnpm store prune`…) and git worktree removals run one after the other, each command with a 15-minute timeout. <kbd>Ctrl</kbd>+<kbd>C</kbd> cancels: items not started yet are reported as skipped (`cancelled`).
+4. **Execution.** File deletions and Trash moves run four at a time. Commands (`xcrun simctl delete …`, `pnpm store prune`…) and git worktree removals run one after the other, each command with a 15-minute timeout. In Trash mode, worktrees and commands are skipped (`not possible in Trash mode`), since they would delete permanently. <kbd>Ctrl</kbd>+<kbd>C</kbd> cancels: items not started yet are reported as skipped (`cancelled`). With `clean --yes`, a second <kbd>Ctrl</kbd>+<kbd>C</kbd> stops lu-cleaner at once, even in the middle of a long deletion.
 
-5. **Summary.** Each item ends as `done`, `skipped` or `failed`. lu-cleaner reports two numbers: the **estimated** space freed (sum of the items' really-freed sizes) and the **measured** space freed (the free space of your home volume before and after, as reported by the filesystem). When the measured number is much lower, `lu-cleaner doctor` tells you why: local snapshots, the Trash, open files, clones. See [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
+5. **Summary.** Each item ends as `done`, `skipped` or `failed`. lu-cleaner reports two numbers: the **estimated** space freed (sum of the items' really-freed sizes, including what a failed deletion freed before failing) and the **measured** space freed (the free space of your home volume before and after, as reported by the filesystem). Moves to the Trash are totalled apart and never counted as freed. When the measured number is much lower, `lu-cleaner doctor` tells you why: local snapshots, the Trash, open files, clones. See [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
 
 </Steps>
 
-With `--dry-run` (`-n`), steps 1 to 3 run for real, including every re-check, and step 4 only prints what would happen (`would delete …`, `would run: xcrun simctl delete …`). A dry run is therefore a faithful preview: an item that would be skipped for a safety reason is reported as skipped. The one exception is the git checks of worktree removal (uncommitted changes, lock, detached commits), which only run for real; the scan already flags those worktrees.
+With `--dry-run` (`-n`), steps 1 to 3 run for real, including every re-check and the git checks of worktree removal, and step 4 only prints what would happen (`would delete …`, `would run: xcrun simctl delete …`). A dry run is therefore a faithful preview: an item that would be skipped for a safety reason, or refused for lack of `--force`, is reported as skipped. Only git's own refusals at removal time cannot be previewed.
 
 ## History
 
-Every real clean appends one JSON line per processed item to `~/.local/state/lu-cleaner/history.jsonl` (`$XDG_STATE_HOME/lu-cleaner/` when that variable is set): time, kind, category, name, path or command, method, status, size and error. Dry runs are not recorded, and neither are items that had already disappeared.
+Every real clean appends one JSON line per processed item to `~/.local/state/lu-cleaner/history.jsonl` (`$XDG_STATE_HOME/lu-cleaner/` when that variable is set): time, kind, category, name, path or command (the location and first paths of a group item), method, status, size, the bytes really freed, the error and the message (why an item was skipped, for example). Dry runs are not recorded, and neither are items that had already disappeared.
 
 ```bash
-lu-cleaner history              # the last 30 actions, newest first, and the total freed
+lu-cleaner history              # the last 30 actions, newest first, and the total really freed
 lu-cleaner history --limit 0    # everything
 lu-cleaner history --json       # for scripts
 ```

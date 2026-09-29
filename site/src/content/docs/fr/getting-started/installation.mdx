@@ -88,12 +88,13 @@ Le reste de cette documentation écrit `lu-cleaner` en entier.
 
 ## Accorder l'accès complet au disque (facultatif)
 
-La protection de la vie privée de macOS (TCC) empêche toute application de lire certains dossiers, sauf si vous lui accordez l'**accès complet au disque**. lu-cleaner fonctionne sans, mais deux mesures sont alors indisponibles :
+La protection de la vie privée de macOS (TCC) empêche toute application de lire certains dossiers, sauf si vous lui accordez l'**accès complet au disque**. lu-cleaner fonctionne sans, mais quelques dossiers sont alors hors d'atteinte :
 
 | Dossier | Sans accès complet au disque |
 | --- | --- |
 | `~/.Trash` | La Corbeille est listée sous le nom *Trash (size unknown — needs Full Disk Access)*. La nettoyer demande au Finder de la vider au lieu de supprimer directement les fichiers (le Finder peut vous demander une autorisation d'automatisation). `lu-cleaner doctor` indique que la taille de la Corbeille est inconnue. |
 | `~/Library/Application Support/MobileSync/Backup` | Les sauvegardes d'iPhone et d'iPad faites par le Finder sont listées sous le nom *iPhone/iPad backups (size unknown)*. Elles sont de toute façon en rapport seul : lu-cleaner ne supprime jamais les sauvegardes d'appareils. |
+| Conteneurs des autres applications : `~/Library/Containers/<app>`, `~/Library/Group Containers/<group>` | Jamais lus, mesurés ni nettoyés. Sur macOS 14 et versions ultérieures, y toucher ouvrirait une demande d'autorisation système qui bloquerait l'analyse jusqu'à ce que quelqu'un y réponde. Les entrées du catalogue qui y sont stockées (journaux de Docker Desktop, cache de Microsoft Teams, cache des illustrations d'Apple Music…) sont listées en rapport seul avec l'avertissement `needs Full Disk Access`, les images disque de Docker Desktop et d'OrbStack ne sont pas affichées, et `analyze` affiche ces dossiers sous la forme `🔒 app container — needs Full Disk Access`. |
 
 `lu-cleaner analyze` vous avertit aussi lorsque certaines entrées sont illisibles et que leurs tailles sont partielles.
 
@@ -148,7 +149,7 @@ rm -rf ~/.local/state/lu-cleaner   # history.jsonl
 Enfin, supprimez la ligne `alias luc=lu-cleaner` de `~/.zshrc` si vous l'avez ajoutée. lu-cleaner ne laisse rien d'autre derrière lui.
 
 :::caution
-Si vous avez nettoyé avec `--trash` ou `use_trash = true`, les éléments sont toujours dans `~/.Trash`. Ils continuent d'occuper de l'espace disque tant que vous n'avez pas vidé la Corbeille.
+Si vous avez nettoyé avec `--trash` ou `use_trash = true`, les fichiers et dossiers qui y ont été déplacés sont toujours dans `~/.Trash`. Ils continuent d'occuper de l'espace disque tant que vous n'avez pas vidé la Corbeille.
 :::
 
 ## Étapes suivantes

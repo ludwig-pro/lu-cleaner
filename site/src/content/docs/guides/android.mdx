@@ -53,6 +53,8 @@ An SDK package or a Gradle version is only worth deleting if no project needs it
 
 When a React Native project has no `node_modules`, the `react-native` version in its `package.json` gives the default NDK of that release. Gradle versions installed with Homebrew or SDKMAN also count as in use.
 
+This walk always uses your configured (or auto-detected) roots. Roots passed on the command line (`--root`, `lu-cleaner artifacts <root>`) only narrow the artifacts scan: with a single project as root, every version your other projects use would look unused.
+
 :::caution[When usage is unknown, nothing is preselected]
 The project walk stops after 20 seconds or 250,000 directories. If it does not finish, or if no project root exists, lu-cleaner cannot prove that a package is unused: items show *no project roots scanned — usage unknown* and are not preselected. Point `roots` at the folders that hold your projects if the auto-detected ones miss them.
 :::
@@ -115,7 +117,7 @@ If you saved named snapshots yourself, the item becomes `Emulator snapshots · P
 NDKs, build-tools, platforms, CMake and sources follow the same keep rules:
 
 - **Used by a project**: kept. The item shows `used_by` (in the details panel and in `--json` metadata) and is never preselected.
-- **Newest installed version**: always kept.
+- **Newest installed version**: always kept. Set `keep_latest` in the [configuration](/lu-cleaner/reference/configuration/) to keep more of the newest versions (1 by default).
 - **Anything else**: preselected, as long as the project walk completed.
 
 System images follow the emulators instead: an image used by an AVD cannot be selected, and an unused one is preselected.
@@ -176,7 +178,7 @@ Gradle daemons are JVM processes named `java`, so lu-cleaner cannot block cleani
 
 Version-specific items (distributions, per-version caches) are only flagged when a daemon of that version runs, or when a daemon's version cannot be read. Shared caches (transforms, jars, build cache, `modules-2`, other caches, toolchain JDKs, misc) are flagged whenever any daemon runs.
 
-Why it matters: a running daemon keeps deleted files open, so their space is not freed until it exits, and a build in progress can fail halfway. The warning does not stop a clean you select explicitly, so stop the daemons first. `./gradlew --stop` stops the daemons of that project's Gradle version; `pkill -f GradleDaemon` stops all of them.
+Why it matters: a running daemon keeps deleted files open, so their space is not freed until it exits, and a build in progress can fail halfway. `clean --yes` holds these items back unless you pass `--risk caution`, but the warning does not stop a clean you select yourself in the picker, so stop the daemons first. `./gradlew --stop` stops the daemons of that project's Gradle version; `pkill -f GradleDaemon` stops all of them.
 
 ## Android Studio
 
@@ -185,10 +187,12 @@ Why it matters: a running daemon keeps deleted files open, so their space is not
 | Caches of the installed version, `~/Library/Caches/Google/AndroidStudio<version>` | `android-studio-cache` | <span class="risk moderate">moderate</span> | rebuilt on next launch (re-indexing takes minutes); skipped while Android Studio runs |
 | Caches of a version no longer installed | `android-studio-cache` | <span class="risk safe">safe</span> | nothing reads them; preselected |
 | Logs, `~/Library/Logs/Google/AndroidStudio*` | `android-studio-logs` | <span class="risk safe">safe</span> | `idea.log` and crash reports |
-| Settings of an old version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | only read to migrate settings on upgrade; preselected when the current version has its own settings |
+| Settings of an old version, `~/Library/Application Support/Google/AndroidStudio*` | `android-studio-config` | <span class="risk moderate">moderate</span> | only read to migrate settings on upgrade; preselected when the current version has its own settings, never while an installed version has not been started yet (it imports them at first launch) |
 | SDK repository cache, legacy build cache and emulator crash dumps in `~/.android` | `android-user-cache` | <span class="risk safe">safe</span> | the contents of `cache`, `build-cache` and `breakpad` only |
 
-The settings folder of the version you use is never proposed. lu-cleaner finds the installed versions from the `product-info.json` of every `Android Studio*.app` in `/Applications`, `~/Applications` and Spotlight results. If none is found (custom location, JetBrains Toolbox…), the most recently used settings folder is treated as the current one, to stay on the safe side.
+The settings folder of the version you use is never proposed. lu-cleaner finds the installed versions from the `product-info.json` of every `Android Studio*.app` in `/Applications`, `~/Applications` and Spotlight results. If none is found (custom location, JetBrains Toolbox…), the most recently used settings folder is treated as the current one, to stay on the safe side. With `keep_latest` above 1, that many recently used versions count as current.
+
+A caches folder can hold `LocalHistory`, the IDE's history of your file edits. It is never proposed: the item then targets the other entries of the folder.
 
 In `~/.android`, `adbkey`, `debug.keystore` and the emulator settings are never touched: they are on the guard's protected list.
 
@@ -268,7 +272,7 @@ lu-cleaner clean --yes -k android-gradle-tmp,android-gradle-daemon-logs
 ```
 
 :::caution[Always narrow clean --yes]
-Without `--smart`, `lu-cleaner clean --yes -c android` includes every selectable item up to <span class="risk moderate">moderate</span> risk, **including NDKs, build-tools and Gradle versions your projects use** and the whole dependency cache. Warnings are printed in the plan but do not stop a non-interactive clean. Prefer `--smart` or `-k`, and run once with `--dry-run`. AVDs and the Maven local repository (<span class="risk caution">caution</span>) are only included with `--risk caution`.
+Without `--smart`, `lu-cleaner clean --yes -c android` includes every selectable item up to <span class="risk moderate">moderate</span> risk that carries no warning, **including NDKs, build-tools and Gradle versions your projects use** and the whole dependency cache. Items with a warning (Gradle daemon running, Android Studio running…) are held back and listed under `Held back`. Prefer `--smart` or `-k`, and run once with `--dry-run`. AVDs, the Maven local repository (<span class="risk caution">caution</span>) and items with a warning are only included with `--risk caution`.
 :::
 
 Every kind above can be passed to `-k`, and the provider id `android` selects all the kinds of the Android scanner at once. The catalog entries of the previous section have their own ids (`android-maven-local`, `android-konan-dependencies`…), listed in the [catalog](/lu-cleaner/reference/catalog/). Each item's metadata (`used_by`, `kept`, `api`, `abi`, `version`, `real_path`…) is available in `lu-cleaner scan --json`, see [JSON output](/lu-cleaner/reference/json-output/).

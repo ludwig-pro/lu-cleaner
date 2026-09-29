@@ -11,7 +11,7 @@ Une copie de travail React Native transporte plusieurs gigaoctets de fichiers g�
 
 ```bash
 lu-cleaner artifacts                       # sélecteur sur tous les projets et worktrees
-lu-cleaner artifacts ~/dev/my-app          # cette racine au lieu de celles configurées
+lu-cleaner artifacts ~/dev/my-app          # uniquement ce dossier (ni worktrees ni dossiers supplémentaires)
 lu-cleaner artifacts --list --all          # afficher la liste complète à la place
 lu-cleaner artifacts --older-than 30d      # projets inchangés depuis un mois
 ```
@@ -45,6 +45,8 @@ Le scanner connaît aussi les artefacts d'autres écosystèmes, comme Flutter, R
 lu-cleaner artifacts -t node_modules -t ios-pods
 ```
 
+`-t` n'accepte que des types d'artefacts et quelques alias (`pods`, `pod`, `cocoapods`, `node-modules`) : une faute de frappe est une erreur d'utilisation, pas un scan vide.
+
 ## Comment il détermine qu'un dossier est jetable
 
 Un dossier nommé `build` peut contenir la sortie de Xcode, ou du code source que quelqu'un a rangé dans un dossier `build`. lu-cleaner ne propose un dossier que si trois vérifications réussissent. Chacune existe pour écarter une erreur précise.
@@ -55,12 +57,16 @@ Un dossier nommé `build` peut contenir la sortie de Xcode, ou du code source qu
 | **Il ne contient aucun fichier suivi par git** | `ios/Pods` commité, `node_modules` embarqué dans le dépôt, cache Yarn zero-install | Quelqu'un a commité ces fichiers volontairement. Les supprimer modifierait le dépôt au lieu de libérer un cache. |
 | **Les noms génériques doivent être ignorés par git** | `build`, `dist`, `out`, `coverage`, `.yarn/*`, `vendor/bundle` | Un projet qui ignore le dossier le déclare jetable. Une sortie de build sans ambiguïté est aussi acceptée, comme le `XCBuildData` de Xcode ou un fichier `CACHEDIR.TAG`, tant que le dossier n'est pas suivi. En dehors d'un dépôt git, les dossiers génériques doivent contenir une sortie de build reconnaissable. |
 
+En dehors de git, un dossier de sortie JS (`build`, `dist`, `out`, `web-build`) qui ne contient que ce à quoi ressemblent aussi des fichiers écrits à la main (fichiers `.js`, `index.html`, ressources), sans rien de ce que seul un bundler écrit (source maps, noms de bundles hachés comme `main.3f2a1b9c.js`, `asset-manifest.json`, `_next`…), n'est proposé qu'en <span class="risk caution">caution</span>. Il porte l'avertissement `not under git: nothing proves it is build output — check before deleting` et n'est jamais présélectionné.
+
 Le scanner a aussi des limites strictes :
 
+- Un dossier qui contient une entrée `.git` de n'importe quel type (un dépôt, un worktree lié comme une branche `gh-pages` extraite dans `dist`, un sous-module) ou un dépôt bare est une copie de travail, jamais un artefact. Une sortie générique qui contient une copie de travail quelque part à l'intérieur est en rapport seul : `contains a git repository (…) — not proposed`.
 - Il ne suit jamais les liens symboliques, et ne passe jamais d'une racine à un autre volume.
 - Il n'entre jamais dans un artefact, un dossier `.git`, `~/Library`, la Corbeille, ni dans les bundles d'applications comme `.app` et `.xcodeproj`.
 - Il ignore les dossiers cachés, sauf `.claude/worktrees` et `.worktrees`, où les agents rangent leurs copies de travail.
 - Un artefact situé sur un volume externe est listé mais ne peut pas être sélectionné, car le supprimer ne libère rien sur votre disque interne.
+- Juste avant la suppression, un dossier devenu une copie de travail depuis le scan (`git init`, `git clone` ou `git worktree add` dedans) est laissé intact.
 
 Certains dossiers correspondent au nom et aux marqueurs d'une règle mais contiennent des fichiers suivis, comme un `ios/Pods` commité. Ils sont listés en rapport seul avec une raison, par exemple `not proposed: contains files tracked by git (ios/Pods/Manifest.lock)`. Ils n'ont pas de taille : pour les voir, ouvrez le sélecteur avec `lu-cleaner artifacts --min-size 0` et appuyez sur `H`.
 
@@ -79,12 +85,14 @@ Dans un monorepo, un paquet partagé fait souvent pointer son `package.json` (`m
 | Avertissement | Signification |
 |---|---|
 | `in use: process 4242 runs inside the project (dev server, agent, shell?)` | Quelque chose tourne dans le projet, comme Metro ou un agent. Ses dépendances pourraient disparaître sous ses pieds. |
+| `xcodebuild is running — quit it before cleaning` | `ios/Pods`, `ios/build` et DerivedData sont ignorés tant que `xcodebuild` tourne. |
+| `not under git: nothing proves it is build output — check before deleting` | Une sortie JS générique en dehors de git, avec seulement des indices faibles (voir plus haut). |
 | `contains built app binaries (app-release.apk…)` | Un dossier de build contient directement des fichiers `.apk`, `.aab` ou `.ipa`. Gardez-le si vous avez encore besoin de ce build. |
 
-Les éléments porteurs d'un avertissement peuvent tout de même être sélectionnés à la main.
+Les éléments porteurs d'un avertissement peuvent tout de même être sélectionnés à la main. `--yes` les retient, sauf si vous passez `--risk caution`.
 
 :::caution[Arrêtez les serveurs de développement avant un nettoyage scripté]
-`--yes` sans `--smart` n'écarte pas les éléments porteurs d'un avertissement. Juste avant la suppression, lu-cleaner ignore un dossier dans lequel un processus travaille, ou depuis lequel un processus charge un programme ou un module natif `.node`. Un serveur Metro qui tourne depuis la racine du projet et ne fait que lire des fichiers JavaScript dans `node_modules` ne déclenche pas cette vérification. Arrêtez-le d'abord.
+L'avertissement d'utilisation reflète les processus en cours au moment du scan. Juste avant la suppression, lu-cleaner ignore un dossier dans lequel un processus travaille, ou depuis lequel un processus charge un programme ou un module natif `.node`. Un serveur Metro démarré après le scan, depuis la racine du projet, qui ne fait que lire des fichiers JavaScript dans `node_modules` ne déclenche pas cette vérification. Arrêtez-le d'abord.
 :::
 
 ## Monorepos
@@ -120,22 +128,22 @@ Chaque `node_modules` est un élément distinct. Sa note donne la commande pour 
 
 ## Liens physiques, clones et espace réellement libéré
 
-pnpm, bun et Yarn Berry peuvent installer `node_modules` sous forme de liens vers un store partagé plutôt que de vraies copies. Supprimer un tel `node_modules` ne libère que les fichiers qui n'existent nulle part ailleurs. lu-cleaner mesure cela pour les **liens physiques** (hardlinks) et affiche deux valeurs :
+pnpm, bun et Yarn Berry peuvent installer `node_modules` sous forme de liens vers un store partagé, ou de clones APFS de ce store (des copies en copy-on-write qui partagent leurs blocs disque tant qu'aucun des deux côtés n'est modifié ; c'est le comportement par défaut de bun sur macOS), plutôt que de vraies copies. Supprimer un tel `node_modules` ne libère que les données qui n'existent nulle part ailleurs. lu-cleaner mesure les deux mécanismes et affiche deux valeurs :
 
 - **La taille** (Size) est la taille allouée, chaque fichier lié physiquement n'étant compté qu'une fois.
-- **Reclaim** est ce que la suppression du dossier libère réellement. Cette valeur exclut les fichiers qui ont aussi des liens hors du dossier, par exemple dans le store pnpm.
+- **Reclaim** est ce que la suppression du dossier libère réellement. Cette valeur exclut les fichiers qui ont aussi des liens hors du dossier, par exemple dans le store pnpm, et ne compte un clone que pour ses blocs privés, sauf si toutes les copies de ses données se trouvent dans le dossier.
 
 Quand les deux valeurs diffèrent :
 
 - le tableau de `scan` marque la taille d'un `*` ;
-- les détails du sélecteur affichent `only 120 MB really freed (of 1.40 GB): hardlinked elsewhere` ;
-- la note de l'élément nomme le store, par exemple `Hardlinked with the pnpm store: only 120 MB is really freed` ;
+- les détails du sélecteur affichent `only 120 MB really freed (of 1.40 GB): shared with other files (hardlinks or APFS clones)` ;
+- la note de l'élément nomme le store, par exemple `Shared with other files (hardlinks or APFS clones of the pnpm store): only 120 MB is really freed` ;
 - la sortie JSON contient les champs `reclaim` et `freed` ([Sortie JSON](/lu-cleaner/fr/reference/json-output/)).
 
 Les totaux et le plan utilisent la valeur reclaim.
 
-:::note[Les clones APFS sont comptés comme libérés]
-Certains gestionnaires de paquets copient les fichiers sous forme de clones APFS : des copies en copy-on-write qui partagent leurs blocs disque tant qu'aucun des deux côtés n'est modifié. C'est le comportement par défaut de bun sur macOS. Les clones ne peuvent pas être détectés à moindre coût : ils sont donc comptés comme entièrement récupérables, et l'estimation peut dépasser ce que vous obtenez réellement. Après un vrai nettoyage, comparez avec la ligne de récapitulatif `Disk free: A → B (C measured)`, qui provient du système de fichiers. Si l'écart est important, consultez [Espace disque non libéré](/lu-cleaner/fr/guides/disk-space-not-freed/).
+:::note[Cela reste une estimation]
+Les données partagées entre deux éléments mesurés séparément, comme le cache de bun et un `node_modules` installé à partir de lui, ne sont libérées qu'une fois les deux supprimés. Après un vrai nettoyage, comparez avec la ligne de récapitulatif `Disk free: A → B (C measured)`, qui provient du système de fichiers. Si l'écart est important, consultez [Espace disque non libéré](/lu-cleaner/fr/guides/disk-space-not-freed/).
 :::
 
 L'inverse est vrai aussi : tant que des projets pointent encore vers le store global, supprimer le store libère peu. Consultez [Outils JS](/lu-cleaner/fr/guides/js-toolchain/).
@@ -144,9 +152,12 @@ L'inverse est vrai aussi : tant que des projets pointent encore vers le store gl
 
 L'âge d'un artefact est celui de son **projet**, pas celui du dossier lui-même. Les installations et les builds modifient sans cesse le dossier de l'artefact, donc sa propre date ne dit rien sur le fait que vous travailliez encore sur le projet. lu-cleaner retient la date de modification la plus récente parmi les éléments suivants, en ignorant les dossiers d'artefacts eux-mêmes :
 
-- les fichiers et dossiers de premier niveau du projet (sources, lockfiles, configurations) ;
-- les fichiers et dossiers de premier niveau du paquet auquel appartient l'artefact ;
-- l'index git, `HEAD` et le reflog.
+- les fichiers de premier niveau du projet (lockfiles, configurations…) ;
+- les fichiers de premier niveau du paquet auquel appartient l'artefact ;
+- l'index git, `HEAD` et le reflog ;
+- chaque fichier avec des modifications non commitées, et chaque fichier non suivi, n'importe où dans la copie de travail : modifier `src/components/Button.tsx` compte avant même que vous ne le commitiez.
+
+Les dates des dossiers sont ignorées : supprimer `android/.gradle` change la date de `android/`, ce qui ferait sinon paraître le projet actif juste après un nettoyage. En dehors d'un dépôt git, lu-cleaner cherche à la place le fichier source le plus récent au cours d'un parcours limité du projet.
 
 `--older-than` accepte `h`, `d`, `w`, `m` (30 jours) et `y` :
 
@@ -171,7 +182,7 @@ La sélection intelligente (la touche `a`, ou `--smart`) applique ces règles au
 - Elle ne retient jamais rien d'un projet actif au cours des dernières **24 heures**.
 - Elle retient les sorties <span class="risk safe">safe</span> (builds Xcode et Gradle, `.expo`, `.cxx`…) dès que le projet est inactif depuis **1 jour**.
 - Elle retient les éléments <span class="risk moderate">moderate</span> (`node_modules`, `Pods`…) dès que le projet est inactif depuis plus longtemps que `stale_after`, soit 14 jours par défaut.
-- Elle retient un `.yarn/cache` de Yarn Berry que Yarn ne lit plus (`.yarnrc.yml` définit `enableGlobalCache: true`) sans attendre `stale_after`.
+- Elle retient un `.yarn/cache` de Yarn Berry que Yarn ne lit plus (`.yarnrc.yml` définit `enableGlobalCache: true` comme clé de premier niveau) sans attendre `stale_after`.
 - Elle ne retient jamais les éléments porteurs d'un avertissement ni ceux de risque <span class="risk caution">caution</span>.
 
 ## Reconstruire le projet quand vous en avez de nouveau besoin
@@ -204,7 +215,7 @@ Les projets accumulent aussi de gros dossiers qu'aucune règle ne connaît, et l
 
 - Le risque est <span class="risk caution">caution</span>, car lu-cleaner ne peut pas savoir ce que contient le dossier. Il n'est jamais retenu par la sélection intelligente. `clean --yes` l'écarte sauf si vous passez `--risk caution`, et le sélecteur vous demande de taper `yes`.
 - Son âge est la date du dernier fichier écrit à l'intérieur, et non l'activité du projet.
-- S'il contient une copie de travail git, il est en rapport seul.
+- S'il contient une copie de travail git ou un worktree, il est en rapport seul.
 - Les dossiers d'outils et d'éditeurs ne sont jamais signalés : `.git`, `.claude`, `.cursor`, `.codex`, `.conductor`, `.vscode`, `.idea`, `.env`, `worktrees` et similaires.
 - Sa taille inclut les artefacts connus trouvés à l'intérieur. Ces artefacts sont aussi listés comme éléments à part entière.
 
@@ -214,9 +225,11 @@ Ouvrez-le avec `o` (afficher dans le Finder) avant de décider.
 
 | Source | Ce qu'elle ajoute |
 |---|---|
-| Racines de projets | Les `roots` de la [configuration](/lu-cleaner/fr/reference/configuration/) ou, si elles sont vides, les dossiers existants parmi `~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/repos`, `~/conductor/repos` et d'autres. `--root` ou les arguments de `lu-cleaner artifacts` remplacent cette liste le temps d'une exécution. |
-| Dossiers de worktrees | Toujours parcourus, même si vous passez des racines : `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees` et les autres listés dans [Worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/), plus `worktree_roots` |
+| Racines de projets | Les `roots` de la [configuration](/lu-cleaner/fr/reference/configuration/) ou, si elles sont vides, les dossiers existants parmi `~/dev`, `~/Developer`, `~/Projects`, `~/code`, `~/src`, `~/repos`, `~/conductor/repos` et d'autres. |
+| Dossiers de worktrees | `~/.codex/worktrees`, `~/.cursor/worktrees`, `~/conductor/workspaces`, `~/.claude/worktrees` et les autres listés dans [Worktrees des agents IA](/lu-cleaner/fr/guides/ai-worktrees/), plus `worktree_roots` |
 | Dossiers supplémentaires | `~/Documents/Codex`, `~/conductor/archived-contexts` et `~/.gemini/antigravity/scratch`, où des outils copient des projets. Seules les règles de dépendances et de build s'y appliquent. |
+
+Les racines indiquées en ligne de commande (les arguments de `lu-cleaner artifacts`, ou `--root`) remplacent ces trois sources le temps d'une exécution : seuls ces dossiers sont parcourus, et les artefacts situés en dehors sont écartés. `/` est refusé comme racine. Elles ne restreignent que le scan des artefacts : les autres scanners conservent vos racines configurées pour savoir quelles versions de Node, Gradle ou NDK vos projets utilisent.
 
 Le parcours descend jusqu'à `max_depth` niveaux, 8 par défaut, sous chaque racine. Chaque worktree lié rencontré en chemin repart avec la profondeur complète. Les artefacts situés dans un Bureau ou un dossier Documents synchronisés avec iCloud reçoivent une note, car les supprimer les retire aussi d'iCloud.
 

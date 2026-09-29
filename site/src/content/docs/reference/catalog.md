@@ -11,7 +11,7 @@ This page is generated from the catalog in the source code (`make docs`). Run `l
 
 These are the **static** locations. Things that need logic — git worktrees, project artifacts, simulators, emulators, node versions, AI sessions by age… — are found by dedicated scanners, described in [What gets scanned](/lu-cleaner/reference/scanners/).
 
-**202 entries.** Risk: `safe` = pure cache, `moderate` = regenerable at some cost, `caution` = may hold data you care about, `never` = report only.
+**204 entries.** Risk: <span class="risk safe">safe</span> pure cache · <span class="risk moderate">moderate</span> regenerable at some cost · <span class="risk caution">caution</span> may hold data you care about · <span class="risk never">never</span> report only.
 
 ## 📱 iOS Simulators
 
@@ -181,7 +181,7 @@ Kotlin Multiplatform / Kotlin/Native toolchain dependencies (LLVM, sysroots) and
 
 - `~/.konan/kotlin-native-prebuilt-*`
 
-Kotlin/Native compiler of one Kotlin version (the newest one is kept); re-downloaded by the next KMP build using that version. _(keeps the 1 newest)_
+Kotlin/Native compiler of one Kotlin version (the newest one is kept); re-downloaded by the next KMP build using that version. _(keeps at least the 1 newest (raised by keep_latest))_
 
 #### Kotlin daemon state (~/.kotlin)
 
@@ -214,11 +214,11 @@ Maven local repository: remote artifacts are re-downloaded, but artifacts publis
 
 - `~/.skiko/*`
 
-Skia native libraries extracted by Compose Desktop apps (Maestro Studio...); re-extracted on launch (the newest copy is kept). _(keeps the 1 newest)_
+Skia native libraries extracted by Compose Desktop apps (Maestro Studio...); re-extracted on launch (the newest copy is kept). _(keeps at least the 1 newest (raised by keep_latest))_
 
 ## 🧠 AI tools
 
-Claude, Codex, Cursor, ChatGPT, Conductor data & caches — 46 entries.
+Claude, Codex, Cursor, ChatGPT, Conductor data & caches — 48 entries.
 
 #### ChatGPT desktop caches
 
@@ -249,14 +249,13 @@ Local copy of ChatGPT conversations; re-synced from the server on demand. _(refu
 
 HTTP / code caches of the Chrome profile driven by the chrome-devtools MCP server; rebuilt (the profile's logins are kept).
 
-#### Claude Code debug logs & shell snapshots
+#### Claude Code debug logs
 
 <span class="risk safe">safe</span> · delete · <code>ai-claude-code-debug-logs</code>
 
 - `~/.claude/debug/*.txt`
-- `~/.claude/shell-snapshots/*`
 
-Per-session debug logs and shell environment snapshots of past Claude Code sessions; recreated for each new session. _(only items older than 1 days)_
+Per-session debug logs of past Claude Code sessions; recreated for each new session. _(only items older than 1 days)_
 
 #### Claude Code file checkpoints (rewind) > 30d
 
@@ -299,6 +298,14 @@ Plans written in plan mode by old sessions; not regenerated. _(only items older 
 - `~/.claude/plugins/.trash/*`
 
 Per-session environment / task scratch dirs and removed plugins of sessions older than a week; recreated per session. _(only items older than 7 days)_
+
+#### Claude Code shell snapshots
+
+<span class="risk safe">safe</span> · delete · <code>ai-claude-code-shell-snapshots</code>
+
+- `~/.claude/shell-snapshots/*`
+
+Shell environment snapshots of Claude Code sessions started more than a week ago; recreated per session (a session still open that long would lose its snapshot). _(only items older than 7 days)_
 
 #### Claude Code telemetry & changelog cache
 
@@ -478,14 +485,23 @@ Downloaded plugin bundles (some run as helper processes); re-downloaded when a p
 
 Plugin marketplace clones used by plugin syncs; re-cloned on the next sync (bandwidth). _(refused while codex, Codex, ChatGPT, codex-code-mode-host runs)_
 
-#### Codex DB repair backups
+#### Codex logs DB repair backups
 
 <span class="risk safe">safe</span> · delete · <code>ai-codex-repair-backups</code>
+
+- `~/.codex/logs_*.codex-repair-*.bak`
+- `~/.codex/sqlite/logs_*.codex-repair-*.bak`
+
+One-off copies of the Codex logs database made while repairing it (logs_*.codex-repair-<epoch>.bak); never read again. _(only items older than 7 days)_
+
+#### Codex DB repair backups (memories, goals…)
+
+<span class="risk caution">caution</span> · delete · <code>ai-codex-repair-backups-data</code>
 
 - `~/.codex/*.codex-repair-*.bak`
 - `~/.codex/sqlite/*.codex-repair-*.bak`
 
-One-off copies Codex made while repairing corrupted databases (*.codex-repair-<epoch>.bak); never read again. _(only items older than 7 days)_
+Pre-repair copies of Codex databases holding your data (memories, goals…): the only way to recover rows a repair dropped (sqlite3 .recover). Kept unless you choose them. _(refused while codex, Codex, ChatGPT, codex-code-mode-host runs; only items older than 30 days)_
 
 #### Codex app runtime (node / python / native deps)
 
@@ -571,12 +587,12 @@ Holds every Cursor agent / composer chat, settings state and auth; delete old ch
 
 #### Cursor state DB backups
 
-<span class="risk moderate">moderate</span> · delete · <code>ai-cursor-state-db-backups</code>
+<span class="risk caution">caution</span> · delete · <code>ai-cursor-state-db-backups</code>
 
 - `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb.backup`
 - `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb.backup-*`
 
-Old restore points of the chats/state DB (state.vscdb.backup is rewritten by Cursor, dated ones are one-off copies). _(refused while Cursor runs; only items older than 30 days)_
+Restore points of the chats/state DB (state.vscdb.backup is rewritten by Cursor, dated ones are one-off copies): the only way back to chats lost or corrupted since. Not regenerated. _(refused while Cursor runs; only items older than 30 days)_
 
 #### Cursor stale statsig temp files
 
@@ -702,7 +718,7 @@ Yarn/pnpm versions downloaded by corepack (and partial corepack-* downloads); fe
 
 - `~/Library/Caches/Cypress/*`
 
-Older Cypress app versions (the newest is kept); the cypress postinstall downloads the one a project needs. _(keeps the 1 newest)_
+Older Cypress app versions (the newest is kept); the cypress postinstall downloads the one a project needs. _(keeps at least the 1 newest (raised by keep_latest))_
 
 #### Deno cache
 
@@ -734,7 +750,7 @@ Metadata cached by eas-cli; re-fetched automatically.
 
 - `$TMPDIR/eas-cli-nodejs`
 
-Project tarballs prepared by `eas build` / `eas update` uploads; recreated on the next upload.
+Project tarballs prepared by `eas build` / `eas update` uploads (untouched for a day); recreated on the next upload. _(only items older than 1 days)_
 
 #### EAS local build workdirs
 
@@ -936,7 +952,7 @@ Prisma query/schema engines; downloaded again by the next `prisma generate`.
 
 - `~/.cache/puppeteer/chrome/*`
 
-Older Chrome builds downloaded by Puppeteer (the newest is kept); `npx puppeteer browsers install` brings one back. _(keeps the 1 newest)_
+Older Chrome builds downloaded by Puppeteer (the newest is kept); `npx puppeteer browsers install` brings one back. _(keeps at least the 1 newest (raised by keep_latest))_
 
 #### Puppeteer Firefox
 
@@ -944,7 +960,7 @@ Older Chrome builds downloaded by Puppeteer (the newest is kept); `npx puppeteer
 
 - `~/.cache/puppeteer/firefox/*`
 
-Older Firefox builds downloaded by Puppeteer (the newest is kept); re-downloaded on demand. _(keeps the 1 newest)_
+Older Firefox builds downloaded by Puppeteer (the newest is kept); re-downloaded on demand. _(keeps at least the 1 newest (raised by keep_latest))_
 
 #### Puppeteer chrome-headless-shell
 
@@ -952,7 +968,7 @@ Older Firefox builds downloaded by Puppeteer (the newest is kept); re-downloaded
 
 - `~/.cache/puppeteer/chrome-headless-shell/*`
 
-Older headless shells downloaded by Puppeteer (the newest is kept); re-downloaded on demand. _(keeps the 1 newest)_
+Older headless shells downloaded by Puppeteer (the newest is kept); re-downloaded on demand. _(keeps at least the 1 newest (raised by keep_latest))_
 
 #### React Native prebuilt tarballs
 

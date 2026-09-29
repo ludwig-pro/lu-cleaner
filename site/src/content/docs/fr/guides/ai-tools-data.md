@@ -36,7 +36,7 @@ AI tools  21.4 GB · 36 items · ★ 6.90 GB recommended
   Codex sessions > 30d · 2026-07 (184 rollouts)                        3.40 GB  2mo  caution         ~/.codex/sessions/2026/07/…
   Claude Code sessions > 30d · ~/dev/my-app (96 sessions)              2.10 GB   5w  caution         ~/.claude/projects/-Users-me-dev-my-app/…
   Codex app runtime (node / python / native deps)                      1.60 GB   3w  moderate  ★     ~/.cache/codex-runtimes/…
-  Claude Code data of deleted folder · ~/.codex/worktrees/a1b2/my-app  1.20 GB   3w  moderate  ★     ~/.claude/projects/-Users-me--codex-worktrees-a1b2-my-app/…
+  Claude Code data of deleted folder · ~/.codex/worktrees/a1b2/my-app  1.20 GB   6w  moderate  ★     ~/.claude/projects/-Users-me--codex-worktrees-a1b2-my-app/…
   Codex logs database (logs_2.sqlite)                                  1.10 GB  now  safe      ★     ~/.codex/logs_2.sqlite
   Cursor · bundled cursor-agent · 2026.08.31-4057e58 (old version)      610 MB   6w  safe      ★     ~/Library/Application Support/Cursor/User/globalStorage/…
   …
@@ -61,7 +61,7 @@ lu-cleaner clean --yes --smart -c ai --dry-run   # le plan, rien n'est supprimé
 lu-cleaner clean --yes --smart -c ai             # nettoie les éléments recommandés
 ```
 
-`clean --yes` écarte les éléments <span class="risk caution">caution</span>, sauf si vous passez `--risk caution`. Pour supprimer délibérément les anciennes transcriptions de Claude Code, indiquez leur type d'élément :
+`clean --yes` écarte les éléments <span class="risk caution">caution</span>, ainsi que les éléments qui portent un avertissement (une application en cours d'exécution, par exemple), sauf si vous passez `--risk caution`. Le plan liste les éléments avec avertissement sous `Held back`. Pour supprimer délibérément les anciennes transcriptions de Claude Code, indiquez leur type d'élément :
 
 ```bash
 lu-cleaner clean --yes -k claude-code-old-sessions --risk caution --dry-run
@@ -73,21 +73,24 @@ De nombreux éléments sont protégés par l'application à laquelle ils apparti
 
 ### Le bon ordre : les worktrees d'abord
 
-Claude Code et Cursor conservent des données par dossier. lu-cleaner ne peut qualifier ces données d'orphelines qu'une fois le dossier disparu. Supprimez d'abord les worktrees d'agents terminés, puis relancez un scan. Leurs restes apparaissent alors comme éléments « data of deleted folder » et sont présélectionnés :
+Claude Code et Cursor conservent des données par dossier. lu-cleaner ne peut qualifier ces données d'orphelines qu'une fois le dossier disparu. Supprimez d'abord les worktrees d'agents terminés, puis relancez un scan. Leurs restes apparaissent alors comme éléments « data of deleted folder » :
 
 ```bash
 lu-cleaner worktrees        # supprimer les worktrees terminés
 lu-cleaner clean -c ai      # leurs données Claude Code / Cursor apparaissent désormais comme orphelines
 ```
 
+Un dossier disparu récemment peut revenir (dossier renommé, espace de travail Conductor restauré, worktree recréé), et les transcriptions et conversations ne sont jamais régénérées. Ces données sont donc <span class="risk caution">caution</span> et jamais présélectionnées pendant les 30 jours qui suivent leur dernière écriture. Ensuite, elles passent en <span class="risk moderate">moderate</span> et sont présélectionnées, sauf si leur dossier a seulement été déduit du nom du répertoire ou s'il s'agit d'un espace de travail Conductor.
+
 ## Claude Code
 
 | Quoi | Où | Risque | Sélection intelligente |
 |---|---|---|---|
 | **Sessions de plus de 30 jours**, un élément par projet<br/><sub>`claude-code-old-sessions`</sub> | `~/.claude/projects/<project>/` | <span class="risk caution">caution</span> | Non |
-| **Données d'un dossier supprimé** (projet orphelin)<br/><sub>`claude-code-orphan-project`</sub> | `~/.claude/projects/<project>/` | <span class="risk moderate">moderate</span> | Oui, sauf si le dossier a été déduit du nom du répertoire |
+| **Données d'un dossier supprimé** (projet orphelin)<br/><sub>`claude-code-orphan-project`</sub> | `~/.claude/projects/<project>/` | <span class="risk moderate">moderate</span> une fois intactes depuis 30 jours ; <span class="risk caution">caution</span> avant, ou quand le dossier a été déduit ou est un espace de travail Conductor | Seulement si moderate |
 | **Anciennes versions de la CLI**<br/><sub>`claude-code-old-version`</sub> | `~/.local/share/claude/versions/` | <span class="risk moderate">moderate</span> | Oui |
-| **Journaux de débogage et instantanés du shell** (plus d'un jour)<br/><sub>`ai-claude-code-debug-logs`</sub> | `~/.claude/debug/`, `~/.claude/shell-snapshots/` | <span class="risk safe">safe</span> | Oui |
+| **Journaux de débogage** (plus d'un jour)<br/><sub>`ai-claude-code-debug-logs`</sub> | `~/.claude/debug/` | <span class="risk safe">safe</span> | Oui |
+| **Instantanés du shell** (plus de 7 jours)<br/><sub>`ai-claude-code-shell-snapshots`</sub> | `~/.claude/shell-snapshots/` | <span class="risk safe">safe</span> | Oui |
 | **Télémétrie, cache des feature flags, changelog**<br/><sub>`ai-claude-code-telemetry`</sub> | `~/.claude/telemetry/`, `~/.claude/statsig/` | <span class="risk safe">safe</span> | Oui |
 | **Dossiers temporaires et listes de tâches par session** (plus de 7 jours)<br/><sub>`ai-claude-code-session-temp`, `ai-claude-code-todos`</sub> | `~/.claude/session-env/`, `~/.claude/tasks/`, `~/.claude/todos/` | <span class="risk safe">safe</span> | Oui |
 | **Journaux des serveurs MCP**<br/><sub>`ai-claude-code-mcp-logs`</sub> | `~/Library/Caches/claude-cli-nodejs/` | <span class="risk safe">safe</span> | Oui |
@@ -98,6 +101,8 @@ lu-cleaner clean -c ai      # leurs données Claude Code / Cursor apparaissent d
 
 « Si inactif » signifie que l'élément est présélectionné dès qu'il n'a pas été utilisé depuis plus de `stale_after`, soit 14 jours par défaut. Voir [Configuration](/lu-cleaner/fr/reference/configuration/).
 
+Un instantané du shell est chargé par chaque commande de la session qui l'a créé : une session restée ouverte plusieurs jours a donc encore besoin de son instantané. Seuls les instantanés de plus d'une semaine sont proposés.
+
 **Anciennes sessions.** Claude Code stocke une transcription par session (`<id>.jsonl`), avec à côté un dossier pour les journaux des sous-agents et les sorties d'outils. lu-cleaner regroupe, pour chaque projet, les sessions qui n'ont pas été modifiées depuis 30 jours. Il ignore toute session indiquée comme active dans `~/.claude/sessions/`. Supprimer d'anciennes sessions les retire de `claude --resume` et de l'historique. Claude Code purge aussi lui-même ses transcriptions au-delà de `cleanupPeriodDays` (30 jours par défaut). Si vous avez augmenté ce réglage, lu-cleaner vous laisse choisir les projets à alléger.
 
 **Anciennes versions de la CLI.** L'installateur natif conserve chaque build téléchargé (environ 200 Mo chacun). lu-cleaner garde la version vers laquelle pointe `~/.local/bin/claude`, la plus récente (le mécanisme de mise à jour l'a peut-être déjà téléchargée) et toute version utilisée par un processus en cours. Pour conserver davantage de versions, réglez `keep_latest`.
@@ -106,11 +111,11 @@ lu-cleaner clean -c ai      # leurs données Claude Code / Cursor apparaissent d
 
 Claude Code nomme chaque dossier de projet d'après le répertoire de travail, en remplaçant par `-` chaque caractère qui n'est ni une lettre ni un chiffre. Par exemple, `~/.codex/worktrees/a1b2/my-app` devient `-Users-me--codex-worktrees-a1b2-my-app`. Ce nom ne peut pas être décodé de façon fiable, donc lu-cleaner ne commence pas par l'analyser :
 
-1. Il lit le vrai `cwd` dans les transcriptions les plus récentes, ou dans `sessions-index.json`.
-2. Si aucune de ces sources n'est disponible, il cherche sur le disque un dossier dont le nom encodé correspond. Un tel élément indique que le dossier a été *déduit du nom du répertoire* et n'est jamais présélectionné.
-3. Un dossier situé sur un volume non monté est considéré comme « inconnu », jamais comme « supprimé ».
+1. Il lit le vrai `cwd` de chaque session dans sa transcription, ou dans `sessions-index.json`. Plusieurs dossiers peuvent partager un même répertoire de projet (`my-app` et `my_app` sont encodés de la même façon), donc chaque session est jugée d'après son propre dossier.
+2. Si aucune session n'indique son dossier, il cherche sur le disque un dossier dont le nom encodé correspond. Un tel élément indique que le dossier a été *deviné d'après le répertoire entier* et n'est jamais présélectionné.
+3. Un dossier qui ne peut pas être vérifié (volume non monté, dossier parent illisible, protection de la vie privée de macOS, fournisseur de stockage cloud déconnecté) est considéré comme « inconnu », jamais comme « supprimé ».
 
-Un projet ne devient orphelin que si son dossier n'existe plus, qu'aucune session active n'y tourne et que rien n'y a été écrit au cours de la dernière heure. Sa mémoire automatique (`memory/`) est toujours conservée : lu-cleaner supprime les transcriptions qui l'entourent, jamais le dossier. Juste avant la suppression, il vérifie de nouveau que le dossier est toujours absent et qu'aucune session n'y a démarré.
+Une session ne devient orpheline que si son dossier n'existe plus, de façon vérifiée, qu'aucune session active n'y tourne et que rien n'y a été écrit au cours de la dernière heure. Elle n'est présélectionnée que si son dossier a été lu dans les sessions, n'est pas un espace de travail Conductor (Conductor restaure les espaces de travail archivés) et que rien n'y a été écrit depuis 30 jours. Les sessions des autres dossiers qui partagent le répertoire sont conservées. La mémoire automatique (`memory/`) est toujours conservée : lu-cleaner supprime les transcriptions qui l'entourent, jamais le dossier. Juste avant la suppression, il vérifie de nouveau que le dossier est toujours absent et qu'aucune session n'y a démarré.
 
 ## Claude desktop
 
@@ -132,7 +137,8 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 | **Sessions archivées**, un élément par mois<br/><sub>`codex-archived-sessions`</sub> | `~/.codex/archived_sessions/` | <span class="risk caution">caution</span> | Non |
 | **Base de journaux**<br/><sub>`codex-logs-db`</sub> | `~/.codex/logs_*.sqlite` (+ `-wal`, `-shm`) | <span class="risk safe">safe</span> | Oui, quand Codex est fermé |
 | **Copie obsolète de la base de journaux**<br/><sub>`codex-stale-logs-db`</sub> | `~/.codex/sqlite/logs_*.sqlite` | <span class="risk safe">safe</span> | Oui |
-| **Sauvegardes de réparation de base** (plus de 7 jours)<br/><sub>`ai-codex-repair-backups`</sub> | `~/.codex/*.codex-repair-*.bak` | <span class="risk safe">safe</span> | Oui |
+| **Sauvegardes de réparation de la base de journaux** (plus de 7 jours)<br/><sub>`ai-codex-repair-backups`</sub> | `~/.codex/logs_*.codex-repair-*.bak` | <span class="risk safe">safe</span> | Oui |
+| **Sauvegardes de réparation de vos bases de données** (mémoires, objectifs ; plus de 30 jours)<br/><sub>`ai-codex-repair-backups-data`</sub> | `~/.codex/*.codex-repair-*.bak` | <span class="risk caution">caution</span> | Non |
 | **Environnement d'exécution de l'application** (node, python, dépendances natives)<br/><sub>`ai-codex-runtimes`</sub> | `~/.cache/codex-runtimes/` | <span class="risk moderate">moderate</span> | Si inactif |
 | **Caches de plugins et clones de synchronisation**<br/><sub>`ai-codex-plugin-cache`, `ai-codex-plugin-staging`</sub> | `~/.codex/plugins/cache`, `~/.codex/.tmp/` | <span class="risk moderate">moderate</span> | Si inactif |
 | **Caches de catalogue, instantanés du shell, caches Chromium de l'application**<br/><sub>`ai-codex-caches`, `ai-codex-shell-snapshots`, `ai-codex-app-caches`</sub> | `~/.codex/cache/`, `~/.codex/shell_snapshots/`, `~/Library/Application Support/Codex/` | <span class="risk safe">safe</span> | Oui |
@@ -142,6 +148,8 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 
 **Sessions.** Un seul fichier de rollout peut atteindre plusieurs centaines de Mo lorsqu'il contient des captures d'écran. Le supprimer rend impossible la reprise du fil correspondant. Les fils épinglés sont toujours conservés : lu-cleaner en lit la liste dans la base d'état de Codex avec une requête `sqlite3` en lecture seule.
 
+**Sauvegardes de réparation.** Quand Codex répare une base de données, il conserve une copie du fichier d'avant la réparation. Pour la base de journaux, cette copie est inutile. Pour les bases de mémoires et d'objectifs, c'est le seul moyen de récupérer des lignes qu'une réparation a supprimées : ces copies ne sont donc proposées que sous forme d'éléments <span class="risk caution">caution</span>. Les sauvegardes de la base d'état sont protégées.
+
 **Base de journaux.** `logs_*.sqlite` ne contient que des journaux de traçage et de retours. Codex ne la purge ni ne la compacte jamais, et en recrée une vide au démarrage suivant. Elle est supprimée avec ses fichiers `-wal` et `-shm`, elle ne doit donc pas être ouverte. L'élément attend que `codex`, l'application Codex **et l'application ChatGPT** soient fermés (ChatGPT intègre Codex). Juste avant la suppression, lu-cleaner vérifie aussi avec `lsof` qu'aucun processus n'a le fichier ouvert.
 
 ## Cursor
@@ -149,21 +157,21 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 | Quoi | Où | Catégorie | Risque | Sélection intelligente |
 |---|---|---|---|---|
 | **CachedData des anciens builds de l'application**<br/><sub>`cursor-cached-data-old-builds`</sub> | `~/Library/Application Support/Cursor/CachedData/` | ide | <span class="risk safe">safe</span> | Oui |
-| **État des espaces de travail de dossiers supprimés**<br/><sub>`cursor-workspace-storage-orphans`</sub> | `…/Cursor/User/workspaceStorage/` | ide | <span class="risk moderate">moderate</span> | Oui |
+| **État des espaces de travail de dossiers supprimés**<br/><sub>`cursor-workspace-storage-orphans`</sub> | `…/Cursor/User/workspaceStorage/` | ide | <span class="risk moderate">moderate</span> une fois intact depuis 30 jours et sans données de conversation ; <span class="risk caution">caution</span> sinon (« to review ») | Seulement si moderate |
 | **Données d'espace de travail d'extensions désinstallées**<br/><sub>`cursor-workspace-dead-extension-data`</sub> | `…/workspaceStorage/*/<extension>` | ide | <span class="risk safe">safe</span> | Oui |
 | **Versions d'extensions remplacées**<br/><sub>`cursor-extension-old-versions`</sub> | `~/.cursor/extensions/` | ide | <span class="risk moderate">moderate</span> | Oui |
 | **Caches Electron, journaux, VSIX téléchargés**<br/><sub>`ai-cursor-electron-caches`, `ai-cursor-logs`, `ai-cursor-vsix-cache`</sub> | `~/Library/Application Support/Cursor/` | ide | <span class="risk safe">safe</span> | Oui |
 | **Historique local (Timeline)** de plus de 180 jours<br/><sub>`ai-cursor-local-history`</sub> | `…/Cursor/User/History/` | ide | <span class="risk caution">caution</span> | Non |
 | **Versions de cursor-agent embarquées**<br/><sub>`cursor-agent-bundled-old-version`</sub> | `…/globalStorage/anysphere.cursor-agent-worker/agent-cli/` | ai | <span class="risk safe">safe</span> | Oui |
 | **Versions autonomes des CLI `cursor-agent` et `origin`**<br/><sub>`cursor-agent-old-version`, `cursor-origin-old-version`</sub> | `~/.local/share/cursor-agent/versions/`, `~/.local/share/cursor/origin/` | ai | <span class="risk safe">safe</span> | Oui |
-| **Données d'agent de dossiers supprimés**<br/><sub>`cursor-agent-orphan-projects`</sub> | `~/.cursor/projects/` | ai | <span class="risk moderate">moderate</span> | Oui |
+| **Données d'agent de dossiers supprimés**<br/><sub>`cursor-agent-orphan-projects`</sub> | `~/.cursor/projects/` | ai | <span class="risk moderate">moderate</span> une fois intactes depuis 30 jours, quand Cursor a enregistré le dossier ; <span class="risk caution">caution</span> sinon (« to review ») | Seulement si moderate |
 | **Caches des descripteurs MCP de l'agent**<br/><sub>`cursor-agent-mcp-caches`</sub> | `~/.cursor/projects/*/mcps` | ai | <span class="risk safe">safe</span> | Oui |
 | **Transcriptions de l'agent** de plus de 30 jours<br/><sub>`cursor-agent-old-transcripts`</sub> | `~/.cursor/projects/*/agent-transcripts`… | ai | <span class="risk caution">caution</span> | Non |
-| **Sauvegardes de la base d'état** de plus de 30 jours<br/><sub>`ai-cursor-state-db-backups`</sub> | `…/globalStorage/state.vscdb.backup*` | ai | <span class="risk moderate">moderate</span> | Si inactif |
+| **Sauvegardes de la base d'état** de plus de 30 jours<br/><sub>`ai-cursor-state-db-backups`</sub> | `…/globalStorage/state.vscdb.backup*` | ai | <span class="risk caution">caution</span> : les seuls points de restauration de vos conversations | Non |
 
 **Anciens builds et versions.** Cursor crée un dossier `CachedData/<commit>` à chaque mise à jour, mais n'utilise que le commit du `Cursor.app` installé, que lu-cleaner lit dans le bundle de l'application. Le `cursor-agent` embarqué conserve chaque build qu'il télécharge (de 200 Mo à 600 Mo chacun). lu-cleaner ne garde que le build ciblé par son lien symbolique `bin/cursor-agent` et le plus récent.
 
-**État des espaces de travail de dossiers supprimés.** Chaque dossier ou worktree que vous ouvrez reçoit une entrée dans `workspaceStorage`. lu-cleaner lit le dossier dans son `workspace.json` et propose l'entrée dès que ce dossier n'existe plus. Les espaces de travail distants sont ignorés. Juste avant la suppression, il vérifie de nouveau que les dossiers ne sont pas réapparus.
+**État des espaces de travail de dossiers supprimés.** Chaque dossier ou worktree que vous ouvrez reçoit une entrée dans `workspaceStorage`. lu-cleaner lit le dossier dans son `workspace.json` et propose l'entrée dès que ce dossier n'existe plus, de façon vérifiée. Les espaces de travail distants sont ignorés. Les entrées intactes depuis 30 jours et sans données de conversation forment un élément présélectionné. Les autres (modifiées récemment, contenant un historique de conversation, ou appartenant à un espace de travail Conductor qui peut être restauré) vont dans un élément « to review » distinct, jamais présélectionné. Les données d'agent de `~/.cursor/projects` suivent la même répartition. Juste avant la suppression, lu-cleaner vérifie de nouveau que les dossiers ne sont pas réapparus.
 
 **Données d'extensions.** Les données des extensions désinstallées (les index des serveurs de langage peuvent peser plusieurs gigaoctets) ne sont proposées que si lu-cleaner parvient à lire la liste des extensions intégrées dans `Cursor.app`. Sans elle, lu-cleaner ne peut pas savoir qu'une extension a disparu.
 
@@ -182,7 +190,7 @@ L'image de la VM est un disque Linux creux (sparse) d'environ 10 Go alloués. Cl
 | | `conductor.db` (sessions et messages) et `cache.db` (brouillons non envoyés) : signalés uniquement | <span class="risk never">never</span>, <span class="risk caution">caution</span> |
 | **Multica** | La copie `codex-home` de chaque tâche terminée depuis 7 jours ou plus. Les dossiers de travail des tâches (copies des dépôts) ne sont jamais touchés. | <span class="risk moderate">moderate</span> |
 | **GitHub Copilot CLI, vibe-kanban** | Versions remplacées | <span class="risk safe">safe</span> |
-| **Antigravity** | Profil de navigateur et extensions laissés après la désinstallation de l'application ; enregistrements du navigateur de plus de 90 jours. Les conversations et le « brain » sont seulement signalés. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
+| **Antigravity** | Extensions laissées après la désinstallation de l'application (moderate). Le profil de l'agent de navigation laissé après la désinstallation (mots de passe enregistrés, cookies) et les enregistrements du navigateur de plus de 90 jours (caution, jamais présélectionnés). Les conversations et le « brain » sont seulement signalés. | <span class="risk moderate">moderate</span>, <span class="risk caution">caution</span> |
 | **opencode, Continue, Windsurf, Raycast, Grok CLI, chrome-devtools MCP** | Caches, index, journaux, mises à jour et installateurs téléchargés. Les sessions et conversations restent (signalées uniquement). | <span class="risk safe">safe</span> |
 | **VoiceInk** | Enregistrements de dictée de plus de 30 jours (les transcriptions restent dans l'application) | <span class="risk caution">caution</span> |
 | **Gemini CLI, Warp** | `~/.gemini/tmp` (points de contrôle) et la base de données de Warp : signalés uniquement | <span class="risk caution">caution</span>, <span class="risk never">never</span> |
@@ -225,6 +233,8 @@ Les dossiers des outils eux-mêmes (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.co
 # ~/.config/lu-cleaner/config.toml
 protect = ["~/.codex/sessions", "~/.ollama/models"]
 ```
+
+Ces entrées sont des chemins littéraux, pas des motifs : `~` et `$VARS` sont développés, et la casse et la normalisation Unicode ne comptent pas, comme sur APFS.
 
 ## Voir aussi
 
