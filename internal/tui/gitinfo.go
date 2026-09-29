@@ -3,12 +3,14 @@ package tui
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 )
 
@@ -151,7 +153,110 @@ func (e *anEntry) refusal() string {
 	if e.git.kind == gitRepo || e.git.kind == gitOther {
 		return e.git.why
 	}
+	return e.inGit
+}
+
+// gitDataRefusal returns why nothing at or below dir may be deleted by the
+// analyzer: dir or one of its ancestors is a git dir, i.e. a directory named
+// .git (any case: APFS) or a bare repository / separate git dir (HEAD,
+// objects/, refs/), whose content is a repository's history and state. It
+// returns "" otherwise.
+func gitDataRefusal(dir string) string {
+	for a := filepath.Clean(dir); ; a = filepath.Dir(a) {
+		if strings.EqualFold(filepath.Base(a), ".git") || isBareRepo(a) {
+			return "part of the git data of the repository " + a
+		}
+		if a == filepath.Dir(a) {
+			return ""
+		}
+	}
+}
+
+// dotGitFileRefusal returns why p, when it is a checkout's .git file or
+// symlink (not a directory), must not be deleted: git would lose track of the
+// checkout (a linked worktree, a submodule...). "" otherwise.
+func dotGitFileRefusal(p string) string {
+	if strings.EqualFold(filepath.Base(p), ".git") {
+		return "the .git entry of a git checkout (git would lose track of it)"
+	}
 	return ""
+}
+
+// gitDataEntryRefusal is the refusal of an entry about to be deleted: a .git
+// file or symlink, anything inside a git dir, and (isDir) a git dir itself.
+func gitDataEntryRefusal(path string, isDir bool) string {
+	if !isDir {
+		if why := dotGitFileRefusal(path); why != "" {
+			return why
+		}
+		return gitDataRefusal(filepath.Dir(path))
+	}
+	return gitDataRefusal(path)
+}
+
+// nestedRepoMaxDepth bounds the search for repositories inside a folder the
+// analyzer deletes; the search also stops (and fails closed) beyond
+// safety.FindNestedRepo's entry budget.
+const nestedRepoMaxDepth = 32
+
+// nestedSkip are regenerable dependency / build folders the search does not
+// enter: they never hold anyone's repository and can be huge (the executor
+// skips the same ones when it checks a worktree).
+var nestedSkip = map[string]bool{"node_modules": true, "Pods": true, ".gradle": true, "DerivedData": true, ".build": true}
+
+// nestedRepoIn returns a git repository or worktree strictly inside dir (""
+// if none). It fails closed: an unreadable directory, a tree too large to
+// inspect or another app's container (it cannot be read without Full Disk
+// Access, and reading it would raise a macOS prompt) is an error.
+func nestedRepoIn(dir string) (string, error) {
+	var blocked string
+	found, err := safety.FindNestedRepo(dir, nestedRepoMaxDepth, 0, func(p, name string) bool {
+		if fsx.AppDataProtected(p) {
+			if blocked == "" {
+				blocked = p
+			}
+			return true
+		}
+		return nestedSkip[name]
+	})
+	if found != "" || err != nil {
+		return found, err
+	}
+	if blocked != "" {
+		return "", fmt.Errorf("%s is another app's data: %w", blocked, fsx.ErrNeedsFullDiskAccess)
+	}
+	return "", nil
+}
+
+// recheckPlain re-validates, right before the executor deletes it, an entry
+// the analyzer removes with a plain delete (not through git): it must not be
+// git data, and a folder (dir) must not hold a git repository or worktree —
+// when it cannot be fully inspected it is refused unless force. nested is
+// the search (nestedRepoIn when nil).
+func recheckPlain(path string, dir, force bool, nested func(string) (string, error)) error {
+	if why := gitDataEntryRefusal(path, dir); why != "" {
+		return fmt.Errorf("%s — the analyzer never deletes git data", why)
+	}
+	if !dir {
+		return nil
+	}
+	switch g := classifyGit(path); g.kind {
+	case gitRepo, gitOther:
+		return fmt.Errorf("%s — the analyzer never deletes it", g.why)
+	case gitWorktree:
+		return errors.New("became a linked worktree since it was listed — rescan (worktrees are removed through git)")
+	}
+	if nested == nil {
+		nested = nestedRepoIn
+	}
+	found, err := nested(path)
+	switch {
+	case found != "":
+		return fmt.Errorf("contains the git repository or worktree %s — the analyzer never deletes git repositories; move or delete it first", found)
+	case err != nil && !force:
+		return fmt.Errorf("cannot check it for git repositories inside (%v) — refusing (--force skips this check)", err)
+	}
+	return nil
 }
 
 func (e *anEntry) isWorktree() bool { return e.git.kind == gitWorktree }

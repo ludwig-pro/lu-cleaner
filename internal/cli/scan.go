@@ -372,15 +372,10 @@ func (c *cli) itemTable() *table {
 	return t
 }
 
-// addItem appends one item row (and its warning line).
+// addItem appends one item row (and its warning and detail lines).
 func (c *cli) addItem(t *table, env *core.Env, it *core.Item, reco bool, now time.Time) {
 	o := c.out
-	size := fsx.Bytes(it.Size)
-	if it.Sizing {
-		size = "…"
-	} else if it.Reclaim > 0 && it.Reclaim < it.Size {
-		size += "*"
-	}
+	size := sizeCell(it)
 	star := ""
 	if reco {
 		star = "★"
@@ -388,10 +383,7 @@ func (c *cli) addItem(t *table, env *core.Env, it *core.Item, reco bool, now tim
 	t.add(func(col int, s string) string {
 		switch col {
 		case 1:
-			if it.Sizing {
-				return o.paint(o.faint, s)
-			}
-			return o.sizeText(it.Size) + strings.TrimPrefix(s, fsx.Bytes(it.Size))
+			return c.paintSize(it, s)
 		case 2:
 			return o.paint(o.faint, s)
 		case 3:
@@ -406,9 +398,92 @@ func (c *cli) addItem(t *table, env *core.Env, it *core.Item, reco bool, now tim
 		}
 		return s
 	}, it.Name, size, ageText(it, now), riskPlain(it), star, whereText(env, it))
+	c.addItemNotes(t, env, it)
+}
+
+// addItemNotes appends the warning and the detail lines of an item under
+// its row (sanitized: they hold paths and tool output).
+func (c *cli) addItemNotes(t *table, env *core.Env, it *core.Item) {
+	o := c.out
 	if it.Warn != "" {
-		t.line("    " + o.paint(o.warn, "! "+sanitize(it.Warn)))
+		t.line("    " + o.paint(o.warn, "! "+prettyText(env, it.Warn)))
 	}
+	for _, l := range detailLines(env, it) {
+		t.line("    " + o.paint(o.faint, l))
+	}
+}
+
+// sizeUnknown reports items whose gain cannot be known before cleaning
+// (git worktree prune, pnpm store prune, a brew cleanup whose dry run timed
+// out: Meta["size"] "unknown…"): their size is shown as "?", not "0 B".
+func sizeUnknown(it *core.Item) bool {
+	if it.Sizing || it.Size > 0 {
+		return false
+	}
+	return strings.HasPrefix(it.Meta["size"], "unknown") || it.Method == core.MethodCommand
+}
+
+// sizeCell is the plain SIZE cell of an item: "…" while it is measured, "?"
+// when unknown, and a "*" when deleting it frees less (hardlinks or APFS
+// clones shared with other files).
+func sizeCell(it *core.Item) string {
+	switch {
+	case it.Sizing:
+		return "…"
+	case sizeUnknown(it):
+		return "?"
+	case it.Reclaim > 0 && it.Reclaim < it.Size:
+		return fsx.Bytes(it.Size) + "*"
+	}
+	return fsx.Bytes(it.Size)
+}
+
+// paintSize styles a (possibly truncated) sizeCell.
+func (c *cli) paintSize(it *core.Item, s string) string {
+	o := c.out
+	if it.Sizing || sizeUnknown(it) {
+		return o.paint(o.faint, s)
+	}
+	if rest, ok := strings.CutPrefix(s, fsx.Bytes(it.Size)); ok {
+		return o.sizeText(it.Size) + rest
+	}
+	return s
+}
+
+// detailLines are the details shown under an item row: the Meta values
+// that matter to decide (why its status is unknown, where its main
+// repository went, the repositories nested in it, what is kept), each one
+// unless the warning already says it. Sanitized, home shown as "~".
+func detailLines(env *core.Env, it *core.Item) []string {
+	var out []string
+	warn := prettyText(env, it.Warn)
+	add := func(prefix, v string) {
+		if v = strings.TrimSpace(v); v == "" {
+			return
+		}
+		if v = prettyText(env, v); strings.Contains(warn, v) {
+			return
+		}
+		out = append(out, prefix+v)
+	}
+	add("unreadable: ", it.Meta["unreadable"])
+	add("main repository moved to ", it.Meta["repair_main"])
+	add("contains: ", it.Meta["nested"])
+	kept := it.Meta["kept"]
+	if r := strings.TrimSpace(it.Meta["kept_reason"]); kept != "" && r != "" {
+		kept += " (" + r + ")"
+	}
+	add("kept: ", kept)
+	return out
+}
+
+// prettyText sanitizes s for human output, with paths under the home
+// folder shown as "~/…".
+func prettyText(env *core.Env, s string) string {
+	if env != nil && env.Home != "" && env.Home != "/" {
+		s = strings.ReplaceAll(s, strings.TrimSuffix(env.Home, "/")+"/", "~/")
+	}
+	return sanitize(s)
 }
 
 func riskPlain(it *core.Item) string {
@@ -457,7 +532,7 @@ func (c *cli) printGroups(s *setup, groups []*catGroup, top int) {
 	}
 	t.render(o, "  ", false)
 	if hasReclaim {
-		o.println(o.paint(o.faint, "  * shares hardlinks with files outside it: deleting frees less (see \"reclaim\" in --json)"))
+		o.println(o.paint(o.faint, "  * shares data with other files (hardlinks or APFS clones): deleting frees less (see \"reclaim\" in --json)"))
 	}
 }
 
@@ -520,12 +595,13 @@ func (c *cli) printWorktrees(s *setup, items []*core.Item) {
 			case 3:
 				return o.paint(statusStyle(o, it.Meta["status"]), v)
 			case 4:
-				return o.sizeText(it.Size)
+				return c.paintSize(it, v)
 			case 5, 6:
 				return o.paint(o.faint, v)
 			}
 			return v
-		}, it.Name, it.Meta["tool"], it.Meta["branch"], it.Meta["status"], fsx.Bytes(it.Size), ageText(it, s.env.Now), whereText(s.env, it))
+		}, it.Name, it.Meta["tool"], it.Meta["branch"], it.Meta["status"], sizeCell(it), ageText(it, s.env.Now), whereText(s.env, it))
+		c.addItemNotes(t, s.env, it)
 	}
 	t.render(o, "", true)
 }

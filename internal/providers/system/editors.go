@@ -1,6 +1,7 @@
 package system
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -91,11 +92,42 @@ type jbDir struct {
 	mtime                  time.Time
 }
 
+// jetbrainsLocalHistory is the folder of a JetBrains system (caches)
+// directory that holds the IDE's Local History: past versions of the user's
+// files, not a cache. It is never proposed.
+const jetbrainsLocalHistory = "LocalHistory"
+
+// jetbrainsCacheTargets returns what may be deleted in the caches folder of
+// one IDE version: the folder itself, or, when it holds a LocalHistory
+// folder, every other entry. ok is false when nothing but the local history
+// is left, or when the folder cannot be listed (it might hold one).
+func jetbrainsCacheTargets(dir string) (paths []string, ok bool) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false
+	}
+	split := false
+	var kids []string
+	for _, e := range ents {
+		if strings.EqualFold(e.Name(), jetbrainsLocalHistory) {
+			split = true
+			continue
+		}
+		kids = append(kids, filepath.Join(dir, e.Name()))
+	}
+	if !split {
+		return []string{dir}, true
+	}
+	return kids, len(kids) > 0
+}
+
 // jetbrains: per product, keep the newest IDE versions (config keep_latest,
 // at least 1); caches of older versions (safe), their settings folders
 // (moderate: only used to import settings) and all IDE logs (safe). Current
-// caches are proposed as moderate (re-indexing takes time). Android Studio
-// lives under Google/ and belongs to the android provider.
+// caches are proposed as moderate (re-indexing takes time). The LocalHistory
+// folder inside the caches (the IDE's history of the user's files) is never
+// part of a cache item. Android Studio lives under Google/ and belongs to the
+// android provider.
 func (s *scan) jetbrains() {
 	roots := map[string]string{
 		"caches":   s.home("Library/Caches/JetBrains"),
@@ -165,15 +197,28 @@ func (s *scan) jetbrains() {
 		it := s.newItem(kind, core.CatIDE, "", risk)
 		it.ID = itemID(kind, filepath.Dir(ds[0].path))
 		it.Recommended = rec
-		it.ProcessGuard = procs(ds)
+		var kept []jbDir
 		var labels []string
 		for _, d := range ds {
-			it.Paths = append(it.Paths, d.path)
+			if kind == "jetbrains-old-caches" || kind == "jetbrains-caches" {
+				ps, ok := jetbrainsCacheTargets(d.path)
+				if !ok {
+					continue // nothing but the local history
+				}
+				it.Paths = append(it.Paths, ps...)
+			} else {
+				it.Paths = append(it.Paths, d.path)
+			}
+			kept = append(kept, d)
 			it.LastUsed = maxTime(it.LastUsed, d.mtime)
 			labels = append(labels, d.product+" "+d.version)
 		}
+		if len(kept) == 0 {
+			return
+		}
+		it.ProcessGuard = procs(kept)
 		sort.Strings(labels)
-		it.Name = name + " (" + strconv.Itoa(len(ds)) + ")"
+		it.Name = name + " (" + strconv.Itoa(len(kept)) + ")"
 		it.Location = filepath.Dir(ds[0].path) + "/…"
 		it.Meta = map[string]string{"versions": strings.Join(labels, ", ")}
 		it.Note = note
@@ -193,11 +238,11 @@ func (s *scan) jetbrains() {
 		}
 	}
 	group("jetbrains-old-caches", "JetBrains caches of old IDE versions", core.RiskSafe, oldCaches, true,
-		"Indexes and caches of IDE versions you upgraded from; the newest version of each IDE (keep_latest of them) is kept.")
+		"Indexes and caches of IDE versions you upgraded from; the newest version of each IDE (keep_latest of them) is kept. Their LocalHistory folder (your edit history) is kept.")
 	group("jetbrains-old-settings", "JetBrains settings of old IDE versions", core.RiskModerate, oldSettings, false,
 		"Settings and plugins folders of IDE versions you upgraded from (only used to import settings into a newer version).")
 	group("jetbrains-logs", "JetBrains IDE logs", core.RiskSafe, dirs["logs"], false,
 		"IDE logs of every JetBrains version; written again by the running IDE.")
 	group("jetbrains-caches", "JetBrains caches of current IDE versions", core.RiskModerate, curCaches, false,
-		"Indexes and caches of the IDE versions you use; rebuilt at the next start (re-indexing big projects takes minutes).")
+		"Indexes and caches of the IDE versions you use; rebuilt at the next start (re-indexing big projects takes minutes). Their LocalHistory folder (your edit history) is kept.")
 }

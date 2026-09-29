@@ -295,7 +295,9 @@ type Item struct {
 	AllowGitRepo   bool     `json:"-"`                         // Path may itself be a git repo (e.g. ~/.cocoapods/repos/master)
 	// Covers declares, for command items, the directory the command removes
 	// entirely (e.g. a simulator device dir for `simctl delete <udid>`). Items
-	// inside it become redundant when both are selected (see TopLevel).
+	// inside it become redundant when both are selected, and the command
+	// becomes redundant when a selected path item is Covers itself or one of
+	// its ancestors, whatever the selection order (see TopLevel).
 	Covers string `json:"-"`
 	// Recheck, when set, is called right before cleaning (and in dry-run) to
 	// re-validate state that may have changed since the scan (e.g. "the

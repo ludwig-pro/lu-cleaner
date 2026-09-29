@@ -121,9 +121,9 @@ func measure(ctx context.Context, root string) measurement {
 func (s *scan) applySize(w *worktree, it *core.Item, m measurement) {
 	it.Sizing = false
 	it.Size, it.Files = m.total, m.files
-	if m.reclaim < m.total {
-		it.Reclaim = m.reclaim
-	}
+	// A tree fully shared with other files (hardlinks or APFS clones) frees
+	// ~nothing: SetReclaim stores it as 1 byte, since 0 means "same as Size".
+	it.SetReclaim(m.reclaim)
 	var art int64
 	keys := make([]string, 0, len(m.artifacts))
 	for k, v := range m.artifacts {
@@ -183,6 +183,7 @@ func (s *scan) applyNested(w *worktree, it *core.Item, found []string) {
 		it.Method = core.MethodReport
 		it.Selectable = false
 		it.AllowGitRepo = false
+		it.RequireForce = false
 		it.Recheck = nil
 	}
 	s.recommend(w, it)

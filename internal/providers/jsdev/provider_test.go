@@ -381,10 +381,10 @@ func TestNodeVersions(t *testing.T) {
 		"node v22.1.0 (nvm)":   {core.RiskModerate, false, true, "pinned by 1 project"},          // .nvmrc 22
 		"node v24.1.0 (nvm)":   {core.RiskCaution, false, false, "running"},                      // lsof
 		"node v16.20.2 (fnm)":  {core.RiskCaution, false, true, "`node` on your PATH"},           // PATH through multishell
-		"node v20.18.0 (fnm)":  {core.RiskModerate, true, true, ""},                              // unused
+		"node v20.18.0 (fnm)":  {core.RiskModerate, false, true, ""},                             // unused, but the newest unreferenced fnm version (keep_latest)
 		"node v22.22.0 (fnm)":  {core.RiskCaution, false, true, "fnm default"},                   // alias default
 		"node v24.14.0 (fnm)":  {core.RiskModerate, false, true, "pinned"},                       // pin 24.20.0 -> newest 24 + lts-latest alias
-		"node v20.20.1 (mise)": {core.RiskModerate, true, true, ""},                              // unused
+		"node v20.20.1 (mise)": {core.RiskModerate, false, true, ""},                             // unused, but the newest unreferenced mise version (keep_latest)
 		"node v24.20.0 (mise)": {core.RiskModerate, false, true, "pinned by 1 project"},          // exact pin
 	}
 	for name, wnt := range cases {

@@ -46,6 +46,29 @@ const errNoNarrowing = `refusing to clean everything: clean --yes needs a narrow
 Use --smart (recommended items only), --category/-c (e.g. -c artifacts) or --kind/-k (e.g. -k node_modules),
 and try it with --dry-run first. Run 'lu-cleaner scan' to see what would match`
 
+// errBroadKind explains why a --kind naming a multi-category scanner is not
+// enough narrowing for clean --yes (args: provider id, its categories, one
+// of them).
+const errBroadKind = `refusing to clean: --kind %s names a scanner that spans several categories (%s),
+which is not a narrowing filter for clean --yes. Add --category/-c (e.g. -c %s) or --smart,
+or use item kinds (the "kind" of the items in 'lu-cleaner scan --json'), and try it with --dry-run first`
+
+// broadProvider returns the provider whose id is one of kinds and that
+// emits more than one category (nil when there is none). Kinds match an
+// item's Kind or Provider (core.Filter), so such a value selects a whole
+// scanner, across categories.
+func broadProvider(provs []core.Provider, kinds []string) core.Provider {
+	for _, p := range provs {
+		if len(p.Categories()) < 2 {
+			continue
+		}
+		if slices.ContainsFunc(kinds, func(k string) bool { return strings.EqualFold(k, p.ID()) }) {
+			return p
+		}
+	}
+	return nil
+}
+
 func (c *cli) cleanCmd() *cobra.Command {
 	var noSmart bool
 	cmd := &cobra.Command{
@@ -82,10 +105,18 @@ type cleanSpec struct {
 // runCleanYes is the non-interactive clean.
 func (c *cli) runCleanYes(ctx context.Context, spec cleanSpec) error {
 	smart := c.f.smart && !spec.noSmart
-	narrowed := smart || len(spec.cats) > 0 || len(splitList(spec.kinds)) > 0 ||
-		len(splitList(c.f.categories)) > 0 || len(splitList(c.f.kinds)) > 0
-	if !narrowed {
+	kinds := append(splitList(c.f.kinds), splitList(spec.kinds)...)
+	byScope := smart || len(spec.cats) > 0 || len(splitList(c.f.categories)) > 0
+	if !byScope && len(kinds) == 0 {
 		return usageErr(errNoNarrowing)
+	}
+	if !byScope {
+		// A kind list narrows only if none of its values is a scanner that
+		// spans several categories: -k catalog matches every cache, log
+		// and tool-data entry of the catalog, in every category.
+		if p := broadProvider(c.Providers(), kinds); p != nil {
+			return usageErr(errBroadKind, p.ID(), joinCats(p.Categories()), p.Categories()[0])
+		}
 	}
 	s, err := c.newSetup(spec.roots)
 	if err != nil {
@@ -317,7 +348,7 @@ func (c *cli) printPlan(s *setup, plan []*core.Item, smart bool) {
 // space.
 func (c *cli) printCleanSummary(env *core.Env, sum *clean.Summary) {
 	o := c.out
-	pretty := func(s string) string { return sanitize(strings.ReplaceAll(s, env.Home+"/", "~/")) }
+	pretty := func(s string) string { return prettyText(env, s) }
 	results := append([]clean.Result(nil), sum.Results...)
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Item.Name < results[j].Item.Name })
 

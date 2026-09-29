@@ -371,7 +371,7 @@ func (m *pickerModel) scanFinished() {
 			if m.touched[it.ID] || m.selected[it.ID] {
 				continue
 			}
-			if core.Recommend(it, m.now, m.stale) {
+			if m.recommend(it) {
 				m.selected[it.ID] = true
 				n++
 			}
@@ -424,7 +424,7 @@ func (m *pickerModel) refresh() {
 		}
 		var cleanable []*core.Item
 		for _, it := range m.visible {
-			if it.CanClean() {
+			if m.canClean(it) {
 				cleanable = append(cleanable, it)
 			}
 		}
@@ -438,7 +438,7 @@ func (m *pickerModel) refresh() {
 		for _, it := range m.base {
 			// an item still being measured may still be rejected by its
 			// provider (e.g. node_modules tracked by git): never clean it yet
-			if m.selected[it.ID] && it.CanClean() && !it.Sizing {
+			if m.selected[it.ID] && m.canClean(it) && !it.Sizing {
 				m.selItems = append(m.selItems, it)
 			}
 		}
@@ -469,9 +469,9 @@ func (m *pickerModel) buildCats() {
 		if len(items) == 0 {
 			return
 		}
-		r := catRow{info: info, items: items, total: core.Total(items), sizing: running[info.ID]}
+		r := catRow{info: info, items: items, total: m.total(items), sizing: running[info.ID]}
 		for _, it := range items {
-			if it.CanClean() && !it.Sizing {
+			if m.canClean(it) && !it.Sizing {
 				r.cleanN++
 			}
 			if it.Sizing {
@@ -732,8 +732,11 @@ func (m *pickerModel) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 	case "t":
 		m.trash = !m.trash
+		m.dirtyData = true // items needing --force are cleanable in Trash mode only
 		if m.trash {
 			m.setStatus(stWarn, "Trash mode: items are moved to ~/.Trash — space is NOT freed until you empty the Trash")
+		} else if n := m.forceHeld(); n > 0 {
+			m.setStatus(stWarn, "Delete mode: %s need --force and will not be cleaned (Trash mode only)", plural(n, "selected item"))
 		} else {
 			m.setStatus(stInfo, "Delete mode: items are removed permanently and space is freed immediately")
 		}
@@ -828,6 +831,43 @@ func (m *pickerModel) scope() []*core.Item {
 	return m.visible
 }
 
+// canClean reports whether it can be selected and cleaned in this run. An
+// item that needs --force (core.Item.RequireForce: e.g. an orphaned worktree
+// folder whose uncommitted work git can no longer see) is cleanable only with
+// --force, or in Trash mode (the executor lets a recoverable move through).
+func (m *pickerModel) canClean(it *core.Item) bool {
+	return it.CanClean() && (!it.RequireForce || m.opt.Clean.Force || m.trash)
+}
+
+// recommend is core.Recommend for this run: smart selection never
+// preselects an item that needs --force, even when the run has it.
+func (m *pickerModel) recommend(it *core.Item) bool {
+	return m.canClean(it) && !it.RequireForce && core.Recommend(it, m.now, m.stale)
+}
+
+// total is core.Total of what this run can clean among items.
+func (m *pickerModel) total(items []*core.Item) int64 {
+	var out []*core.Item
+	for _, it := range items {
+		if m.canClean(it) {
+			out = append(out, it)
+		}
+	}
+	return core.Total(out)
+}
+
+// forceHeld counts the selected items that need --force and cannot be
+// cleaned in the current mode.
+func (m *pickerModel) forceHeld() int {
+	n := 0
+	for id := range m.selected {
+		if it := m.items[id]; it != nil && it.CanClean() && !m.canClean(it) {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *pickerModel) setSel(it *core.Item, on bool) {
 	m.touched[it.ID] = true
 	if on {
@@ -845,6 +885,10 @@ func (m *pickerModel) toggleCurrent() {
 	}
 	it := m.currentItem()
 	if it == nil {
+		return
+	}
+	if it.CanClean() && !m.canClean(it) {
+		m.setStatus(stWarn, "%s cannot be cleaned: %s", it.Name, needsForceMsg(it, m.trash))
 		return
 	}
 	if !it.CanClean() {
@@ -897,7 +941,7 @@ func (m *pickerModel) toggleCategory() {
 	}
 	n, skipped, sizing := 0, 0, 0
 	for _, it := range r.items {
-		if !it.CanClean() {
+		if !m.canClean(it) {
 			continue
 		}
 		if it.Sizing {
@@ -928,10 +972,10 @@ func (m *pickerModel) toggleCategory() {
 func (m *pickerModel) smartSelect() {
 	n := 0
 	for _, it := range m.scope() {
-		if !it.CanClean() {
+		if !m.canClean(it) {
 			continue
 		}
-		on := core.Recommend(it, m.now, m.stale)
+		on := m.recommend(it)
 		m.setSel(it, on)
 		if on {
 			n++
@@ -944,7 +988,7 @@ func (m *pickerModel) smartSelect() {
 func (m *pickerModel) selectScope(pred func(*core.Item) bool, verb string) {
 	n := 0
 	for _, it := range m.scope() {
-		if !it.CanClean() {
+		if !m.canClean(it) {
 			continue
 		}
 		on := pred(it) && !it.Sizing // never select what is still being verified

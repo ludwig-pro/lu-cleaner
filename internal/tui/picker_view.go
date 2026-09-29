@@ -276,7 +276,7 @@ func (m *pickerModel) viewItems(w, rows int, c itemCols) string {
 }
 
 func (m *pickerModel) itemLine(it *core.Item, cur bool, c itemCols) string {
-	can := it.CanClean()
+	can := m.canClean(it)
 	sel := can && m.selected[it.ID]
 	marker := "  "
 	if cur {
@@ -382,14 +382,87 @@ func (m *pickerModel) itemTags(it *core.Item, stale bool, w int) string {
 	return pad(strings.Join(parts, " "), w)
 }
 
+// metaDetailKeys are the Meta keys shown on their own line in the details
+// pane (see metaDetails) instead of in the generic "Meta" line.
+var metaDetailKeys = map[string]bool{"unreadable": true, "repair_main": true, "nested": true, "kept": true, "kept_reason": true}
+
+type detailField struct {
+	label, value string
+	style        lipgloss.Style
+}
+
+// metaDetails renders the Meta keys that explain why an item is reported
+// only, refused or partly kept: they get their own line in the details pane
+// (the generic Meta line is cut at the pane's width). Values are raw (paths
+// from the filesystem): the caller sanitizes them.
+func metaDetails(it *core.Item, pretty func(string) string) []detailField {
+	if len(it.Meta) == 0 {
+		return nil
+	}
+	var out []detailField
+	if v := it.Meta["unreadable"]; v != "" {
+		out = append(out, detailField{"Access", v + " — reported only: fix the access and rescan", sOrange})
+	}
+	if v := it.Meta["repair_main"]; v != "" {
+		out = append(out, detailField{"Repair", "main repository moved to " + pretty(v) + " (git worktree repair, then rescan)", sYellow})
+	}
+	if v := it.Meta["nested"]; v != "" {
+		out = append(out, detailField{"Nested", "contains " + v, sOrange})
+	}
+	if v := it.Meta["kept"]; v != "" {
+		if r := it.Meta["kept_reason"]; r != "" {
+			v += " (" + r + ")"
+		}
+		out = append(out, detailField{"Kept", v, sGreen})
+	}
+	return out
+}
+
+// forceReason is why an item with RequireForce needs --force.
+func forceReason(it *core.Item) string {
+	if it.Warn != "" {
+		return it.Warn
+	}
+	return "orphaned worktree: git can no longer see its uncommitted work"
+}
+
+// needsForceMsg explains why an item with RequireForce cannot be cleaned
+// without --force (trash: the run is in Trash mode, which may move it).
+func needsForceMsg(it *core.Item, trash bool) string {
+	if trash {
+		return "Trash mode only (recoverable): deleting it needs --force — " + forceReason(it)
+	}
+	return "needs --force: " + forceReason(it) + " (t: Trash mode can move it, recoverable)"
+}
+
 // metaBadges extracts a few well-known Meta hints for the list.
 func metaBadges(it *core.Item) []string {
 	var out []string
-	if it.Meta == nil {
-		return nil
+	if it.RequireForce {
+		out = append(out, "force")
 	}
-	if it.Meta["dirty"] == "true" {
+	if it.Meta == nil {
+		return out
+	}
+	if it.Meta["unreadable"] != "" {
+		out = append(out, "unreadable")
+	}
+	if it.Meta["repair_main"] != "" {
+		out = append(out, "moved repo")
+	}
+	if it.Meta["nested"] != "" {
+		out = append(out, "nested")
+	}
+	// worktrees report the number of changed files ("?" when unknown)
+	switch d := it.Meta["dirty"]; {
+	case d == "true":
 		out = append(out, "dirty")
+	case d == "?":
+		out = append(out, "dirty?")
+	default:
+		if n, _ := strconv.Atoi(d); n > 0 {
+			out = append(out, fmt.Sprintf("dirty %d", n))
+		}
 	}
 	if n, _ := strconv.Atoi(it.Meta["unpushed"]); n > 0 {
 		out = append(out, fmt.Sprintf("↑%d", n))
@@ -465,8 +538,15 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 		method += ": " + strings.Join(it.Command, " ")
 	}
 	add("Method", method, lipgloss.NewStyle())
+	if it.RequireForce {
+		if m.opt.Clean.Force {
+			add("Force", "cleaned only because of --force: "+forceReason(it), sRedB)
+		} else {
+			add("Blocked", needsForceMsg(it, m.trash), sOrange)
+		}
+	}
 	if it.Reclaim > 0 && it.Reclaim < it.Size {
-		add("Reclaim", fmt.Sprintf("only %s really freed (of %s): hardlinked elsewhere", fsx.Bytes(it.Reclaim), fsx.Bytes(it.Size)), sYellow)
+		add("Reclaim", fmt.Sprintf("only %s really freed (of %s): shared with other files (hardlinks or APFS clones)", fsx.Bytes(it.Reclaim), fsx.Bytes(it.Size)), sYellow)
 	}
 	if age := it.Age(m.now); age > 0 {
 		v := "last used " + fsx.Age(age) + " ago (" + it.LastUsed.Format("2006-01-02") + ")"
@@ -476,6 +556,9 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 		add("Age", v, lipgloss.NewStyle())
 	}
 	add("Warning", it.Warn, sOrange)
+	for _, f := range metaDetails(it, m.env.Pretty) {
+		add(f.label, f.value, f.style)
+	}
 	add("Note", it.Note, sSubtle)
 	if it.Project != "" {
 		add("Project", m.env.Pretty(it.Project), sSubtle)
@@ -483,7 +566,9 @@ func (m *pickerModel) viewDetails(w, rows int) string {
 	if len(it.Meta) > 0 {
 		keys := make([]string, 0, len(it.Meta))
 		for k := range it.Meta {
-			keys = append(keys, k)
+			if !metaDetailKeys[k] {
+				keys = append(keys, k)
+			}
 		}
 		sort.Strings(keys)
 		var kv []string
@@ -651,6 +736,13 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 		lines = append(lines,
 			label("Skipped")+sOrange.Render(plural(c.trashN, "worktree/command item")+": "+trashSkipMsg),
 			label("")+sDim.Render("t switches to delete mode"))
+	}
+	if n := len(c.forced); n > 0 {
+		msg := plural(n, "item") + " cleaned only because of --force: " + forceReason(c.forced[0])
+		if m.trash && !m.opt.Clean.Force {
+			msg = plural(n, "item") + " moved to the Trash only (deleting needs --force): " + forceReason(c.forced[0])
+		}
+		lines = append(lines, label("Force")+sRedB.Render(safeText(msg)))
 	}
 	for i, cmd := range c.commands {
 		if i == 4 {

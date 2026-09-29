@@ -162,8 +162,10 @@ func init() {
 		},
 		Entry{
 			ID: "js-eas-cli-tmp", Category: core.CatJS, Name: "EAS CLI upload archives",
-			Paths: []string{"$TMPDIR/eas-cli-nodejs"}, Risk: core.RiskSafe,
-			Note: "Project tarballs prepared by `eas build` / `eas update` uploads; recreated on the next upload.",
+			// Each upload creates its work folder right inside: a folder
+			// touched within the last day may belong to an upload in progress.
+			Paths: []string{"$TMPDIR/eas-cli-nodejs"}, Risk: core.RiskSafe, OlderThan: day,
+			Note: "Project tarballs prepared by `eas build` / `eas update` uploads (untouched for a day); recreated on the next upload.",
 		},
 		Entry{
 			ID: "js-eas-cli-cache", Category: core.CatJS, Name: "EAS CLI cache",

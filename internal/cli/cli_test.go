@@ -611,8 +611,8 @@ func TestHistory(t *testing.T) {
 		t.Fatalf("empty history: %q", h.out.String())
 	}
 	h.history = []clean.HistoryEntry{
-		{Time: testNow.Add(-48 * 3600e9), Name: "old", Path: filepath.Join(h.home, "a"), Method: "delete", Status: "done", Size: 2 * gb},
-		{Time: testNow.Add(-3600e9), Name: "sims", Command: "xcrun simctl delete unavailable", Method: "command", Status: "done", Size: 1 * gb},
+		{Time: testNow.Add(-48 * 3600e9), Name: "old", Path: filepath.Join(h.home, "a"), Method: "delete", Status: "done", Size: 2 * gb, Freed: 2 * gb},
+		{Time: testNow.Add(-3600e9), Name: "sims", Command: "xcrun simctl delete unavailable", Method: "command", Status: "done", Size: 1 * gb, Freed: 1 * gb},
 		{Time: testNow, Name: "busy", Path: filepath.Join(h.home, "b"), Method: "delete", Status: "failed", Size: 5 * gb, Error: "permission denied"},
 	}
 	h.run("history", "--limit", "2")

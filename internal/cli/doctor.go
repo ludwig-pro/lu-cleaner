@@ -198,7 +198,7 @@ func doctorTips(r *doctorReport) []string {
 	return []string{
 		snaps,
 		trash,
-		"Hardlinks and APFS clones: deleting one copy frees nothing while another link or clone exists (pnpm store, Xcode, copied simulators). lu-cleaner reports hardlinks as \"reclaim\"; clones cannot be detected cheaply.",
+		"Hardlinks and APFS clones: deleting one copy frees nothing while another link or clone exists (pnpm store, Xcode, copied simulators). lu-cleaner detects both: a size marked * frees less than shown (\"reclaim\" in --json is what is really freed).",
 		"Open files: a running process (Simulator, Xcode, Gradle daemon, Docker, an agent in a worktree) keeps deleted files allocated until it exits. Quit the apps listed above, run './gradlew --stop'.",
 		"Purgeable space: Finder counts purgeable data (snapshots, iCloud copies, caches) as available; lu-cleaner and df show the real free space. macOS frees purgeable space only on demand.",
 		"Docker's disk image (Docker.raw) never shrinks by itself: prune with 'docker system prune' (and 'docker builder prune'), then restart Docker.",

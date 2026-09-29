@@ -46,9 +46,11 @@ type Options struct {
 	// Trash moves filesystem path items to ~/.Trash instead of deleting them.
 	// Worktree and command items are then skipped (they would delete
 	// permanently), and so are items already inside the Trash.
-	Trash    bool
-	Force    bool // ignore running-process guards and dirty-worktree checks
-	Parallel int  // concurrent deletions (default 4)
+	Trash bool
+	// Force ignores running-process guards and dirty-worktree checks, and
+	// accepts the items that require it (core.Item.RequireForce).
+	Force    bool
+	Parallel int // concurrent deletions (default 4)
 	Guard    *safety.Guard
 	Runner   core.Runner
 	Home     string
@@ -56,12 +58,33 @@ type Options struct {
 	NoHistory bool
 }
 
-// Messages of the Trash-mode skips.
+// Messages of skips (Trash mode, gone targets, items requiring --force).
 const (
 	msgTrashPermanent = "not possible in Trash mode (it would delete permanently)"
 	msgAlreadyTrashed = "already in the Trash"
 	msgGone           = "already gone"
+	// msgNeedsForce prefixes the refusal of an item with RequireForce.
+	msgNeedsForce = "needs --force: "
+	// defaultForceReason explains RequireForce when the item has no warning.
+	defaultForceReason = "orphaned worktree: git can no longer see its uncommitted work"
 )
+
+// needsForce reports whether the run refuses it because it requires --force
+// (core.Item.RequireForce), in dry-run too. Trash mode may proceed: a move to
+// the Trash is recoverable.
+func needsForce(it *core.Item, opt Options) bool {
+	return it.RequireForce && !opt.Force && !opt.Trash
+}
+
+// ForceReason is why an item requires --force (core.Item.RequireForce), as the
+// executor reports it after "needs --force: ": its warning, else the reason
+// of the orphaned worktree folders that set RequireForce.
+func ForceReason(it *core.Item) string {
+	if w := strings.TrimSpace(it.Warn); w != "" {
+		return w
+	}
+	return defaultForceReason
+}
 
 // Result of one item.
 type Result struct {
@@ -214,15 +237,19 @@ func Run(ctx context.Context, items []*core.Item, opt Options, progress func(Res
 
 // plan orders the items of a run: core.TopLevel, except that a worktree
 // nested in another selected worktree is kept (removing the outer one would
-// silently skip its own checks), and that in Trash mode the items that will
-// be skipped (worktrees, commands) do not make other items redundant.
-// Worktrees come deepest first.
+// silently skip its own checks), and that the items that will be skipped do
+// not make other items redundant: worktrees and commands in Trash mode, and
+// items requiring --force without it (see needsForce), which are still dropped
+// when a kept item covers them. Worktrees come deepest first.
 func plan(items []*core.Item, opt Options) []*core.Item {
-	var rest, skipped []*core.Item
+	var rest, refused, skipped []*core.Item
 	for _, it := range items {
-		if opt.Trash && (it.Method == core.MethodWorktree || it.Method == core.MethodCommand) {
+		switch {
+		case opt.Trash && (it.Method == core.MethodWorktree || it.Method == core.MethodCommand):
 			skipped = append(skipped, it)
-		} else {
+		case needsForce(it, opt) && it.Method != core.MethodWorktree:
+			refused = append(refused, it)
+		default:
 			rest = append(rest, it)
 		}
 	}
@@ -232,17 +259,24 @@ func plan(items []*core.Item, opt Options) []*core.Item {
 			wts = append(wts, it)
 		}
 	}
-	nested := map[*core.Item]bool{}
+	// Worktrees nested in another selected worktree, and worktrees refused for
+	// lack of --force, bypass TopLevel: they make nothing redundant, and they
+	// stay in the deepest-first order that keeps an outer worktree whose inner
+	// one is not removed.
+	apart := map[*core.Item]bool{}
 	for _, a := range wts {
+		if needsForce(a, opt) {
+			apart[a] = true
+		}
 		for _, b := range wts {
 			if a != b && safety.Key(a.Path) != safety.Key(b.Path) && safety.Within(b.Path, a.Path) {
-				nested[b] = true
+				apart[b] = true
 			}
 		}
 	}
 	var outer, inner []*core.Item
 	for _, it := range rest {
-		if nested[it] {
+		if apart[it] {
 			inner = append(inner, it)
 		} else {
 			outer = append(outer, it)
@@ -263,7 +297,29 @@ func plan(items []*core.Item, opt Options) []*core.Item {
 		}
 		return wi && !wj
 	})
+	out = append(out, uncovered(out, refused)...)
 	return append(out, core.TopLevel(skipped)...)
+}
+
+// uncovered returns the items of extra that no item of kept (nor another item
+// of extra) makes redundant, in core.TopLevel order: kept items win on
+// identical targets, and extra items never drop a kept one.
+func uncovered(kept, extra []*core.Item) []*core.Item {
+	if len(extra) == 0 {
+		return nil
+	}
+	isExtra := make(map[*core.Item]bool, len(extra))
+	for _, it := range extra {
+		isExtra[it] = true
+	}
+	all := append(append(make([]*core.Item, 0, len(kept)+len(extra)), kept...), extra...)
+	var out []*core.Item
+	for _, it := range core.TopLevel(all) {
+		if isExtra[it] {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // firstInside returns the first of paths strictly inside dir ("" if none).
@@ -309,6 +365,9 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 				return skip("%s", msgAlreadyTrashed)
 			}
 		}
+	}
+	if needsForce(it, opt) {
+		return skip("%s%s", msgNeedsForce, ForceReason(it))
 	}
 	if !opt.Force && len(it.ProcessGuard) > 0 {
 		running, err := sysx.RunningStrict(it.ProcessGuard...)
@@ -724,9 +783,17 @@ type HistoryEntry struct {
 	Command string   `json:"command,omitempty"`
 	// Method is the method actually used ("trash" for a delete item moved to
 	// the Trash: its Size was not freed).
-	Method  string `json:"method"`
-	Status  string `json:"status"`
-	Size    int64  `json:"size"`
+	Method string `json:"method"`
+	Status string `json:"status"`
+	Size   int64  `json:"size"`
+	// Freed is the space really freed (Result.Freed): the reclaimable size of
+	// a done deletion, command or worktree removal (less than Size when the
+	// data is shared through hardlinks or APFS clones), what a failed deletion
+	// freed before failing, and 0 for moves to the Trash (freed only once it is
+	// emptied), skipped items and other failures. Always written, even when 0;
+	// ReadHistory fills it for lines written before it existed (Size for done
+	// permanent removals, else 0).
+	Freed   int64  `json:"freed"`
 	Error   string `json:"error,omitempty"`
 	Message string `json:"message,omitempty"` // outcome details, e.g. why an item was skipped
 }
@@ -742,6 +809,9 @@ func historyEntry(now time.Time, r Result) HistoryEntry {
 		Path: it.Path, Location: it.Location, Command: strings.Join(it.Command, " "),
 		Method: r.Method.String(), Status: r.Status.String(), Size: it.Size,
 		Error: r.Error, Message: r.Message,
+	}
+	if r.Status == StatusDone || r.Status == StatusFailed {
+		e.Freed = max(r.Freed, 0) // 0 for Trash moves: their size is in Result.Trashed
 	}
 	if len(it.Paths) > 0 {
 		e.Count = len(it.Paths)
@@ -785,9 +855,26 @@ func ReadHistory() ([]HistoryEntry, error) {
 			continue
 		}
 		var e HistoryEntry
-		if json.Unmarshal([]byte(line), &e) == nil {
-			out = append(out, e)
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
 		}
+		var has struct {
+			Freed *int64 `json:"freed"`
+		}
+		if json.Unmarshal([]byte(line), &has) == nil && has.Freed == nil {
+			e.Freed = legacyFreed(e)
+		}
+		out = append(out, e)
 	}
 	return out, nil
+}
+
+// legacyFreed estimates Freed for a history line written before the field
+// existed: the full size of a done permanent removal (what older versions
+// reported), 0 for Trash moves, skips and failures.
+func legacyFreed(e HistoryEntry) int64 {
+	if e.Status == StatusDone.String() && e.Method != core.MethodTrash.String() {
+		return max(e.Size, 0)
+	}
+	return 0
 }

@@ -35,6 +35,7 @@ type confirmState struct {
 	selected int          // selected items (top-level ones plus those nested in them)
 	hidden   int          // selected items hidden by the text filter
 	trashN   int          // items skipped because Trash mode cannot handle them
+	forced   []*core.Item // items that need --force (RequireForce), cleaned because of --force or Trash mode
 	largest  []*core.Item
 	input    lineInput
 	hint     string
@@ -173,10 +174,14 @@ func (m *pickerModel) buildConfirm() *confirmState {
 
 	// Caution content: every selected caution item, and every known caution
 	// item lying inside a selected item (cleaning the parent wipes it too).
+	// Items that need --force are treated like caution items: typing yes.
 	caution := map[string]bool{}
 	for _, it := range keep {
-		if it.Risk >= core.RiskCaution {
+		if it.Risk >= core.RiskCaution || it.RequireForce {
 			caution[it.ID] = true
+		}
+		if it.RequireForce {
+			c.forced = append(c.forced, it)
 		}
 	}
 	var roots []string

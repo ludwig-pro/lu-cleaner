@@ -205,10 +205,10 @@ func (m *analyzeModel) entryLine(e *anEntry, cur bool, sum, largest int64, c anC
 	}
 	if c.tag > 0 && tag != "" {
 		st := sYellow
-		switch e.git.kind {
-		case gitWorktree:
+		switch {
+		case e.git.kind == gitWorktree:
 			st = sGreen
-		case gitRepo, gitOther:
+		case e.refusal() != "":
 			st = sDim // never deleted by the analyzer
 		}
 		line += " " + st.Render(pad(safeText(tag), c.tag))
@@ -291,8 +291,8 @@ func (m *analyzeModel) viewHelp(w, h int) string {
 		"",
 		sDim.Render("Sizes are allocated blocks on disk; hardlinks are counted once per entry."),
 		sDim.Render("Deletions go through the safety guard: protected paths are refused."),
-		sDim.Render("Entries that are git repositories, submodules or other checkouts are never deleted"),
-		sDim.Render("(a folder holding some is deleted with them); linked worktrees go through git."),
+		sDim.Render("Git repositories, submodules, other checkouts and git data (.git) are never deleted,"),
+		sDim.Render("nor a folder holding one; linked worktrees are removed through git."),
 	}
 	if len(lines) > h-4 {
 		lines = lines[:max(1, h-4)]
@@ -316,6 +316,9 @@ func (m *analyzeModel) viewConfirm(w, h int) string {
 	pathW, noteW := 0, 0
 	for i, e := range m.confirm {
 		notes[i] = e.tag
+		if n := m.confNote[e.path]; n != "" {
+			notes[i] = n
+		}
 		if e.isWorktree() {
 			notes[i] = "🌳 worktree → git worktree remove"
 			if m.opt.Clean.Trash {
@@ -349,17 +352,22 @@ func (m *analyzeModel) viewConfirm(w, h int) string {
 		lines = append(lines, sOrange.Render(fmt.Sprintf("  ↷ %s skipped:", plural(skipped, "worktree"))),
 			sOrange.Render("    "+trashSkipMsg))
 	}
+	if k := len(m.confNote); k > 0 {
+		lines = append(lines, sOrange.Render(pad(fmt.Sprintf("  ⚠ %s not checked for git repositories inside (--force)", plural(k, "folder")), inner)))
+	}
 	if k := len(m.confRefused); k > 0 {
-		names := make([]string, 0, min(k, 3))
+		lines = append(lines, sOrange.Render(pad(fmt.Sprintf("  %s left out — git data or repositories are never deleted here:", plural(k, "marked entry")), inner)))
 		for i, e := range m.confRefused {
-			if i == 3 {
-				names = append(names, "…")
+			if i == 2 {
+				lines = append(lines, sOrange.Render(fmt.Sprintf("    and %d more", k-2)))
 				break
 			}
-			names = append(names, safeText(e.name))
+			why := m.confWhy[e.path]
+			if why == "" {
+				why = e.refusal()
+			}
+			lines = append(lines, sOrange.Render(pad("    "+safeText(e.name)+": "+safeText(why), inner)))
 		}
-		lines = append(lines, sOrange.Render(pad(fmt.Sprintf("  %s left out (git repository or checkout, never deleted here): %s",
-			plural(k, "marked entry"), strings.Join(names, ", ")), inner)))
 	}
 	lines = append(lines, "")
 	label := func(s string) string { return sSubtle.Render(pad(s, 9)) }
@@ -371,7 +379,11 @@ func (m *analyzeModel) viewConfirm(w, h int) string {
 	default:
 		lines = append(lines, label("Method")+sRed.Render("delete permanently")+sSubtle.Render(" — cannot be undone"))
 	}
-	lines = append(lines, label("Safety")+sSubtle.Render("every path is re-checked by the safety guard"), "")
+	lines = append(lines, label("Safety")+sSubtle.Render("every path is re-checked by the safety guard"))
+	if m.confChecking {
+		lines = append(lines, label("")+m.spin.View()+sAccent.Render(" looking for git repositories inside the folders…"))
+	}
+	lines = append(lines, "")
 	lines = append(lines, sBold.Render("Type yes to confirm: ")+m.input.view())
 	if m.hint != "" {
 		lines = append(lines, sOrange.Render(m.hint))

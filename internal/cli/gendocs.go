@@ -194,7 +194,7 @@ func catalogPage(entries []catalog.Entry) string {
 				extra = append(extra, fmt.Sprintf("only items older than %d days", int(e.OlderThan.Hours()/24)))
 			}
 			if e.KeepLatest > 0 {
-				extra = append(extra, fmt.Sprintf("keeps the %d newest", e.KeepLatest))
+				extra = append(extra, fmt.Sprintf("keeps at least the %d newest (raised by keep_latest)", e.KeepLatest))
 			}
 			if len(extra) > 0 {
 				b.WriteString(" _(" + strings.Join(extra, "; ") + ")_")

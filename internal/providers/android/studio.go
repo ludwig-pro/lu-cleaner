@@ -110,7 +110,7 @@ func (s *scan) studio() {
 			it.Recommended = true
 			it.Note = "Caches of an Android Studio version that is no longer installed; nothing reads them."
 		}
-		s.emitPkg(it, sizeOpt{lastUsedFromNewest: true})
+		s.emitStudioCache(it)
 	}
 	for _, p := range logs {
 		n := filepath.Base(p)
@@ -126,11 +126,23 @@ func (s *scan) studio() {
 		s.emitPkg(it, sizeOpt{lastUsedFromNewest: true})
 	}
 	hasCurrentCfg := false
+	hasCfg := map[string]bool{}
 	for _, p := range cfgs {
+		hasCfg[filepath.Base(p)] = true
 		if current[filepath.Base(p)] {
 			hasCurrentCfg = true
 		}
 	}
+	// An installed Android Studio that has no settings folder yet has never
+	// been started: at first launch it imports the settings of an older
+	// version, so those are never preselected until then.
+	var notStarted []string
+	for n := range installed {
+		if !hasCfg[n] {
+			notStarted = append(notStarted, strings.TrimPrefix(n, "AndroidStudio"))
+		}
+	}
+	sort.Strings(notStarted)
 	for _, p := range cfgs {
 		n := filepath.Base(p)
 		if current[n] {
@@ -141,8 +153,65 @@ func (s *scan) studio() {
 		it.LastUsed = mtime(p)
 		it.Note = "Settings and plugins of an older Android Studio, only read to migrate settings on upgrade; the current version has its own copy."
 		it.Recommended = hasCurrentCfg
+		if len(notStarted) > 0 {
+			it.Recommended = false
+			it.NoRecommend = true
+			it.Note = "Settings and plugins of an older Android Studio. The installed Android Studio " + strings.Join(notStarted, ", ") +
+				" has no settings folder yet (never started): it imports them from an older version at first launch — keep them until then."
+		}
 		s.emitPkg(it, sizeOpt{lastUsedFromNewest: true})
 	}
+}
+
+// studioLocalHistory is the folder of an Android Studio caches directory that
+// holds the IDE's Local History: past versions of the user's files, not a
+// cache. It is never proposed.
+const studioLocalHistory = "LocalHistory"
+
+// studioCacheTargets returns what may be deleted in the caches folder of one
+// Android Studio version: split is false when the folder itself may go;
+// otherwise paths are its entries except LocalHistory. ok is false when
+// nothing but the local history is left, or when the folder cannot be listed
+// (it might hold one).
+func studioCacheTargets(dir string) (paths []string, split, ok bool) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false, false
+	}
+	for _, e := range ents {
+		if strings.EqualFold(e.Name(), studioLocalHistory) {
+			split = true
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, e.Name()))
+	}
+	if !split {
+		return nil, false, true
+	}
+	return paths, true, len(paths) > 0
+}
+
+// emitStudioCache emits an Android Studio caches item (it.Path = the version
+// folder). When the folder holds a LocalHistory folder, the item targets its
+// other entries instead, so the local history is never deleted.
+func (s *scan) emitStudioCache(it *core.Item) {
+	dir := it.Path
+	if s.locate(dir).Deletable() {
+		ps, split, ok := studioCacheTargets(dir)
+		if !ok {
+			return
+		}
+		if split {
+			it.ID = itemID(it.Kind, dir)
+			it.Path = ""
+			it.Paths = ps
+			it.Location = dir + "/…"
+			it.Note += " Its LocalHistory folder (your edit history) is kept."
+			s.add(it, nil, sizeOpt{lastUsedFromNewest: true})
+			return
+		}
+	}
+	s.emitPkg(it, sizeOpt{lastUsedFromNewest: true})
 }
 
 // newestDirs returns the base names of the n most recently modified paths.

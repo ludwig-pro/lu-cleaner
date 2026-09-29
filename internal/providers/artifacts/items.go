@@ -229,6 +229,23 @@ func (s *scan) externalItem(c *cand) *core.Item {
 	return it
 }
 
+// reclaimNote explains why deleting an artifact frees less than its size:
+// part of its data is shared with other files, through hardlinks or APFS
+// clones (fsx detects both). For pnpm, bun and Yarn Berry installs the other
+// copies are, most likely, the package manager's global store.
+func reclaimNote(pm string, reclaim int64) string {
+	of := ""
+	switch pm {
+	case "pnpm":
+		of = " of the pnpm store"
+	case "bun":
+		of = " of the bun cache"
+	case "yarn-berry":
+		of = " of the Yarn global cache"
+	}
+	return fmt.Sprintf("Shared with other files (hardlinks or APFS clones%s): only %s is really freed.", of, fsx.Bytes(reclaim))
+}
+
 // finish fills size, dangers and recommendation of a measured item.
 func (s *scan) finish(c *cand, it *core.Item, size, reclaim, files, apparent int64) {
 	it.Sizing = false
@@ -236,18 +253,7 @@ func (s *scan) finish(c *cand, it *core.Item, size, reclaim, files, apparent int
 	if reclaim < size {
 		it.Reclaim = max(reclaim, 1) // 0 would mean "same as Size"
 		it.Meta["reclaim"] = fsx.Bytes(reclaim)
-		store := "files outside it"
-		switch it.Meta["package_manager"] {
-		case "pnpm":
-			store = "the pnpm store"
-		case "bun":
-			store = "the bun cache"
-		case "yarn-berry":
-			store = "the Yarn global cache"
-		case "npm", "yarn":
-			store = "another install"
-		}
-		it.Note += fmt.Sprintf(" Hardlinked with %s: only %s is really freed.", store, fsx.Bytes(reclaim))
+		it.Note += " " + reclaimNote(it.Meta["package_manager"], reclaim)
 	}
 	if apparent > 0 && it.Meta["icloud"] == "true" && apparent > 4*size && apparent-size > 100<<20 {
 		it.Meta["cloud_bytes"] = fsx.Bytes(apparent - size)
@@ -369,17 +375,17 @@ func (s *scan) inUseWarn(c *cand) string {
 // nestedGit is a checkout the size walk met below it ("" when none).
 func (s *scan) ignoredItem(d *ignDir, st fsx.Stats, nested []*cand, gits []*gitRoot, nestedGit string) *core.Item {
 	g := d.git
-	c := &cand{path: d.path, root: d.root, git: g, tool: g.tool, rule: &rule{Kind: "ignored-dir"}}
+	c := &cand{path: d.path, root: d.root, git: g, tool: g.tool, rule: &rule{Kind: kindIgnoredDir}}
 	if c.tool == "" {
 		c.tool = d.root.tool
 	}
 	project := g.path
 	rel := strings.TrimPrefix(d.path, project+"/")
 	it := &core.Item{
-		ID:         itemID("ignored-dir", d.path),
+		ID:         itemID(kindIgnoredDir, d.path),
 		Provider:   "artifacts",
 		Category:   core.CatArtifacts,
-		Kind:       "ignored-dir",
+		Kind:       kindIgnoredDir,
 		Name:       c.prefix() + filepath.Base(project) + " › " + rel + " (git-ignored)",
 		Path:       d.path,
 		Risk:       core.RiskCaution,

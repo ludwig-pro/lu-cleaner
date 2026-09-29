@@ -16,7 +16,9 @@ func (c *cli) historyCmd() *cobra.Command {
 		Use:   "history",
 		Short: "What was cleaned, when, and how much it freed",
 		Long: `List what was cleaned, newest first, from the history file.
-"Total freed" counts permanent removals only: what was moved to the Trash
+FREED and "Total freed" are the space really freed by permanent removals:
+less than SIZE for data shared with other files (hardlinks or APFS clones),
+what a failed deletion freed before failing. What was moved to the Trash
 still uses its space until the Trash is emptied (it is totalled apart).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -27,19 +29,24 @@ still uses its space until the Trash is emptied (it is totalled apart).`,
 			if err != nil {
 				return err
 			}
+			// Total freed is what was really freed (HistoryEntry.Freed: less
+			// than the size for data shared through hardlinks or APFS
+			// clones, what a failed deletion freed before failing). Moves to
+			// the Trash free nothing until it is emptied: totalled apart.
 			var freed, trashed int64
 			done, trashedN := 0, 0
 			for _, e := range entries {
-				if e.Status != clean.StatusDone.String() {
-					continue
-				}
 				if e.Method == core.MethodTrash.String() {
-					trashed += e.Size
-					trashedN++
+					if e.Status == clean.StatusDone.String() {
+						trashed += e.Size
+						trashedN++
+					}
 					continue
 				}
-				freed += e.Size
-				done++
+				freed += max(e.Freed, 0)
+				if e.Status == clean.StatusDone.String() {
+					done++
+				}
 			}
 			// Newest first.
 			shown := make([]clean.HistoryEntry, 0, len(entries))
@@ -60,15 +67,15 @@ still uses its space until the Trash is emptied (it is totalled apart).`,
 				return nil
 			}
 			env := c.NewEnv()
-			t := newTable("TIME", "STATUS", "METHOD", "SIZE", "NAME", "PATH/COMMAND")
-			t.right[3] = true
-			t.maxw[4] = 36
-			t.leftTrunc[5] = true
-			t.shrink = 5
+			t := newTable("TIME", "STATUS", "METHOD", "SIZE", "FREED", "NAME", "PATH/COMMAND")
+			t.right[3], t.right[4] = true, true
+			t.maxw[5] = 36
+			t.leftTrunc[6] = true
+			t.shrink = 6
 			for _, e := range shown {
 				where := historyWhere(env, e)
-				status, size := e.Status, e.Size
-				errMsg := e.Error
+				status := e.Status
+				size, freedCell := historySizes(e)
 				t.add(func(col int, v string) string {
 					switch col {
 					case 0:
@@ -82,16 +89,24 @@ still uses its space until the Trash is emptied (it is totalled apart).`,
 						}
 						return o.paint(o.warn, v)
 					case 3:
-						return o.sizeText(size)
-					case 5:
+						if v == "?" {
+							return o.paint(o.faint, v)
+						}
+						return o.sizeText(e.Size)
+					case 4, 6:
 						return o.paint(o.faint, v)
 					}
 					return v
-				}, e.Time.Local().Format("2006-01-02 15:04"), e.Status, e.Method, fsx.Bytes(e.Size), e.Name, where)
-				if errMsg != "" {
-					t.line("    " + o.paint(o.bad, "! "+sanitize(errMsg)))
-				} else if status == clean.StatusSkipped.String() && e.Message != "" {
-					t.line("    " + o.paint(o.warn, "! "+sanitize(e.Message)))
+				}, e.Time.Local().Format("2006-01-02 15:04"), e.Status, e.Method, size, freedCell, e.Name, where)
+				if e.Error != "" {
+					t.line("    " + o.paint(o.bad, "! "+prettyText(env, e.Error)))
+				}
+				if e.Message != "" && e.Message != e.Error && status != clean.StatusDone.String() {
+					st := o.warn
+					if e.Error == "" && status == clean.StatusFailed.String() {
+						st = o.bad
+					}
+					t.line("    " + o.paint(st, "! "+prettyText(env, e.Message)))
 				}
 			}
 			t.render(o, "", true)
@@ -110,6 +125,29 @@ still uses its space until the Trash is emptied (it is totalled apart).`,
 	}
 	cmd.Flags().IntVar(&limit, "limit", 30, "entries shown, newest first (0 = all)")
 	return cmd
+}
+
+// historySizes returns the SIZE and FREED cells of a history entry. FREED
+// is what was really freed ("" for Trash moves and skipped items: nothing
+// was freed); a command whose gain was unknown (size 0) shows "?".
+func historySizes(e clean.HistoryEntry) (size, freed string) {
+	unknown := e.Size == 0 && e.Method == core.MethodCommand.String()
+	size = fsx.Bytes(e.Size)
+	if unknown {
+		size = "?"
+	}
+	switch {
+	case e.Method == core.MethodTrash.String():
+		if e.Status == clean.StatusDone.String() {
+			freed = "Trash"
+		}
+	case e.Status == clean.StatusDone.String() || e.Status == clean.StatusFailed.String():
+		freed = fsx.Bytes(max(e.Freed, 0))
+		if unknown && e.Freed <= 0 {
+			freed = "?"
+		}
+	}
+	return size, freed
 }
 
 // historyWhere is the PATH/COMMAND cell of a history entry: the path, the
@@ -131,6 +169,8 @@ func historyWhere(env *core.Env, e clean.HistoryEntry) string {
 			return fmt.Sprintf("%s (+%d more)", env.Pretty(e.Paths[0]), n-1)
 		}
 		return env.Pretty(e.Paths[0])
+	case n > 0:
+		return plural(n, "path", "paths")
 	}
 	return ""
 }

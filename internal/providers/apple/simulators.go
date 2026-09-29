@@ -950,30 +950,61 @@ func (ss *simScan) runtimes(imgs map[string]runtimeImage) {
 		}
 	}
 	served := map[string]int{}
-	newest := map[string]string{} // platform -> image key
+	byPlat := map[string][]string{} // platform -> image keys
 	for _, k := range sortedKeys(imgs) {
 		img := imgs[k]
 		served[img.RuntimeIdentifier]++
 		plat := runtimePlatform(img.RuntimeIdentifier, img.PlatformIdentifier)
-		cur, ok := newest[plat]
-		if !ok {
-			newest[plat] = k
-			continue
-		}
-		c := compareVersions(img.Version, imgs[cur].Version)
-		if c > 0 || (c == 0 && img.Build > imgs[cur].Build) {
-			newest[plat] = k
+		byPlat[plat] = append(byPlat[plat], k)
+	}
+	// Per platform, newest first (ties: key order). The newest image is
+	// "needed to run <platform> simulators"; the images of the keep_latest
+	// newest runtimes (config keep_latest, at least 1; several images of the
+	// same runtime count once) are never preselected.
+	keep := max(1, ss.env.KeepLatest)
+	newest := map[string]string{} // platform -> image key
+	kept := map[string]bool{}     // image key -> among the keep newest runtimes
+	for plat, keys := range byPlat {
+		sort.SliceStable(keys, func(i, j int) bool { return newerImage(imgs[keys[i]], imgs[keys[j]]) })
+		newest[plat] = keys[0]
+		rank := map[string]int{} // runtime -> rank among the platform's runtimes
+		for _, k := range keys {
+			id := runtimeRankKey(k, imgs[k])
+			if _, ok := rank[id]; !ok {
+				rank[id] = len(rank)
+			}
+			kept[k] = rank[id] < keep
 		}
 	}
 	for _, k := range sortedKeys(imgs) {
 		img := imgs[k]
 		plat := runtimePlatform(img.RuntimeIdentifier, img.PlatformIdentifier)
 		ss.runtimeItem(k, img, plat, devCount[img.RuntimeIdentifier], booted[img.RuntimeIdentifier],
-			served[img.RuntimeIdentifier], newest[plat] == k)
+			served[img.RuntimeIdentifier], newest[plat] == k, kept[k], keep)
 	}
 }
 
-func (ss *simScan) runtimeItem(key string, img runtimeImage, plat string, devices, booted, served int, newest bool) {
+// newerImage reports whether runtime image a is newer than b (version, then build).
+func newerImage(a, b runtimeImage) bool {
+	c := compareVersions(a.Version, b.Version)
+	return c > 0 || (c == 0 && a.Build > b.Build)
+}
+
+// runtimeRankKey identifies the runtime an image provides, so that several
+// images of one runtime count once for keep_latest.
+func runtimeRankKey(key string, img runtimeImage) string {
+	switch {
+	case img.RuntimeIdentifier != "":
+		return img.RuntimeIdentifier
+	case img.Version != "":
+		return "version:" + img.Version
+	}
+	return "image:" + key
+}
+
+// runtimeItem emits one runtime image. newest: the platform's newest image;
+// kept: an image of one of the platform's keep newest runtimes (keep_latest).
+func (ss *simScan) runtimeItem(key string, img runtimeImage, plat string, devices, booted, served int, newest, kept bool, keep int) {
 	id := img.Identifier
 	if id == "" {
 		id = key
@@ -1016,9 +1047,16 @@ func (ss *simScan) runtimeItem(key string, img runtimeImage, plat string, device
 		addWarn(it, w)
 	case newest:
 		addWarn(it, "newest "+plat+" runtime — needed to run "+plat+" simulators")
+	case kept:
+		setMeta(it, "kept", fmt.Sprintf("one of the %d newest installed %s runtimes (keep_latest)", keep, plat))
+		it.Note = fmt.Sprintf("One of the %d newest %s runtimes, kept out of smart selection (config keep_latest). ", keep, plat) + it.Note
 	case img.State == "Ready" && served == 1:
 		it.Recommended = true // unused, and a newer runtime of the same platform exists
 		it.Note = "No simulator uses this runtime and a newer " + plat + " runtime is installed. " + it.Note
+	}
+	if kept {
+		it.NoRecommend = true // never preselected, whatever its age (keep_latest)
+		it.Recommended = false
 	}
 	if img.State != "" && img.State != "Ready" {
 		it.Note += " State: " + img.State + "."

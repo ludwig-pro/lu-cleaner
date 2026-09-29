@@ -211,8 +211,10 @@ func (s *scan) item(w *worktree) *core.Item {
 	case core.MethodDelete:
 		// Orphan: the checkout holds a .git file (the safety guard refuses git
 		// repositories by default). Its orphan state rests on verified facts,
-		// checked again right before removal.
+		// checked again right before removal. git can no longer see its
+		// uncommitted work, so the executor also demands --force.
 		it.AllowGitRepo = true
+		it.RequireForce = true
 		it.Recheck = s.orphanRecheck(w)
 	case core.MethodWorktree:
 		it.Recheck = s.sessionRecheck(w)

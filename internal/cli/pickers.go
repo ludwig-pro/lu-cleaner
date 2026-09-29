@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/artifacts"
 	"github.com/ludwig-pro/lu-cleaner/internal/tui"
 )
 
@@ -99,16 +102,19 @@ With --yes, cleans without the picker (same rules as 'clean --yes').
 
 Kinds for --target: node_modules, ios-pods (or pods), ios-build, android-build,
 android-gradle, android-kotlin, android-cxx, expo, next, turbo, js-build, dist…
-(see the "kind" of items in 'lu-cleaner scan --json'). Outside an Android or iOS
-project, android-build is reported as gradle-build, ios-build as xcode-build,
-android-gradle as gradle-cache and android-kotlin as gradle-kotlin: either name
-matches both.`,
+(see the "kind" of items in 'lu-cleaner scan --json'); an unknown kind is an
+error. Outside an Android or iOS project, android-build is reported as
+gradle-build, ios-build as xcode-build, android-gradle as gradle-cache and
+android-kotlin as gradle-kotlin: either name matches both.`,
 		Example: `  lu-cleaner artifacts
   lu-cleaner artifacts ~/local_sources ~/conductor/repos
   lu-cleaner artifacts -t node_modules -t ios-pods --older-than 30d
   lu-cleaner artifacts --list --all
   lu-cleaner artifacts -y -t node_modules --older-than 60d -n`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkTargets(targets); err != nil {
+				return err
+			}
 			spec := pickerSpec{
 				title: "Project artifacts",
 				cats:  []core.Category{core.CatArtifacts},
@@ -123,6 +129,39 @@ matches both.`,
 	cmd.Flags().StringSliceVarP(&targets, "target", "t", nil, "artifact kinds to look for, e.g. node_modules, ios-pods (pods), android-build (repeatable)")
 	cmd.Flags().BoolVarP(&list, "list", "l", false, "print the list instead of opening the picker")
 	return cmd
+}
+
+// checkTargets rejects the --target values that are no artifact kind
+// (artifacts.Kinds) nor a kind alias (pods, cocoapods, node-modules...): a
+// typo would otherwise scan for nothing, and `artifacts -y -t <typo>` would
+// report "nothing to clean" instead of the mistake.
+func checkTargets(targets []string) error {
+	known := artifacts.Kinds()
+	for _, t := range splitList(targets) {
+		if slices.ContainsFunc(known, func(k string) bool { return strings.EqualFold(k, t) }) {
+			continue
+		}
+		if _, ok := kindAliases[strings.ToLower(t)]; ok {
+			continue
+		}
+		return usageErr("--target: unknown artifact kind %q (known kinds: %s; aliases: %s)",
+			t, strings.Join(known, ", "), strings.Join(aliasNames(), ", "))
+	}
+	return nil
+}
+
+// aliasNames returns the kind aliases that are not artifact kinds
+// themselves (pods, cocoapods...), sorted.
+func aliasNames() []string {
+	known := artifacts.Kinds()
+	var out []string
+	for a := range kindAliases {
+		if !slices.Contains(known, a) {
+			out = append(out, a)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (c *cli) worktreesCmd() *cobra.Command {

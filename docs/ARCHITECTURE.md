@@ -4,7 +4,8 @@
 cmd/lu-cleaner/          main (version via -ldflags)
 internal/
   core/                  data model: Item, Risk, Method, Category, Provider, Env, Filter, Recommend, TopLevel
-  fsx/                   fast concurrent directory sizing (allocated blocks, hardlink aware), human units
+  fsx/                   fast concurrent directory sizing (allocated blocks, hardlink and APFS clone
+                         aware), app-data protection (other apps' containers), human units
   sysx/                  disk free (statfs), running processes, APFS local snapshots
   safety/                Guard: the last line of defence before any deletion
   config/                ~/.config/lu-cleaner/config.toml
@@ -41,7 +42,11 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   `Sizing=true` first, then with its measured size). Never mutate an item after emitting it
   (emit `it.Clone()` if you keep working on it).
 * `Item.Size` is the allocated size (`st_blocks*512`), hardlinks counted once; `Item.Reclaim`
-  is set when deleting frees less than `Size` (pnpm hardlinks…).
+  is set (through `Item.SetReclaim`) when deleting frees less than `Size` because the data is
+  shared with files outside the item: hardlinks (pnpm store…) AND APFS clones (bun and pnpm
+  installs, `cp -c`, Finder duplicates), which only count their private bytes. `Freed()` is what
+  totals use. It is an estimate: data shared between two separately measured trees (the bun cache
+  and a `node_modules` installed from it) is freed only when both are deleted.
 * `Item.LastUsed` drives ages, `--older-than`, and smart selection of moderate items.
 * Risk: `safe` (pure cache) → `moderate` (regenerable, costs time/bandwidth) → `caution`
   (user data/state) → `never` (report only).
@@ -50,8 +55,26 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   never recommended either, and `clean --yes` treats them like `caution` items: they need an
   explicit `--risk caution` (they are listed as "held back" otherwise).
 * Methods: `delete` (default, frees space now), `trash` (does NOT free space until the Trash is
-  emptied), `command` (tool's own cleanup: `xcrun simctl delete unavailable`…), `worktree`
-  (`git worktree remove` + `prune`), `report`.
+  emptied), `command` (tool's own cleanup: `xcrun simctl delete <udid>`, `xcrun simctl runtime
+  delete`, `pnpm store prune`…), `worktree` (`git worktree remove` + `prune`), `report`.
+  Unavailable simulators are one item per device (`simctl delete <udid>`, re-checked with
+  `simctl list` right before running), never `simctl delete unavailable`, which would also remove
+  devices that are only unusable right now (another Xcode selected, runtime image not mounted)
+  and come back once the setup is fixed.
+* Nested selections (`core.TopLevel`, used by the executor, the CLI plan and the TUI): an item
+  whose targets all lie inside (or equal) a target of another selected item is dropped; on
+  identical paths the first item of the list wins. A command item takes part through `Covers`,
+  the directory it removes entirely (the device folder for `simctl delete <udid>`): items inside
+  it are dropped, and the command is dropped when `Covers` equals or lies inside a selected path
+  item — a path item is never dropped because of a `Covers` equal to its own path, so the result
+  does not depend on the selection order. Exception: a worktree item nested in another selected
+  worktree item is kept, so that git removes the inner one first with its own checks (the
+  executor processes worktrees deepest first and keeps the outer one when an inner one is not
+  removed). `core.Total` still counts nested worktrees once.
+* `Item.RequireForce`: the executor refuses the item unless `--force`, in dry-run too (the dry
+  run reports the same refusal, "needs --force: <reason>"). Set on orphaned worktree folders
+  (MethodDelete, `AllowGitRepo`) whose uncommitted work git can no longer see. Trash mode may
+  still move them (recoverable).
 * Worktree removal keeps the branch: commits on a branch (pushed or not) stay in the main
   repository. Without `--force` it refuses a worktree that is locked, has uncommitted or untracked
   changes (measured with explicit git flags that ignore the user's config), has commits on no
@@ -74,6 +97,13 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   current directory. Items may also require a marker file next to them (`RequireSibling`, e.g.
   `package.json` next to `node_modules`) and may refuse to run while a process is alive
   (`ProcessGuard`, e.g. Xcode, Simulator).
+* Other apps' data (`fsx.AppDataProtected`): on macOS 14+, the first access to another app's
+  container (`~/Library/Containers/<app>`, `~/Library/Group Containers/<group>`) from a process
+  without Full Disk Access opens a system permission prompt and blocks the `open()`/`stat()` call
+  until someone answers. Without Full Disk Access nothing below a container root is ever read,
+  sized or cleaned: sizing returns `fsx.ErrNeedsFullDiskAccess`, catalog entries there become
+  report-only items with a warning (`fsx.GlobPrefixProtected`), the containers provider skips
+  them, and the analyzer does not enter them. The container roots themselves may be listed.
 * Path comparisons (protect, exclude, roots, busy detection) are case-insensitive and
   Unicode-normalization-insensitive (`safety.Key`: NFC + lower case), like APFS. Config
   `exclude` / `protect` entries have `~` and `$VARS` expanded (an undefined variable is an error)

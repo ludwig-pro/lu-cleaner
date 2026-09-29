@@ -62,13 +62,7 @@ func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
 	if s.minSize, err = fsx.ParseBytes(cfg.MinSize); err != nil {
 		return nil, fmt.Errorf("config min_size: %w", err)
 	}
-	for _, name := range cfg.DisabledCategories {
-		cat, err := core.ParseCategory(name)
-		if err != nil {
-			return nil, fmt.Errorf("config disabled_categories: %w", err)
-		}
-		s.disabled = append(s.disabled, cat)
-	}
+	s.disabled = c.disabledCategories(cfg.DisabledCategories)
 
 	// Exclude / protect entries: $VARS expanded, and each entry written
 	// through a symlink also gets its resolved form (scanners emit real
@@ -156,6 +150,32 @@ func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
 		DryRun: c.f.dryRun,
 	}
 	return s, nil
+}
+
+// disabledCategories resolves the config's disabled_categories. Tool names
+// (docker, cursor, node_modules...) disable the whole category they belong
+// to: disabling more than asked is the safe direction, and older versions
+// accepted them. An unknown value is a warning, not a fatal error: a typo in
+// a setting that only hides things must not make every command fail.
+func (c *cli) disabledCategories(names []string) []core.Category {
+	var out []core.Category
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		cat, tool, err := core.ParseCategoryOrTool(name)
+		if err != nil {
+			c.errw.printf("warning: config disabled_categories: %s (ignored)\n", sanitize(err.Error()))
+			continue
+		}
+		if tool {
+			c.logf("config disabled_categories: %q is not a category: the whole %q category is disabled", name, cat)
+		}
+		if !hasCat(out, cat) {
+			out = append(out, cat)
+		}
+	}
+	return out
 }
 
 // expandPaths expands "~" and $VARS ($HOME, ${TMPDIR}, any environment

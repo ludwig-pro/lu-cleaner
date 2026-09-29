@@ -76,7 +76,11 @@ type Provider struct {
 	// resolverRoot is where encoded project names are resolved from ("/"; tests override it).
 	resolverRoot string
 	// execInside reports whether a running process executes a binary located
-	// in dir (sysx.ExecInside: proc_pidpath, i.e. symlinks resolved).
+	// in dir. The real probe is sysx.ExecInside: proc_info(2) gives the main
+	// executable of every inspectable process (PROC_PIDPATHINFO, the vnode
+	// path, i.e. symlinks resolved) and the files mapped in its address space
+	// (loaded libraries, native .node addons); `lsof -d txt` is the fallback
+	// when the process table cannot be read natively.
 	execInside func(dir string) bool
 }
 
@@ -496,9 +500,9 @@ func (s *scanner) publish(it *core.Item, o pubOpts) {
 	}
 	it.Sizing = false
 	it.Size, it.Files = size, files
-	if reclaim < size {
-		it.Reclaim = reclaim
-	}
+	// SetReclaim: a tree fully shared with other files (hardlinks or APFS
+	// clones, reclaim 0) must not read as "frees its whole size".
+	it.SetReclaim(reclaim)
 	if o.newest && newest.After(it.LastUsed) {
 		it.LastUsed = newest
 	}

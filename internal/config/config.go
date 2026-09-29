@@ -35,7 +35,14 @@ type Config struct {
 	UseTrash bool `toml:"use_trash" json:"use_trash"`
 	// ExtraArtifacts adds project artifact directory names, e.g. ["tmp-build"].
 	ExtraArtifacts []string `toml:"extra_artifacts" json:"extra_artifacts"`
-	// KeepLatest keeps N newest versions of versioned things (node versions, runtimes, NDKs...). Default 1.
+	// KeepLatest is how many of the newest versions of versioned things are
+	// kept (never preselected; default 1, at least 1). It is honoured by
+	// exactly: AI tool versions (Claude Code, cursor-agent, Conductor's
+	// bundled agents...), Android SDK packages (NDK, build-tools, platforms,
+	// CMake, sources), JetBrains IDEs and Android Studio, catalog entries that
+	// keep their newest matches (Puppeteer / Cypress browsers, Kotlin/Native,
+	// Skiko: it raises their own count), node versions (per version manager)
+	// and iOS simulator runtimes (per platform). Gradle is not versioned this way.
 	KeepLatest int `toml:"keep_latest" json:"keep_latest"`
 }
 
@@ -147,7 +154,12 @@ min_size = "1MB"
 # Items unused for longer are "stale" and get preselected by smart select.
 stale_after = "14d"
 
-# Keep the N most recent versions of versioned things (node versions, Gradle, NDK, simulator runtimes).
+# Keep the N newest versions of versioned things (never preselected; at least 1):
+# AI tool versions (Claude Code, cursor-agent, Conductor's bundled agents...),
+# Android SDK packages (NDK, build-tools, platforms, CMake, sources),
+# JetBrains IDEs and Android Studio, catalog entries that keep their newest
+# copies (Puppeteer / Cypress browsers, Kotlin/Native, Skiko), node versions
+# (per version manager) and iOS simulator runtimes (per platform).
 keep_latest = 1
 
 # Skip whole categories: worktrees, artifacts, simulators, xcode, android, ai, js, ide, containers, langs, system

@@ -35,6 +35,10 @@ type anEntry struct {
 	errs   int64
 	tag    string
 	git    gitInfo // repository / linked worktree / other checkout (directories only)
+	// inGit says why the entry is git data the analyzer never deletes: it
+	// lies inside a .git directory or a bare repository, or it is a
+	// checkout's .git file ("" otherwise).
+	inGit string
 }
 
 // anDir is a listed directory with its own cursor, so going back is instant.
@@ -79,6 +83,14 @@ type dirListedMsg struct {
 
 type deleteDoneMsg struct{ sum *clean.Summary }
 
+// nestedCheckMsg carries the result of the search for git repositories
+// inside the plain folders of the delete dialog (see openConfirm).
+type nestedCheckMsg struct {
+	seq   int
+	found map[string]string // entry path → a repository or worktree found inside it
+	errs  map[string]error  // entry path → why it could not be fully inspected
+}
+
 type analyzeModel struct {
 	opt    AnalyzeOptions
 	env    *core.Env
@@ -96,27 +108,37 @@ type analyzeModel struct {
 	showHidden  bool
 	marked      map[string]*anEntry
 	mode        anMode
-	confirm     []*anEntry // entries the confirmation dialog deletes
-	confRefused []*anEntry // marked entries left out: git repositories and checkouts
+	confirm     []*anEntry        // entries the confirmation dialog deletes
+	confRefused []*anEntry        // marked entries left out: git repositories, checkouts, git data, folders holding them
+	confWhy     map[string]string // path → why a confRefused entry is left out
+	confNote    map[string]string // path → note shown next to a confirm entry
 	confTotal   int64
-	input       lineInput
-	hint        string
-	result      *clean.Summary
-	status      string
-	statusKind  statusKind
-	w, h        int
-	spin        spinner.Model
-	disk        sysx.Disk
-	diskErr     error
-	quitting    bool
-	spinning    bool
-	deleting    *deleteRun
-	pendingCmd  tea.Cmd
+	// The folders of the dialog are searched for git repositories in the
+	// background: confChecking while it runs, confSeq identifies the current
+	// search, confYes records a "yes" typed before it ended (the deletion
+	// then starts when it ends, unless an entry was left out).
+	confChecking bool
+	confSeq      int
+	confYes      bool
+	input        lineInput
+	hint         string
+	result       *clean.Summary
+	status       string
+	statusKind   statusKind
+	w, h         int
+	spin         spinner.Model
+	disk         sysx.Disk
+	diskErr      error
+	quitting     bool
+	spinning     bool
+	deleting     *deleteRun
+	pendingCmd   tea.Cmd
 
 	diskFn   func(string) (sysx.Disk, error)
 	revealFn func(string) error
 	cleanFn  func(context.Context, []*core.Item, clean.Options, func(clean.Result)) *clean.Summary
 	listFn   func(string) tea.Msg
+	nestedFn func(string) (string, error) // nestedRepoIn, replaced in tests
 }
 
 func newAnalyzer(ctx context.Context, opt AnalyzeOptions) *analyzeModel {
@@ -158,6 +180,7 @@ func newAnalyzer(ctx context.Context, opt AnalyzeOptions) *analyzeModel {
 		revealFn:   revealInFinder,
 		cleanFn:    clean.Run,
 		listFn:     listDir,
+		nestedFn:   nestedRepoIn,
 	}
 	m.pool = newSizePool(cctx, 4)
 	return m
@@ -170,7 +193,7 @@ func (m *analyzeModel) Init() tea.Cmd {
 }
 
 func (m *analyzeModel) needsSpin() bool {
-	if len(m.pending) > 0 || m.mode == anDeleting {
+	if len(m.pending) > 0 || m.mode == anDeleting || (m.mode == anConfirm && m.confChecking) {
 		return true
 	}
 	d := m.cur()
@@ -224,11 +247,13 @@ func listDir(path string) tea.Msg {
 		return msg
 	}
 	msg.err = nil
+	// everything inside a .git directory or a bare repository is git data
+	inGit := gitDataRefusal(path)
 	for _, name := range names {
 		p := filepath.Join(path, name)
 		if fsx.AppDataProtected(p) {
 			// never stat another app's container without Full Disk Access
-			e := &anEntry{name: name, path: p, isDir: true, sized: true, errs: 1, tag: "🔒 app container — needs Full Disk Access"}
+			e := &anEntry{name: name, path: p, isDir: true, sized: true, errs: 1, tag: "🔒 app container — needs Full Disk Access", inGit: inGit}
 			msg.entries = append(msg.entries, e)
 			continue
 		}
@@ -236,7 +261,10 @@ func listDir(path string) tea.Msg {
 		if err != nil {
 			continue
 		}
-		e := &anEntry{name: name, path: p, newest: fi.ModTime()}
+		e := &anEntry{name: name, path: p, newest: fi.ModTime(), inGit: inGit}
+		if inGit == "" && !fi.IsDir() {
+			e.inGit = dotGitFileRefusal(p)
+		}
 		switch {
 		case fi.Mode()&os.ModeSymlink != 0:
 			e.isLink = true
@@ -300,6 +328,9 @@ var knownDirs = map[string]string{
 }
 
 func annotate(e *anEntry) string {
+	if e.git.kind == gitNone && e.inGit != "" {
+		return "git data"
+	}
 	if !e.isDir {
 		return ""
 	}
@@ -494,6 +525,8 @@ func (m *analyzeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case deleteDoneMsg:
 		m.applyDelete(msg.sum)
+	case nestedCheckMsg:
+		cmds = append(cmds, m.applyNestedCheck(msg))
 	case tea.KeyMsg:
 		cmds = append(cmds, m.handleKey(msg))
 	}
@@ -652,7 +685,7 @@ func (m *analyzeModel) handleKey(k tea.KeyMsg) tea.Cmd {
 	case "r":
 		return m.rescan()
 	case "d", "x", "delete":
-		m.openConfirm()
+		return m.openConfirm()
 	}
 	return nil
 }
@@ -703,7 +736,7 @@ func (m *analyzeModel) rescan() tea.Cmd {
 
 // ------------------------------------------------------------------ delete
 
-func (m *analyzeModel) openConfirm() {
+func (m *analyzeModel) openConfirm() tea.Cmd {
 	var targets []*anEntry
 	if len(m.marked) > 0 {
 		for p, e := range m.marked {
@@ -722,17 +755,19 @@ func (m *analyzeModel) openConfirm() {
 		}
 	}
 	if len(targets) == 0 {
-		return
+		return nil
 	}
-	// Repositories, submodules and unverified checkouts are never deleted:
-	// they do not even reach the executor. The listing may be old: classify
-	// again now (a clone or `git worktree add` may have happened since).
+	// Repositories, submodules, unverified checkouts and git data are never
+	// deleted: they do not even reach the executor. The listing may be old:
+	// classify again now (a clone or `git worktree add` may have happened
+	// since).
 	var ok, refused []*anEntry
 	for _, e := range targets {
 		if e.isDir && !e.isLink {
 			e.git = classifyGit(e.path)
-			e.tag = annotate(e)
 		}
+		e.inGit = gitDataEntryRefusal(e.path, e.isDir && !e.isLink)
+		e.tag = annotate(e)
 		if e.refusal() != "" {
 			refused = append(refused, e)
 			delete(m.marked, e.path) // it can never be deleted here: do not keep it marked
@@ -744,18 +779,116 @@ func (m *analyzeModel) openConfirm() {
 		e := refused[0]
 		msg := fmt.Sprintf("%s is %s — the analyzer never deletes it", e.name, e.refusal())
 		if len(refused) > 1 {
-			msg = fmt.Sprintf("%s: git repositories or checkouts — the analyzer never deletes them", plural(len(refused), "marked entry"))
+			msg = fmt.Sprintf("%s: git repositories, checkouts or git data — the analyzer never deletes them", plural(len(refused), "marked entry"))
 		}
 		m.setStatus(stWarn, msg)
-		return
+		return nil
 	}
-	keep, _ := splitTrash(m.itemsFor(ok), m.opt.Clean.Trash)
 	m.confirm = ok
 	m.confRefused = refused
-	m.confTotal = core.Total(keep)
+	m.confWhy = map[string]string{}
+	m.confNote = map[string]string{}
+	for _, e := range refused {
+		m.confWhy[e.path] = e.refusal()
+	}
+	m.updateConfTotal()
 	m.input = lineInput{active: true}
 	m.hint = ""
 	m.mode = anConfirm
+	m.confYes = false
+	m.confChecking = false
+	m.confSeq++
+
+	// A plain folder holding a repository or a worktree would take it along:
+	// search them in the background (the walk can be long), the dialog waits.
+	var dirs []string
+	for _, e := range ok {
+		if e.isDir && !e.isLink && !e.isWorktree() {
+			dirs = append(dirs, e.path)
+		}
+	}
+	if len(dirs) == 0 || m.nestedFn == nil {
+		return nil
+	}
+	m.confChecking = true
+	seq, fn := m.confSeq, m.nestedFn
+	return func() tea.Msg {
+		msg := nestedCheckMsg{seq: seq, found: map[string]string{}, errs: map[string]error{}}
+		for _, d := range dirs {
+			found, err := fn(d)
+			switch {
+			case found != "":
+				msg.found[d] = found
+			case err != nil:
+				msg.errs[d] = err
+			}
+		}
+		return msg
+	}
+}
+
+func (m *analyzeModel) updateConfTotal() {
+	keep, _ := splitTrash(m.itemsFor(m.confirm), m.opt.Clean.Trash)
+	m.confTotal = core.Total(keep)
+}
+
+// applyNestedCheck leaves out of the dialog the folders holding a git
+// repository or worktree, and those that could not be fully inspected
+// (unless --force). A "yes" typed during the search starts the deletion
+// only when nothing was left out.
+func (m *analyzeModel) applyNestedCheck(msg nestedCheckMsg) tea.Cmd {
+	if msg.seq != m.confSeq || m.mode != anConfirm || !m.confChecking {
+		return nil // stale: the dialog was cancelled or reopened
+	}
+	m.confChecking = false
+	var keep []*anEntry
+	left := 0
+	for _, e := range m.confirm {
+		why := ""
+		if repo := msg.found[e.path]; repo != "" {
+			why = "contains the git repository or worktree " + m.env.Pretty(repo) + " — move or delete it first"
+		} else if err := msg.errs[e.path]; err != nil {
+			if m.opt.Clean.Force {
+				m.confNote[e.path] = "⚠ unchecked (--force)"
+			} else {
+				why = "cannot be checked for git repositories inside it (" + errText(err) + ") — --force skips this check"
+			}
+		}
+		if why == "" {
+			keep = append(keep, e)
+			continue
+		}
+		left++
+		m.confRefused = append(m.confRefused, e)
+		m.confWhy[e.path] = why
+		delete(m.marked, e.path)
+	}
+	m.confirm = keep
+	if len(keep) == 0 {
+		m.mode = anBrowse
+		m.confirm = nil
+		m.confYes = false
+		e := m.confRefused[len(m.confRefused)-1]
+		msg := fmt.Sprintf("%s %s — nothing was deleted", e.name, m.confWhy[e.path])
+		if len(m.confRefused) > 1 {
+			msg = fmt.Sprintf("%s left out (git repositories inside, or git data) — nothing was deleted", plural(len(m.confRefused), "marked entry"))
+		}
+		m.setStatus(stWarn, msg)
+		return nil
+	}
+	m.updateConfTotal()
+	if left > 0 {
+		// the dialog changed: the "yes" was given for another list
+		m.confYes = false
+		m.input = lineInput{active: true}
+		m.hint = plural(left, "entry") + " left out (git repository inside) — review, then type yes again"
+		return nil
+	}
+	if m.confYes {
+		m.confYes = false
+		return m.startDelete()
+	}
+	return nil
 }
 
 // itemsFor builds the synthetic items handed to clean.Run: everything goes
@@ -790,6 +923,13 @@ func (m *analyzeModel) itemsFor(es []*anEntry) []*core.Item {
 			it.Method = core.MethodReport
 			it.Selectable = false
 			it.Note = e.refusal()
+		default:
+			// re-checked right before the deletion (and in dry-run): git
+			// data, or a repository that appeared inside the folder since
+			// the dialog, is refused
+			path, dir, force := e.path, e.isDir && !e.isLink, m.opt.Clean.Force
+			fn := m.nestedFn
+			it.Recheck = func(context.Context) error { return recheckPlain(path, dir, force, fn) }
 		}
 		items = append(items, it)
 	}
@@ -803,14 +943,23 @@ func (m *analyzeModel) confirmKey(k tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.mode = anBrowse
 		m.confirm = nil
+		m.confChecking, m.confYes = false, false
+		m.confSeq++ // a search still running is now stale
 		m.setStatus(stInfo, "Cancelled — nothing was touched")
 	case "enter":
 		if strings.EqualFold(strings.TrimSpace(m.input.String()), "yes") {
+			if m.confChecking {
+				m.confYes = true
+				m.hint = "still looking for git repositories inside — the deletion starts when the check ends"
+				return nil
+			}
 			return m.startDelete()
 		}
 		m.hint = "type yes (then enter) to confirm, esc to cancel"
 	default:
-		m.input.handle(k)
+		if m.input.handle(k) {
+			m.confYes = false // editing withdraws a "yes" given during the search
+		}
 		m.hint = ""
 	}
 	return nil

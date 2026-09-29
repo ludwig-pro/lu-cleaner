@@ -31,12 +31,12 @@ package worktrees
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 )
 
 // Provider implements core.Provider.
@@ -115,8 +115,10 @@ func newScan(ctx context.Context, env *core.Env, emit core.Emit) *scan {
 	s.allowed = []string{s.home}
 	if env.TmpDir != "" {
 		s.tmp = realPath(env.TmpDir)
-		// The guard allows the parent of $TMPDIR (it also holds C/, the per-user caches).
-		s.allowed = append(s.allowed, filepath.Dir(filepath.Clean(env.TmpDir)), filepath.Dir(s.tmp))
+		// Mirror the guard exactly: the per-user folder holding T/ and C/ when
+		// $TMPDIR is the per-user temp dir, else only what is inside $TMPDIR
+		// (never / or /private for an unset or shared TMPDIR such as /tmp).
+		s.allowed = append(s.allowed, safety.TempAreas(env.TmpDir)...)
 	}
 	return s
 }

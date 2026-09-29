@@ -415,7 +415,7 @@ func TestKindAliasesAndUnmatchedKinds(t *testing.T) {
 func TestHistoryDoesNotCountTrashAsFreed(t *testing.T) {
 	h := newHarness(t)
 	h.history = []clean.HistoryEntry{
-		{Time: testNow, Name: "a", Path: filepath.Join(h.home, "a"), Method: "delete", Status: "done", Size: 2 * gb},
+		{Time: testNow, Name: "a", Path: filepath.Join(h.home, "a"), Method: "delete", Status: "done", Size: 2 * gb, Freed: 2 * gb},
 		{Time: testNow, Name: "b", Path: filepath.Join(h.home, "b"), Method: "trash", Status: "done", Size: 5 * gb},
 	}
 	h.run("history")

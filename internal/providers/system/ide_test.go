@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -269,6 +270,53 @@ func TestJetBrains(t *testing.T) {
 	}
 	if l := one(t, items, "jetbrains-logs"); len(l.Paths) != 1 {
 		t.Errorf("logs = %v", l.Paths)
+	}
+}
+
+// JetBrains keeps its Local History (past versions of the user's files) in
+// the caches folder of each IDE version: it is never part of a cache item.
+func TestJetBrainsLocalHistoryKept(t *testing.T) {
+	f := newFixture(t, "jetbrains")
+	const jb = "Library/Caches/JetBrains/"
+	f.file(jb+"WebStorm2024.3/index/x", 5000, 0)
+	f.file(jb+"WebStorm2024.3/.hidden", 100, 0)
+	f.file(jb+"WebStorm2024.3/LocalHistory/changes.storageData", 400_000, 0)
+	f.file(jb+"WebStorm2025.1/caches/x", 5000, 0)
+	f.file(jb+"WebStorm2025.1/localhistory/changes.storageData", 400_000, 0) // any case (APFS)
+	f.file(jb+"IntelliJIdea2023.1/LocalHistory/changes.storageData", 400_000, 0)
+	f.file(jb+"IntelliJIdea2025.2/index/x", 5000, 0)
+	items := f.scan()
+
+	for _, kind := range []string{"jetbrains-old-caches", "jetbrains-caches"} {
+		it := one(t, items, kind)
+		for _, p := range it.Targets() {
+			if strings.Contains(strings.ToLower(p+"/"), "/localhistory/") {
+				t.Errorf("%s proposes the local history: %s", kind, p)
+			}
+			if _, err := os.Stat(filepath.Join(p, "LocalHistory")); err == nil {
+				t.Errorf("%s target %s contains the local history", kind, p)
+			}
+		}
+		if it.Size >= 400_000 {
+			t.Errorf("%s size %d includes the local history", kind, it.Size)
+		}
+		if !strings.Contains(it.Note, "LocalHistory") {
+			t.Errorf("%s note does not say the local history is kept: %q", kind, it.Note)
+		}
+	}
+	old := one(t, items, "jetbrains-old-caches")
+	if !sameStrings(bases(old), []string{".hidden", "index"}) {
+		t.Errorf("old caches targets = %v", bases(old))
+	}
+	if old.Meta["versions"] != "WebStorm 2024.3" || !strings.HasSuffix(old.Name, "(1)") {
+		t.Errorf("a version with only its local history left must not be listed: %q %q", old.Name, old.Meta["versions"])
+	}
+	if !sameStrings(old.ProcessGuard, []string{"webstorm"}) {
+		t.Errorf("old caches guard = %v", old.ProcessGuard)
+	}
+	cur := one(t, items, "jetbrains-caches")
+	if !sameStrings(bases(cur), []string{"IntelliJIdea2025.2", "caches"}) {
+		t.Errorf("current caches targets = %v", bases(cur))
 	}
 }
 

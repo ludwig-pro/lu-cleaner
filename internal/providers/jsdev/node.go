@@ -31,6 +31,10 @@ type nodeInstall struct {
 	onPath   bool
 	running  int
 	globals  []string
+
+	// latest: one of the keep_latest newest unreferenced versions of its
+	// manager (filled by markLatest), never preselected.
+	latest bool
 }
 
 func (n *nodeInstall) referenced() bool {
@@ -328,6 +332,7 @@ func (s *scanner) nodeVersions() {
 		}
 	}
 	s.classify(byRoot)
+	s.markLatest(all)
 
 	// Global packages available elsewhere: kept versions and npm prefixes.
 	elsewhere := map[string]bool{}
@@ -357,6 +362,37 @@ func (s *scanner) nodeVersions() {
 		s.emitNodeVersion(n, elsewhere, managersOf[n.ver], lastUse)
 	}
 	s.npmLeftovers(all)
+}
+
+// keepLatest is config keep_latest (env.KeepLatest), at least 1.
+func (s *scanner) keepLatest() int { return max(1, s.env.KeepLatest) }
+
+// markLatest flags the keep_latest newest unreferenced versions of each
+// manager: a version just installed and used through `nvm use` / `fnm use`
+// in shells that are not running right now references nothing on disk, yet
+// it is probably the one the user is moving to. Such versions stay listed
+// and selectable, but smart select never picks them.
+func (s *scanner) markLatest(all []*nodeInstall) {
+	byManager := map[string][]*nodeInstall{}
+	for _, n := range all {
+		if !n.referenced() {
+			byManager[n.manager] = append(byManager[n.manager], n)
+		}
+	}
+	keep := s.keepLatest()
+	for _, list := range byManager {
+		sort.SliceStable(list, func(i, j int) bool { return list[j].ver.less(list[i].ver) })
+		distinct := 0
+		for i, n := range list {
+			if i == 0 || list[i-1].ver != n.ver {
+				distinct++ // the same version in two roots of one manager counts once
+			}
+			if distinct > keep {
+				break
+			}
+			n.latest = true
+		}
+	}
 }
 
 func (s *scanner) emitNodeVersion(n *nodeInstall, elsewhere map[string]bool, managers []string, lastUse map[string]time.Time) {
@@ -443,8 +479,21 @@ func (s *scanner) emitNodeVersion(n *nodeInstall, elsewhere map[string]bool, man
 		// Unreferenced, but deleting it also deletes CLIs found nowhere else.
 		it.Warn = "global packages installed only here: " + joinLimit(unique, 4)
 	default:
-		// Unreferenced: recommended, unless the process list is unknown (it could be running).
-		it.Recommended = s.procs.ok
+		// Unreferenced: recommended, unless it is one of the keep_latest
+		// newest ones or the process list is unknown (both vetoed below).
+		it.Recommended = s.procs.ok && !n.latest
+	}
+	if n.latest {
+		it.NoRecommend = true
+		it.Meta["kept_because"] = fmt.Sprintf("one of the %d newest unreferenced %s versions (keep_latest): not preselected",
+			s.keepLatest(), n.manager)
+	}
+	if !s.procs.ok {
+		// Fail closed: without the process list, "unreferenced" may still
+		// be running (a long-lived dev server, an MCP server, an editor).
+		it.Recommended = false
+		it.NoRecommend = true
+		it.Meta["in_use"] = "unknown: the process list could not be read"
 	}
 	s.sized(it, paths, false)
 }

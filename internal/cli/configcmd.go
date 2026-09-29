@@ -160,6 +160,11 @@ func (c *cli) configShow() error {
 		o.paint(o.bold, "Stale after:"), v.StaleAfter,
 		o.paint(o.bold, "Min size:"), fsx.Bytes(v.MinSize),
 		o.paint(o.bold, "Use Trash:"), v.Clean.Trash)
+	disabled := "none"
+	if len(v.Disabled) > 0 {
+		disabled = strings.Join(v.Disabled, ", ")
+	}
+	o.printf("  %s %s\n", o.paint(o.bold, "Disabled categories:"), sanitize(disabled))
 	o.printf("  %s %s\n", o.paint(o.bold, "History:"), sanitize(s.env.Pretty(v.HistoryFile)))
 	return nil
 }

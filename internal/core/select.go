@@ -94,32 +94,62 @@ func Recommend(it *Item, now time.Time, staleAfter time.Duration) bool {
 // TopLevel drops items made redundant by other items of the list: an item is
 // dropped when every one of its targets (Path, or Paths for group items) is
 // equal to or inside a target of another kept item. On identical targets the
-// first item of the list wins. Command items (no targets) are kept, identical
-// commands deduplicated. Returned order: by first target path, then commands.
-func TopLevel(items []*Item) []*Item {
+// first item of the list wins, except that a path item always wins over a
+// command's Covers (see below). Returned order: by first target path, then
+// commands.
+//
+// Command items (no targets) are kept, identical commands deduplicated. A
+// command with Covers (the directory it removes entirely) takes part as that
+// directory: the items inside it are dropped, and the command itself is
+// dropped when Covers is equal to or inside a path item's target. A path item
+// is never dropped because of a Covers equal to its own path, so the result
+// does not depend on the order of the list.
+//
+// A worktree item (MethodWorktree) strictly inside another worktree item is
+// kept: git must remove the inner worktree first with its own checks, and
+// the executor (clean.Run) orders worktrees deepest first and keeps the outer
+// one when an inner one is not removed. A worktree inside a non-worktree item
+// is dropped as usual. Total, which sums sizes, still counts such nested
+// worktrees once.
+func TopLevel(items []*Item) []*Item { return topLevel(items, true) }
+
+// topLevel is TopLevel; nestedWorktrees=false also drops worktree items
+// nested in another worktree item (for size totals).
+func topLevel(items []*Item, nestedWorktrees bool) []*Item {
 	type target struct {
-		path string
-		idx  int
+		path  string
+		idx   int
+		cover bool // a command's Covers, not a path the item removes itself
 	}
 	var targets []target
 	for i, it := range items {
-		for _, p := range it.Targets() {
-			targets = append(targets, target{p, i})
+		ts := it.Targets()
+		for _, p := range ts {
+			targets = append(targets, target{path: p, idx: i})
 		}
-		if len(it.Targets()) == 0 && it.Covers != "" {
-			targets = append(targets, target{it.Covers, i})
+		if len(ts) == 0 && it.Covers != "" {
+			targets = append(targets, target{path: it.Covers, idx: i, cover: true})
 		}
 	}
 	// Sort by path components: with a plain string order, siblings such as
 	// "/a/app-web" or "/a/app 2" ('-' and ' ' sort before '/') would land
 	// between "/a/app" and "/a/app/node_modules" and pop the parent off the
-	// ancestor stack below, keeping both parent and child.
+	// ancestor stack below, keeping both parent and child. On identical
+	// paths, real targets come before Covers (a path item beats a command
+	// covering the same directory, whatever the list order), then list order.
 	sort.SliceStable(targets, func(a, b int) bool {
-		if targets[a].path != targets[b].path {
-			return pathLess(targets[a].path, targets[b].path)
+		ta, tb := targets[a], targets[b]
+		if ta.path != tb.path {
+			return pathLess(ta.path, tb.path)
 		}
-		return targets[a].idx < targets[b].idx
+		if ta.cover != tb.cover {
+			return !ta.cover
+		}
+		return ta.idx < tb.idx
 	})
+	worktree := func(i int) bool {
+		return nestedWorktrees && items[i].Method == MethodWorktree && items[i].Path != ""
+	}
 	// A target is covered when an ancestor-or-equal target of another item precedes it.
 	uncovered := make([]int, len(items))
 	for i, it := range items {
@@ -139,10 +169,14 @@ func TopLevel(items []*Item) []*Item {
 		}
 		covered := false
 		for _, a := range stack {
-			if a.idx != t.idx {
-				covered = true
-				break
+			if a.idx == t.idx {
+				continue
 			}
+			if a.path != t.path && worktree(t.idx) && worktree(a.idx) {
+				continue // nested worktree: removed first, on its own
+			}
+			covered = true
+			break
 		}
 		if covered {
 			uncovered[t.idx]--
@@ -216,7 +250,8 @@ func within(p, dir string) bool {
 }
 
 // Total sums Freed() over the cleanable top-level items (no double counting
-// of nested paths; report-only and non-selectable items are left out).
+// of nested paths, worktrees nested in a worktree included; report-only and
+// non-selectable items are left out).
 func Total(items []*Item) int64 {
 	var cleanable []*Item
 	for _, it := range items {
@@ -225,7 +260,7 @@ func Total(items []*Item) int64 {
 		}
 	}
 	var n int64
-	for _, it := range TopLevel(cleanable) {
+	for _, it := range topLevel(cleanable, false) {
 		n += it.Freed()
 	}
 	return n

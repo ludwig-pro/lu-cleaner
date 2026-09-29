@@ -4,3 +4,4 @@ dist/
 *.out
 coverage.*
 .DS_Store
+.claude/

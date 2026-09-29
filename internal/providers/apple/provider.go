@@ -19,6 +19,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -74,7 +75,9 @@ type scan struct {
 
 	homeDev  int64
 	realHome string
-	realTmp  string
+	// tmpAreas are the temporary areas the safety guard lets us delete in
+	// (safety.TempAreas: given and resolved spellings).
+	tmpAreas []string
 
 	sizeSem chan struct{} // bounds concurrent fsx.Size walks
 	wg      sync.WaitGroup
@@ -107,12 +110,9 @@ func newScan(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *s
 	if unix.Stat(s.realHome, &st) == nil {
 		s.homeDev = int64(st.Dev)
 	}
-	if env.TmpDir != "" {
-		s.realTmp = filepath.Dir(filepath.Clean(env.TmpDir))
-		if r, err := filepath.EvalSymlinks(s.realTmp); err == nil {
-			s.realTmp = r
-		}
-	}
+	// Mirror the guard: never the parent of an unset or shared TMPDIR (/tmp
+	// would open / and /private).
+	s.tmpAreas = safety.TempAreas(env.TmpDir)
 	return s
 }
 
@@ -233,8 +233,13 @@ func (s *scan) place(p string) placement {
 	if s.homeDev >= 0 && int64(st.Dev) != s.homeDev {
 		return placeExternal
 	}
-	if fsx.Within(real, s.realHome) || (s.realTmp != "" && fsx.Within(real, s.realTmp)) {
+	if fsx.Within(real, s.realHome) {
 		return placeInternal
+	}
+	for _, a := range s.tmpAreas {
+		if fsx.Within(real, a) {
+			return placeInternal
+		}
 	}
 	return placeOutside
 }
@@ -294,10 +299,9 @@ func (s *scan) measure(paths ...string) measured {
 func (m measured) apply(it *core.Item) {
 	it.Sizing = false
 	it.Size, it.Files = m.bytes, m.files
-	it.Reclaim = 0
-	if m.reclaim < m.bytes {
-		it.Reclaim = m.reclaim
-	}
+	// A tree fully shared with other files (hardlinks or APFS clones) frees
+	// ~nothing: SetReclaim stores it as 1 byte, since 0 means "same as Size".
+	it.SetReclaim(m.reclaim)
 }
 
 // sizeLater emits it as a placeholder now and measures paths in the

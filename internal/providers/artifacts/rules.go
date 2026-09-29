@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
@@ -305,10 +306,38 @@ func validCacheDirTag(dir string) bool {
 	return err == nil && string(b) == cacheDirSignature
 }
 
+// Item kinds that no rule of the table carries.
+const (
+	kindExtra      = "extra-artifact" // config extra_artifacts
+	kindIgnoredDir = "ignored-dir"    // git-ignored folder that is no known artifact
+)
+
+// Kinds returns every item kind the artifacts provider can emit, sorted and
+// without duplicates: the kinds of the rule table, the names they take
+// outside an Android / iOS folder (gradle-build, xcode-build...), loose
+// virtualenvs, CACHEDIR.TAG folders, config extra_artifacts and git-ignored
+// folders. The CLI validates `-t` with it.
+func Kinds() []string {
+	seen := map[string]bool{kindIgnoredDir: true}
+	all := append(append([]*rule(nil), rules...), looseVenv, cacheDirTag, extraRule("x"))
+	for _, r := range all {
+		seen[r.Kind] = true
+		if r.AltKind != "" {
+			seen[r.AltKind] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // extraRule builds the rule of a config extra_artifacts name.
 func extraRule(name string) *rule {
 	return &rule{
-		Kind: "extra-artifact", Label: name, Names: []string{name},
+		Kind: kindExtra, Label: name, Names: []string{name},
 		Generic: true, FreeOutsideGit: true, Risk: core.RiskModerate,
 		Note: "Listed in extra_artifacts (config).",
 	}

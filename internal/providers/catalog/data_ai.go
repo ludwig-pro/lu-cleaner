@@ -48,11 +48,22 @@ func init() {
 		// ------------------------------------------------------------ Claude Code
 		Entry{
 			ID: "ai-claude-code-debug-logs", Category: core.CatAI,
-			Name:  "Claude Code debug logs & shell snapshots",
-			Paths: []string{"~/.claude/debug/*.txt", "~/.claude/shell-snapshots/*"},
+			Name:  "Claude Code debug logs",
+			Paths: []string{"~/.claude/debug/*.txt"},
 			Files: true, OlderThan: aiDay,
 			Risk: core.RiskSafe, Recommended: true,
-			Note: "Per-session debug logs and shell environment snapshots of past Claude Code sessions; recreated for each new session.",
+			Note: "Per-session debug logs of past Claude Code sessions; recreated for each new session.",
+		},
+		// A shell snapshot is written once when a session starts and sourced
+		// by every shell command of that session: a session left open for
+		// days still needs its (old) snapshot, hence the week threshold.
+		Entry{
+			ID: "ai-claude-code-shell-snapshots", Category: core.CatAI,
+			Name:  "Claude Code shell snapshots",
+			Paths: []string{"~/.claude/shell-snapshots/*"},
+			Files: true, OlderThan: 7 * aiDay,
+			Risk: core.RiskSafe,
+			Note: "Shell environment snapshots of Claude Code sessions started more than a week ago; recreated per session (a session still open that long would lose its snapshot).",
 		},
 		Entry{
 			ID: "ai-claude-code-telemetry", Category: core.CatAI,
