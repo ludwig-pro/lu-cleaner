@@ -22,9 +22,9 @@ hero:
 import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <figure style={{ margin: '0 0 1.5rem' }}>
-	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, un artefact de projet est ajouté à la sélection intelligente, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau et rien n'est sélectionné, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, la touche a lance la sélection intelligente des artefacts de projet recommandés et espace en ajoute un à la main, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
 		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
-		<img src="/lu-cleaner/demos/dashboard.gif" alt="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, un artefact de projet est ajouté à la sélection intelligente, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." width="1200" height="720" />
+		<img src="/lu-cleaner/demos/dashboard.gif" alt="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau et rien n'est sélectionné, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, la touche a lance la sélection intelligente des artefacts de projet recommandés et espace en ajoute un à la main, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." width="1200" height="720" />
 	</video>
 	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner</code> sur un dossier personnel de démonstration : analyse, worktrees d'agents IA, artefacts de projets, confirmation, récapitulatif. Les données sont fictives, d'où des tailles en Mo ; sur une vraie machine, comptez en Go.</figcaption>
 </figure>
@@ -62,12 +62,13 @@ lu-cleaner les connaît — et sait lesquels peuvent être supprimés sans risqu
 	<TabItem label="Interactif">
 		```bash
 		go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
-		lu-cleaner            # tableau de bord, éléments recommandés présélectionnés
+		lu-cleaner            # tableau de bord : vous choisissez quoi supprimer, rien n'est présélectionné
+		lu-cleaner clean --smart   # idem, mais démarre avec les éléments recommandés sélectionnés
 		```
 	</TabItem>
-	<TabItem label="Tout choisir soi-même">
+	<TabItem label="Une catégorie">
 		```bash
-		lu-cleaner clean --no-smart   # rien n'est présélectionné
+		lu-cleaner clean              # le sélecteur à nouveau, rien n'est présélectionné
 		lu-cleaner worktrees          # uniquement les worktrees git
 		lu-cleaner artifacts          # uniquement node_modules, Pods, builds…
 		```

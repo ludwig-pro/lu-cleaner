@@ -22,7 +22,7 @@ Avec `clean --yes`, un identifiant de scanner qui couvre plusieurs catégories (
 - **Recommandé** décrit le comportement effectif de la sélection intelligente :
   - **Oui** : dès que l'élément ne porte aucun avertissement (pour les éléments safe, à partir de 1 Mio) ;
   - **Si inactif** : une fois inutilisé depuis `stale_after` (14 jours par défaut) ;
-  - **Non** : jamais présélectionné, soit parce que l'élément est <span class="risk caution">caution</span>, soit parce que le scanner y met son veto (voir [vetos des scanners](/lu-cleaner/fr/concepts/risk-and-smart-select/#vetos-des-scanners)) ;
+  - **Non** : jamais recommandé, soit parce que l'élément est <span class="risk caution">caution</span>, soit parce que le scanner y met son veto (voir [vetos des scanners](/lu-cleaner/fr/concepts/risk-and-smart-select/#vetos-des-scanners)) ;
   - une condition : la règle propre au scanner.
 
 Deux règles s'appliquent partout et ne sont pas répétées : un élément qui porte un **avertissement** n'est jamais recommandé (application en cours d'exécution, processus à l'intérieur, version la plus récente conservée…), et les artefacts d'un projet actif dans les dernières 24 heures ne sont jamais recommandés. Les détails sont dans [Niveaux de risque et sélection intelligente](/lu-cleaner/fr/concepts/risk-and-smart-select/#sélection-intelligente). `clean --yes` retient aussi tout élément qui porte un avertissement, sauf si vous passez `--risk caution`.
@@ -75,7 +75,7 @@ Le scanner à la npkill, qui connaît React Native. Il parcourt vos racines de p
 
 - Un dossier ne correspond que si un **marqueur** existe à côté (`package.json` à côté de `node_modules`). Les marqueurs sont revérifiés juste avant la suppression.
 - Un dossier qui contient une **entrée `.git`** de n'importe quel type (dépôt, worktree lié, sous-module) ou un dépôt bare est un checkout, jamais un artefact, pas plus qu'un dossier qui contient un worktree enregistré. Une sortie générique qui contient un checkout est en rapport seul. Juste avant la suppression, une cible devenue un checkout depuis l'analyse est laissée intacte.
-- **Les noms génériques** (`build`, `dist`, `out`, `target`, `coverage`, `vendor/bundle`, `.yarn/*`…) peuvent être du code source. Dans un arbre de travail git, ils doivent être ignorés par git, ou être non suivis avec un contenu de build sans ambiguïté (produits de build Xcode, `CMakeCache.txt`, `CACHEDIR.TAG`…). Hors de git, ils doivent avoir ce contenu. Une sortie JS (`build`, `dist`, `out`, `web-build`) hors de git dont le contenu n'est qu'un indice faible (simples fichiers `.js`, `index.html`, ressources), sans rien de propre à un générateur (source maps, noms de bundles hachés, `asset-manifest.json`, `_next`…), est <span class="risk caution">caution</span> et jamais présélectionnée, avec l'avertissement `not under git: nothing proves it is build output — check before deleting`.
+- **Les noms génériques** (`build`, `dist`, `out`, `target`, `coverage`, `vendor/bundle`, `.yarn/*`…) peuvent être du code source. Dans un arbre de travail git, ils doivent être ignorés par git, ou être non suivis avec un contenu de build sans ambiguïté (produits de build Xcode, `CMakeCache.txt`, `CACHEDIR.TAG`…). Hors de git, ils doivent avoir ce contenu. Une sortie JS (`build`, `dist`, `out`, `web-build`) hors de git dont le contenu n'est qu'un indice faible (simples fichiers `.js`, `index.html`, ressources), sans rien de propre à un générateur (source maps, noms de bundles hachés, `asset-manifest.json`, `_next`…), est <span class="risk caution">caution</span> et jamais recommandée, avec l'avertissement `not under git: nothing proves it is build output — check before deleting`.
 - Dans un arbre de travail git, un dossier qui contient des **fichiers suivis** n'est jamais proposé.
 - Un candidat qui échoue à la vérification est affiché en rapport seul avec `not proposed: <reason>`.
 
@@ -237,7 +237,7 @@ Les données laissées par les outils de code IA. Les emplacements fixes (journa
 | `antigravity-conversations`, `antigravity-brain` | Transcripts et mémoire d'agent d'Antigravity | ai | caution | `report` | Non |
 | `ollama-model`, `lmstudio-model`, `huggingface-model`, `huggingface-dataset`, `huggingface-space`, `whisper-model`, `voiceink-whisper-model` | Poids de modèles locaux | ai | caution | `delete` | Non |
 
-La configuration, les identifiants, les mémoires, l'historique et les bases de conversations de ces outils sont [protégés](/lu-cleaner/fr/concepts/safety/#3-chemins-protégés). Les sauvegardes des bases de conversations (sauvegardes de `state.vscdb` de Cursor, sauvegardes de réparation par Codex des bases de mémoires et d'objectifs) sont des entrées caution du catalogue, jamais présélectionnées. Voir [Nettoyer les données des outils d'IA](/lu-cleaner/fr/guides/ai-tools-data/).
+La configuration, les identifiants, les mémoires, l'historique et les bases de conversations de ces outils sont [protégés](/lu-cleaner/fr/concepts/safety/#3-chemins-protégés). Les sauvegardes des bases de conversations (sauvegardes de `state.vscdb` de Cursor, sauvegardes de réparation par Codex des bases de mémoires et d'objectifs) sont des entrées caution du catalogue, jamais recommandées. Voir [Nettoyer les données des outils d'IA](/lu-cleaner/fr/guides/ai-tools-data/).
 
 ## js
 

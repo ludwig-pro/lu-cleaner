@@ -1,5 +1,6 @@
 # worktrees.tape — `lu-cleaner worktrees`: the worktrees left by AI agents with
-# their status; remove a merged one; a dirty one is refused by git's checks.
+# their status; nothing is selected, so pick a merged one with space (and a
+# dirty one to see it refused by git's checks).
 # Synthetic sandbox only: record with demo/record.sh worktrees.
 # poster: 20s (frame used as the video poster by demo/record.sh)
 # busy: codex|Codex (only these guards matter here: no Xcode-guarded item)
@@ -17,16 +18,16 @@ Enter
 Wait+Line@60s /❯ *$/
 Sleep 4s
 
-# The picker: nothing is preselected here.
+# The picker: nothing is selected when the scan ends, the status line says so.
 Type "lu-cleaner worktrees"
 Sleep 400ms
 Enter
-Wait+Screen@30s /scan done/
-Sleep 2.5s
+Wait+Screen@30s /Nothing is selected/
+Sleep 3.5s
 
-# Select the Codex worktree (merged, pushed, idle for 3 weeks)...
+# Pick the Codex worktree with space (merged, pushed, idle for 3 weeks)...
 Space
-Sleep 1.2s
+Sleep 1.5s
 
 # ...and, to see what happens, the Cursor one with uncommitted work.
 Down 2

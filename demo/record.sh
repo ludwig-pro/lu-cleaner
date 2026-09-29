@@ -117,8 +117,9 @@ for t in "${tapes[@]}"; do
 		# The sandbox's lu-cleaner function logs the guarded processes it sees
 		# running meanwhile into $dir/busy.log (LU_DEMO_BUSY_RE).
 		LU_DEMO_ENV="$dir/env.sh" LU_DEMO_BUSY_RE="$busy_re" vhs -q "demo/tapes/$t.tape"
-		calls="$(sort -u "$dir/fake-calls.log" | tr '\n' ';')"
-		seen="$(sort -u "$dir/busy.log" 2>/dev/null | tr '\n' ' ')"
+		# busy.log and fake-calls.log may not exist (LU_DEMO_BUSY_RE empty, nothing called).
+		calls="$(sort -u "$dir/fake-calls.log" 2>/dev/null | tr '\n' ';' || true)"
+		seen="$(sort -u "$dir/busy.log" 2>/dev/null | tr '\n' ' ' || true)"
 		cleanup
 		if [[ -n "$seen" ]]; then
 			((attempt < tries)) || {

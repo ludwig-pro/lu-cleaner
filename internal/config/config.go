@@ -151,10 +151,10 @@ protect = []
 # Hide items smaller than this in lists.
 min_size = "1MB"
 
-# Items unused for longer are "stale" and get preselected by smart select.
+# Items unused for longer are "stale" and are picked by smart select (the "a" key, or --smart).
 stale_after = "14d"
 
-# Keep the N newest versions of versioned things (never preselected; at least 1):
+# Keep the N newest versions of versioned things (never recommended by smart select; at least 1):
 # AI tool versions (Claude Code, cursor-agent, Conductor's bundled agents...),
 # Android SDK packages (NDK, build-tools, platforms, CMake, sources),
 # JetBrains IDEs and Android Studio, catalog entries that keep their newest

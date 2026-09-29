@@ -57,7 +57,7 @@ A folder named `build` can be Xcode output, or a folder of source code that some
 | **It holds no file tracked by git** | Committed `ios/Pods`, a vendored `node_modules`, a Yarn zero-install cache | Someone committed these files on purpose. Deleting them would change the repository, not free a cache. |
 | **Generic names must be git-ignored** | `build`, `dist`, `out`, `coverage`, `.yarn/*`, `vendor/bundle` | A project that ignores the folder declares it disposable. Unambiguous build output also qualifies, such as Xcode's `XCBuildData` or a `CACHEDIR.TAG` file, as long as the folder is untracked. Outside a git repository, generic folders must contain recognizable build output. |
 
-Outside git, a JS output folder (`build`, `dist`, `out`, `web-build`) that only holds what hand-written files also look like (`.js` files, `index.html`, assets), with nothing a bundler alone writes (source maps, hashed bundle names such as `main.3f2a1b9c.js`, `asset-manifest.json`, `_next`…), is only proposed as <span class="risk caution">caution</span>. It carries the warning `not under git: nothing proves it is build output — check before deleting` and is never preselected.
+Outside git, a JS output folder (`build`, `dist`, `out`, `web-build`) that only holds what hand-written files also look like (`.js` files, `index.html`, assets), with nothing a bundler alone writes (source maps, hashed bundle names such as `main.3f2a1b9c.js`, `asset-manifest.json`, `_next`…), is only proposed as <span class="risk caution">caution</span>. It carries the warning `not under git: nothing proves it is build output — check before deleting` and is never recommended.
 
 The scanner also has hard limits:
 

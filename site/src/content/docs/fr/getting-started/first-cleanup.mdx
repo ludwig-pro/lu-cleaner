@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Le tableau de bord interactif est la façon la plus sûre de nettoyer : vous voyez chaque élément avant que quoi que ce soit ne soit supprimé, les éléments recommandés sont présélectionnés pour vous, et chaque suppression est revérifiée au dernier moment. Cette visite suit un nettoyage complet, écran par écran. Les projets, chemins et tailles sont donnés à titre d'illustration.
+Le tableau de bord interactif est la façon la plus sûre de nettoyer : vous voyez chaque élément avant que quoi que ce soit ne soit supprimé, rien n'est sélectionné tant que vous ne l'avez pas choisi, et chaque suppression est revérifiée au dernier moment. Cette visite suit un nettoyage complet, écran par écran. Les projets, chemins et tailles sont donnés à titre d'illustration.
 
 <figure style={{ margin: '1rem 0 1.5rem' }}>
 	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration d'un nettoyage complet dans le tableau de bord de lu-cleaner : vue d'ensemble des catégories, détails d'une worktree, artefacts de projets, sélection, fenêtre de confirmation et récapitulatif." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
@@ -29,28 +29,28 @@ lu-cleaner
 Lancez d'abord `lu-cleaner --dry-run`. Tout ce qui est décrit ici fonctionne de la même façon, le pied de page affiche **○ dry-run**, et le récapitulatif final indique ce qui *aurait* été libéré. Rien n'est touché.
 :::
 
-Les filtres habituels préfiltrent le tableau de bord, par exemple `lu-cleaner -c artifacts,worktrees --older-than 30d`. Pour démarrer sans aucune présélection, utilisez `lu-cleaner clean --no-smart`.
+Les filtres habituels préfiltrent le tableau de bord, par exemple `lu-cleaner -c artifacts,worktrees --older-than 30d`. Rien n'est présélectionné : le tableau de bord s'ouvre toujours avec une sélection vide, et c'est vous qui décidez de ce qui sera supprimé. Pour démarrer avec les éléments recommandés déjà sélectionnés, demandez-le explicitement avec `lu-cleaner clean --smart`.
 
 ## 1. Lire la vue d'ensemble des catégories
 
-Les scanners tournent en parallèle et transmettent leurs résultats au fil de l'eau : les catégories apparaissent et grossissent pendant que l'en-tête affiche `scanning 5/8 providers`. Quand le dernier scanner a terminé, la *sélection intelligente* présélectionne les éléments recommandés et le signale dans la ligne d'état.
+Les scanners tournent en parallèle et transmettent leurs résultats au fil de l'eau : les catégories apparaissent et grossissent pendant que l'en-tête affiche `scanning 5/8 providers`. Quand le dernier scanner a terminé, la ligne d'état vous dit comment choisir : rien n'est encore sélectionné.
 
 <div class="terminal">
 <span class="acc">🧹 lu-cleaner</span> <span class="ok">✓</span><span class="dim"> scan done in 21.4s · 339 items · </span>176 GB<span class="dim"> reclaimable</span>
 💾 <span class="bad">██████████████████████</span><span class="dim">░░</span> <span class="bad">91% used</span><span class="dim"> · </span>43.0 GB<span class="dim"> free of 494 GB</span>
 <span class="acc">Categories</span><span class="dim"> · enter to open</span>
 &nbsp;        <span class="dim">CATEGORY                                          SIZE       ITEMS      SELECTED</span>
-<span class="acc">› </span><span class="warn">[\~] </span><span class="acc">🌳 Worktrees                                   </span>   42.8 GB<span class="dim">    31 items</span><span class="ok">     ✓ 11.6 GB</span>
-&nbsp; <span class="warn">[\~] </span>📦 Project artifacts                              36.4 GB<span class="dim">   118 items</span><span class="ok">     ✓ 9.20 GB</span>
-&nbsp; <span class="warn">[\~] </span>📱 iOS Simulators                                 24.1 GB<span class="dim">    14 items</span><span class="ok">     ✓ 8.70 GB</span>
-&nbsp; <span class="warn">[\~] </span>🔨 Xcode                                          18.6 GB<span class="dim">    12 items</span><span class="ok">     ✓ 15.2 GB</span>
-&nbsp; <span class="warn">[\~] </span>🤖 Android                                        14.3 GB<span class="dim">    19 items</span><span class="ok">     ✓ 3.40 GB</span>
-&nbsp; <span class="warn">[\~] </span>🧠 AI tools                                       12.9 GB<span class="dim">    57 items</span><span class="ok">     ✓ 4.10 GB</span>
-&nbsp; <span class="warn">[\~] </span>🟨 JS toolchain                                   17.2 GB<span class="dim">    48 items</span><span class="ok">     ✓ 12.3 GB</span>
-&nbsp; <span class="warn">[\~] </span>🧩 IDEs                                           3.10 GB<span class="dim">    15 items</span><span class="ok">     ✓ 2.60 GB</span>
-&nbsp; <span class="warn">[\~] </span>💻 System                                         6.40 GB<span class="dim">    25 items</span><span class="ok">     ✓ 1.90 GB</span>
-<span class="ok">Smart selection: 131 items preselected (69.0 GB) — review, then press d to clean</span>
-<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">enter</span><span class="dim"> open  </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">t</span><span class="dim"> trash  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+<span class="acc">› </span>[ ] <span class="acc">🌳 Worktrees                                   </span>   42.8 GB<span class="dim">    31 items</span>
+&nbsp; [ ] 📦 Project artifacts                              36.4 GB<span class="dim">   118 items</span>
+&nbsp; [ ] 📱 iOS Simulators                                 24.1 GB<span class="dim">    14 items</span>
+&nbsp; [ ] 🔨 Xcode                                          18.6 GB<span class="dim">    12 items</span>
+&nbsp; [ ] 🤖 Android                                        14.3 GB<span class="dim">    19 items</span>
+&nbsp; [ ] 🧠 AI tools                                       12.9 GB<span class="dim">    57 items</span>
+&nbsp; [ ] 🟨 JS toolchain                                   17.2 GB<span class="dim">    48 items</span>
+&nbsp; [ ] 🧩 IDEs                                           3.10 GB<span class="dim">    15 items</span>
+&nbsp; [ ] 💻 System                                         6.40 GB<span class="dim">    25 items</span>
+<span class="dim">Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection</span>
+<span class="dim">nothing selected</span><span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">enter</span><span class="dim"> open  </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">t</span><span class="dim"> trash  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
 </div>
 
 | Zone | Signification |
@@ -58,10 +58,10 @@ Les scanners tournent en parallèle et transmettent leurs résultats au fil de l
 | En-tête | État de l'analyse, nombre d'éléments listés et total récupérable. |
 | Ligne 💾 | Occupation du volume qui contient votre dossier personnel, actualisée après chaque nettoyage. |
 | SIZE | Ce que libérerait le nettoyage de tous les éléments de la catégorie. Les entrées en rapport seul ne sont pas comptées. |
-| SELECTED | Taille de la sélection actuelle dans cette catégorie. |
+| SELECTED | Taille de la sélection actuelle dans cette catégorie. Vide tant que vous n'avez rien sélectionné. |
 | `[✓]` `[~]` `[ ]` `[·]` | Tout est sélectionné, une partie, rien, ou rien n'est nettoyable (entrées en rapport seul). |
-| Ligne d'état | Le dernier message, ou à défaut une description de la catégorie sous le curseur. |
-| Pied de page | Nombre et taille des éléments sélectionnés, mode de nettoyage et principales touches. |
+| Ligne d'état | Le dernier message (ici, comment sélectionner), ou à défaut une description de la catégorie sous le curseur. |
+| Pied de page | Nombre et taille des éléments sélectionnés (`nothing selected` pour l'instant), mode de nettoyage et principales touches. |
 
 Le mode affiché dans le pied de page compte : **delete permanently** libère l'espace immédiatement, **🗑 Trash mode** (activé ou désactivé avec `t`) déplace les fichiers et dossiers dans `~/.Trash`, ne libère rien tant que vous ne l'avez pas vidée et ignore les worktrees et les commandes (ils ne peuvent pas être annulés), et **○ dry-run** ne touche à rien.
 
@@ -77,11 +77,11 @@ Placez-vous sur **Project artifacts** et appuyez sur `enter` (ou `→`) :
 <span class="acc">📦 Project artifacts</span><span class="dim"> (118)</span><span class="dim"> · sort: size ↓ · ← back · tab next</span>
 &nbsp;     <span class="dim">NAME                           LOCATION                                  SIZE   AGE RISK</span>
 &nbsp; [ ] my-app › ios/build             <span class="dim">\~/dev/my-app/ios/build              </span>   2.10 GB <span class="dim">   5h</span> <span class="ok">safe</span>
-<span class="acc">› </span><span class="ok">[✓] </span><span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+<span class="acc">› </span>[ ] <span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
 &nbsp; [ ] my-app › node_modules          <span class="dim">\~/dev/my-app/node_modules           </span>   1.31 GB <span class="dim">   2d</span> <span class="warn">moderate</span>
-&nbsp; <span class="ok">[✓] </span>codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
-&nbsp; <span class="ok">[✓] </span>shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
-&nbsp; <span class="ok">[✓] </span>shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
+&nbsp; [ ] shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
 &nbsp; [ ] my-app › ios/Pods              <span class="dim">\~/dev/my-app/ios/Pods               </span>    910 MB <span class="dim">   2d</span> <span class="warn">moderate</span>
 <span class="dim">…</span>
 <span class="dim">──────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
@@ -93,7 +93,7 @@ shop-app › node_modules<span class="dim"> · </span><span class="warn">moderat
 <span class="dim">Project  </span><span class="dim">\~/dev/shop-app</span>
 <span class="dim">Meta     </span><span class="cy">package_manager=yarn · project_type=react-native</span>
 &nbsp;
-<span class="ok">✓ </span>131 selected · 69.0 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+<span class="dim">nothing selected</span><span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
 </div>
 
 Chaque ligne est un élément : quelque chose que lu-cleaner peut supprimer d'un seul bloc (un dossier `node_modules`, un worktree, un cache, un simulateur…).
@@ -109,14 +109,14 @@ Chaque ligne est un élément : quelque chose que lu-cleaner peut supprimer d'un
 
 Les lignes grisées marquées `[·]` sont listées à titre informatif et ne peuvent pas être sélectionnées. Appuyez sur `space` sur l'une d'elles pour savoir pourquoi.
 
-Remarquez ce que la sélection intelligente a laissé de côté :
-
-- `my-app › ios/build` a été utilisé il y a 5 heures. La sélection intelligente ne présélectionne jamais les artefacts d'un projet utilisé au cours des dernières 24 heures : vous êtes probablement en train de travailler dessus.
-- `my-app › node_modules` et `my-app › ios/Pods` sont <span class="risk moderate">moderate</span> : les reconstruire prend du temps, ils ne sont donc recommandés qu'après 14 jours sans utilisation.
-
 Utilisez `tab` / `shift+tab` pour passer à la catégorie suivante ou précédente, `←` pour revenir à la vue d'ensemble, `/` pour filtrer par texte et `s` pour trier par taille, âge ou nom.
 
 ## 3. Sélectionner ce qu'il faut nettoyer
+
+Rien n'est sélectionné tant que vous n'avez pas choisi. Il y a deux façons de le faire, et vous pouvez les combiner :
+
+- **À la main.** Placez-vous sur une ligne et appuyez sur `space`. Sur la vue d'ensemble des catégories, `space` sélectionne une catégorie entière (sauf ses éléments caution).
+- **Avec la sélection intelligente.** Appuyez sur `a` : lu-cleaner sélectionne les éléments *recommandés* de la vue actuelle, rien de plus, et indique combien dans la ligne d'état. C'est votre demande explicite, vous voyez donc ce qu'il a choisi avant que quoi que ce soit puisse être nettoyé.
 
 | Touche | Effet |
 | --- | --- |
@@ -127,6 +127,30 @@ Utilisez `tab` / `shift+tab` pour passer à la catégorie suivante ou précéden
 | `i` | Inverse la sélection dans la vue. |
 
 Dans une catégorie, « la vue » est la liste affichée, après un éventuel filtre `/`. Sur la vue d'ensemble des catégories, ce sont tous les éléments visibles. La sélection est conservée quand vous passez d'une catégorie à l'autre.
+
+Essayez : dans **Project artifacts**, appuyez sur `a`.
+
+<div class="terminal">
+<span class="acc">📦 Project artifacts</span><span class="dim"> (118)</span><span class="dim"> · sort: size ↓ · ← back · tab next</span>
+&nbsp;     <span class="dim">NAME                           LOCATION                                  SIZE   AGE RISK</span>
+&nbsp; [ ] my-app › ios/build             <span class="dim">\~/dev/my-app/ios/build              </span>   2.10 GB <span class="dim">   5h</span> <span class="ok">safe</span>
+<span class="acc">› </span><span class="ok">[✓] </span><span class="acc">shop-app › node_modules       </span> <span class="dim">\~/dev/shop-app/node_modules         </span>   1.42 GB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › node_modules          <span class="dim">\~/dev/my-app/node_modules           </span>   1.31 GB <span class="dim">   2d</span> <span class="warn">moderate</span>
+&nbsp; <span class="ok">[✓] </span>codex:my-app › node_modules    <span class="dim">…/worktrees/a1b2/my-app/node_modules</span>   1.28 GB <span class="warn">   5w</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › android/app/build   <span class="dim">\~/dev/shop-app/android/app/build    </span>   1.20 GB <span class="warn">  3mo</span> <span class="ok">safe    </span> <span class="warn">stale</span>
+&nbsp; <span class="ok">[✓] </span>shop-app › ios/Pods            <span class="dim">\~/dev/shop-app/ios/Pods             </span>    980 MB <span class="warn">  3mo</span> <span class="warn">moderate</span> <span class="warn">stale</span>
+&nbsp; [ ] my-app › ios/Pods              <span class="dim">\~/dev/my-app/ios/Pods               </span>    910 MB <span class="dim">   2d</span> <span class="warn">moderate</span>
+<span class="dim">…</span>
+<span class="ok">Smart selection: 38 items (safe caches + moderate items unused for 2w)</span>
+<span class="ok">✓ </span>38 selected · 9.20 GB<span class="dim"> │ </span><span class="bad">delete permanently</span><span class="dim"> │ </span><span class="cy">␣</span><span class="dim"> select  </span><span class="cy">a</span><span class="dim"> smart  </span><span class="cy">d</span><span class="dim"> clean  </span><span class="cy">s</span><span class="dim"> sort  </span><span class="cy">/</span><span class="dim"> filter  </span><span class="cy">←</span><span class="dim"> back  </span><span class="cy">?</span><span class="dim"> help  </span><span class="cy">q</span><span class="dim"> quit</span>
+</div>
+
+Remarquez ce que la sélection intelligente a laissé de côté :
+
+- `my-app › ios/build` a été utilisé il y a 5 heures. La sélection intelligente ne choisit jamais les artefacts d'un projet utilisé au cours des dernières 24 heures : vous êtes probablement en train de travailler dessus.
+- `my-app › node_modules` et `my-app › ios/Pods` sont <span class="risk moderate">moderate</span> : les reconstruire prend du temps, ils ne sont donc recommandés qu'après 14 jours sans utilisation.
+
+Vous pouvez toujours ajuster : `space` désélectionne un élément recommandé ou en sélectionne un qu'elle a laissé de côté. Pour continuer avec les éléments recommandés de toutes les catégories, appuyez sur `←` pour revenir à la vue d'ensemble, puis sur `a` : la suite de cette visite nettoie cette sélection (131 éléments, 69.0 GB).
 
 Quand vous sélectionnez un élément <span class="risk caution">caution</span>, la ligne d'état vous indique ce qui est en jeu, par exemple `⚠ caution: my-app · spike/old-ui — 3 uncommitted changes`.
 
@@ -155,7 +179,7 @@ Appuyez sur `o` pour afficher l'élément dans le Finder.
 
 ## 5. Nettoyer et confirmer
 
-Appuyez sur `d` (ou `x`). Une fenêtre de confirmation montre ce qui va se passer :
+Appuyez sur `d` (ou `x`). Si rien n'est sélectionné, `d` vous rappelle seulement de sélectionner quelque chose. Sinon, une fenêtre de confirmation montre ce qui va se passer, avec le total :
 
 <div class="terminal">
 <span class="acc">╭──────────────────────────────────────────────────────────────────────────╮</span>
@@ -316,7 +340,7 @@ macOS ne rend pas toujours l'espace supprimé immédiatement. Voici ce qu'il fau
 
 <CardGrid>
 	<LinkCard title="Raccourcis clavier" href="/lu-cleaner/fr/reference/keyboard-shortcuts/" description="Toutes les touches du sélecteur et de l'analyseur de disque." />
-	<LinkCard title="Niveaux de risque et sélection intelligente" href="/lu-cleaner/fr/concepts/risk-and-smart-select/" description="Ce qui est présélectionné, et pourquoi." />
+	<LinkCard title="Niveaux de risque et sélection intelligente" href="/lu-cleaner/fr/concepts/risk-and-smart-select/" description="Ce que recommande la sélection intelligente, et pourquoi elle est optionnelle." />
 	<LinkCard title="Worktrees des agents IA" href="/lu-cleaner/fr/guides/ai-worktrees/" description="Faites le ménage après Codex, Cursor, Conductor et Claude Code." />
 	<LinkCard title="Modèle de sécurité" href="/lu-cleaner/fr/concepts/safety/" description="Tout ce qui est vérifié avant qu'un chemin soit supprimé." />
 </CardGrid>

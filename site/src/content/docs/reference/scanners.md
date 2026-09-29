@@ -22,7 +22,7 @@ With `clean --yes`, a scanner ID that spans several categories (`apple`, `ai`, `
 - **Recommended** is the effective smart-select behavior:
   - **Yes**: whenever the item carries no warning (for safe items, from 1 MiB);
   - **Stale**: once unused for `stale_after` (14 days by default);
-  - **No**: never preselected, either because the item is <span class="risk caution">caution</span> or because the scanner vetoes it (see [scanner vetoes](/lu-cleaner/concepts/risk-and-smart-select/#scanner-vetoes));
+  - **No**: never recommended, either because the item is <span class="risk caution">caution</span> or because the scanner vetoes it (see [scanner vetoes](/lu-cleaner/concepts/risk-and-smart-select/#scanner-vetoes));
   - a condition: the scanner's own rule.
 
 Two rules apply everywhere and are not repeated: an item with a **warning** is never recommended (an app running, a process inside, a newest version kept…), and project artifacts of a project active in the last 24 hours are never recommended. Details in [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/#smart-select). `clean --yes` also holds back every item with a warning unless you pass `--risk caution`.
@@ -75,7 +75,7 @@ The npkill-like scanner, React Native aware. It walks your project roots, the wo
 
 - A folder only matches when a **marker** exists next to it (`package.json` next to `node_modules`). Markers are re-checked right before deletion.
 - A folder holding a **`.git` entry** of any type (repository, linked worktree, submodule) or a bare repository is a checkout, never an artifact, and neither is a folder holding a registered worktree. A generic output that contains a checkout is report-only. Right before deletion, a target that became a checkout since the scan is left alone.
-- **Generic names** (`build`, `dist`, `out`, `target`, `coverage`, `vendor/bundle`, `.yarn/*`…) may be source code. Inside a git work tree they must be ignored by git, or be untracked with unambiguous build content (Xcode build products, `CMakeCache.txt`, `CACHEDIR.TAG`…). Outside git, they need that content. A JS output (`build`, `dist`, `out`, `web-build`) outside git whose content is only weak evidence (plain `.js` files, `index.html`, assets), with nothing generator-specific inside (source maps, hashed bundle names, `asset-manifest.json`, `_next`…), is <span class="risk caution">caution</span> and never preselected, with the warning `not under git: nothing proves it is build output — check before deleting`.
+- **Generic names** (`build`, `dist`, `out`, `target`, `coverage`, `vendor/bundle`, `.yarn/*`…) may be source code. Inside a git work tree they must be ignored by git, or be untracked with unambiguous build content (Xcode build products, `CMakeCache.txt`, `CACHEDIR.TAG`…). Outside git, they need that content. A JS output (`build`, `dist`, `out`, `web-build`) outside git whose content is only weak evidence (plain `.js` files, `index.html`, assets), with nothing generator-specific inside (source maps, hashed bundle names, `asset-manifest.json`, `_next`…), is <span class="risk caution">caution</span> and never recommended, with the warning `not under git: nothing proves it is build output — check before deleting`.
 - Inside a git work tree, a folder that holds **tracked files** is never proposed.
 - A candidate that fails verification is shown as report-only with `not proposed: <reason>`.
 
@@ -237,7 +237,7 @@ Data left by AI coding tools. Fixed locations (Claude Code debug logs, Codex cac
 | `antigravity-conversations`, `antigravity-brain` | Antigravity transcripts and agent memory | ai | caution | `report` | No |
 | `ollama-model`, `lmstudio-model`, `huggingface-model`, `huggingface-dataset`, `huggingface-space`, `whisper-model`, `voiceink-whisper-model` | Local model weights | ai | caution | `delete` | No |
 
-Configuration, credentials, memories, history and chat databases of these tools are [protected](/lu-cleaner/concepts/safety/#3-protected-paths). Backups of chat databases (Cursor's `state.vscdb` backups, Codex repair backups of the memories and goals databases) are caution catalog entries, never preselected. See [AI tools data](/lu-cleaner/guides/ai-tools-data/).
+Configuration, credentials, memories, history and chat databases of these tools are [protected](/lu-cleaner/concepts/safety/#3-protected-paths). Backups of chat databases (Cursor's `state.vscdb` backups, Codex repair backups of the memories and goals databases) are caution catalog entries, never recommended. See [AI tools data](/lu-cleaner/guides/ai-tools-data/).
 
 ## js
 

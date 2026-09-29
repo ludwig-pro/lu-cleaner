@@ -82,7 +82,7 @@ Totals are computed over all matching items, even when `--top` shortens `items`.
 | `note` | string | What the item is and how it comes back |
 | `warn` | string | Warning; an item with a warning is never recommended, and `clean --yes` holds it back unless `--risk caution` |
 | `require_force` | boolean | `true` when cleaning refuses the item without `--force`, in a dry run too (orphaned worktree folders). Omitted otherwise |
-| `recommended` | boolean | Selected by smart select. Always present |
+| `recommended` | boolean | Recommended by smart select: what the `a` key and `--smart` pick. Always present |
 | `cleanable` | boolean | `false` for report-only, non-selectable and `never` items. Always present |
 
 ### Example

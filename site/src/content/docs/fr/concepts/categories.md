@@ -101,7 +101,7 @@ Cache de téléchargement et anciennes versions de Homebrew (`brew cleanup`), ca
 
 ## Système
 
-La Corbeille, les caches et caches web hors ligne des applications de bureau (Slack, Discord, Notion, Figma, Postman…), les caches des navigateurs et leurs modèles d'IA embarqués, les journaux et rapports de plantage des applications, les téléchargements des outils de mise à jour des applications, les anciens installateurs, archives et builds d'applications dans `~/Downloads` (<span class="risk caution">caution</span>, jamais présélectionnés), les sauvegardes locales d'iPhone (rapport seul), et les éléments de macOS qui expliquent un disque plein : snapshots locaux de Time Machine, fichiers de swap et mises à jour macOS en attente, tous en rapport seul. Voir [Pourquoi l'espace libéré n'apparaît pas](/lu-cleaner/fr/guides/disk-space-not-freed/).
+La Corbeille, les caches et caches web hors ligne des applications de bureau (Slack, Discord, Notion, Figma, Postman…), les caches des navigateurs et leurs modèles d'IA embarqués, les journaux et rapports de plantage des applications, les téléchargements des outils de mise à jour des applications, les anciens installateurs, archives et builds d'applications dans `~/Downloads` (<span class="risk caution">caution</span>, jamais recommandés), les sauvegardes locales d'iPhone (rapport seul), et les éléments de macOS qui expliquent un disque plein : snapshots locaux de Time Machine, fichiers de swap et mises à jour macOS en attente, tous en rapport seul. Voir [Pourquoi l'espace libéré n'apparaît pas](/lu-cleaner/fr/guides/disk-space-not-freed/).
 
 ## Désactiver des catégories
 

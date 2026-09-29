@@ -95,7 +95,7 @@ Every line in the picker, the `scan` table and the JSON output is an item. The p
 | Age / last used | `last_used`, `age_days` | Best estimate of the last real activity, not the folder's modification date. |
 | Risk | `risk` | What you lose: `safe`, `moderate`, `caution` or `never`. See [Risk levels and smart select](/lu-cleaner/concepts/risk-and-smart-select/). |
 | Method | `method` | How it is cleaned: `delete`, `trash`, `command`, `worktree` or `report`. |
-| ★ | `recommended` | Preselected by smart select. |
+| ★ | `recommended` | Picked by smart select (the `a` key, `--smart`). |
 | Needs `--force` | `require_force` | Refused without `--force`, in a dry run too (orphaned worktree folders). |
 | Warning | `warn` | Something that deserves attention (dirty worktree, app running, newest version kept…). |
 | Note | `note` | What the item is and how it comes back after cleaning. |
@@ -108,7 +108,7 @@ Every line in the picker, the `scan` table and the JSON output is an item. The p
 - DerivedData uses Xcode's own `LastAccessedDate`;
 - caches use the newest file written inside them.
 
-This date drives `--older-than`, the *stale* marking (yellow age in the picker) and the smart selection of moderate items.
+This date drives `--older-than`, the *stale* marking (yellow age in the picker) and which moderate items smart select recommends.
 
 **Report-only items** (method `report`, shown as `info` in the `scan` RISK column) cannot be selected. They explain where space goes when lu-cleaner will not remove it itself: Time Machine local snapshots, extra Xcode installs, an Android SDK on an external drive, a Docker disk image. Their note tells you how to reclaim that space by hand.
 
@@ -116,7 +116,7 @@ This date drives `--older-than`, the *stale* marking (yellow age in the picker) 
 
 <Steps>
 
-1. **Selection.** In the picker you select items (<kbd>space</kbd>, <kbd>a</kbd> for smart select) and press <kbd>d</kbd>. With `clean --yes`, the filters and `--smart` decide (see [the `clean` command](/lu-cleaner/reference/commands/clean/)). Nested selections are merged: if you select a worktree *and* the `node_modules` inside it, only the worktree is processed and nothing is counted twice.
+1. **Selection.** In the picker nothing is selected at first: you select items (<kbd>space</kbd>, or <kbd>a</kbd> for smart select) and press <kbd>d</kbd>. With `clean --yes`, the filters and `--smart` decide (see [the `clean` command](/lu-cleaner/reference/commands/clean/)). Nested selections are merged: if you select a worktree *and* the `node_modules` inside it, only the worktree is processed and nothing is counted twice.
 
 2. **Confirmation** (picker only). A dialog sums up the selection by risk, the method (delete permanently, move to Trash or dry-run), the commands that will run and the apps currently running that would block some items. If the selection holds a `caution` item (selected, or inside a selected item) or an item that needs `--force`, you must type `yes`.
 

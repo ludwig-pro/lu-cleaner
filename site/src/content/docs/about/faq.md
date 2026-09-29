@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Answers to common questions about lu-cleaner, covering safety, worktrees and branches, skipped or unrecommended items, Trash mode, Full Disk Access, sudo, external drives, protecting folders and cleaning history.
+description: Answers to common questions about lu-cleaner, covering safety, why nothing is selected by default, worktrees and branches, skipped or unrecommended items, Trash mode, Full Disk Access, sudo, external drives, protecting folders and cleaning history.
 sidebar:
   order: 2
 ---
@@ -9,9 +9,9 @@ sidebar:
 
 ### Is it safe to run?
 
-Scanning is read-only: `lu-cleaner`, `scan`, `doctor` and the pickers never delete anything on their own. Deletion needs an explicit choice from you, either a selection confirmed in the picker or `clean --yes`. Several rules add margin on top of that:
+Scanning is read-only: `lu-cleaner`, `scan`, `doctor` and the pickers never delete anything on their own. Nothing is preselected, and deletion needs an explicit choice from you: either a selection you made and confirmed in the picker, or `clean --yes` with a narrowing filter. Several rules add margin on top of that:
 
-- Every item has a [risk level](/lu-cleaner/concepts/risk-and-smart-select/). <span class="risk caution">caution</span> items (sessions, models, dirty worktrees…) are never preselected, need a typed `yes` in the picker, and are left out of `clean --yes` unless you pass `--risk caution`, like every item that carries a warning.
+- Every item has a [risk level](/lu-cleaner/concepts/risk-and-smart-select/). <span class="risk caution">caution</span> items (sessions, models, dirty worktrees…) are never picked by smart select, are skipped when you press `space` on a whole category, need a typed `yes` in the picker, and are left out of `clean --yes` unless you pass `--risk caution`, like every item that carries a warning.
 - Right before removal, every path goes through a [safety guard](/lu-cleaner/concepts/safety/). It refuses anything outside your home folder and per-user temp folder, system and top-level home folders, credentials and tool configurations, git repositories, and your project roots themselves.
 - lu-cleaner also re-checks the state of each item at that moment: the file is still the one it scanned, the owning app is closed, no process works inside it, no database is open.
 
@@ -86,9 +86,23 @@ Right before cleaning, every item is checked again. If something changed or look
 | `not cleanable (…)` | The item is report only. | Nothing. |
 | `cancelled` | You pressed `ctrl+c`. | Run again. |
 
+### Why is nothing selected when I open lu-cleaner?
+
+Because deleting has to be your decision. `lu-cleaner` and `lu-cleaner clean` open with an empty selection: the footer says "nothing selected", the SELECTED column is blank, and `d` has nothing to clean until you choose. Earlier versions started with the recommended items already selected, so a single `d` and `enter` could remove far more than you had looked at. That no longer happens.
+
+To choose:
+
+- `space` selects the item under the cursor. On a category, it selects everything in it except <span class="risk caution">caution</span> items, which you pick one by one.
+- `a` is [smart select](/lu-cleaner/concepts/risk-and-smart-select/): it selects the recommended items of the current view (every category on the overview, or the open category) and unselects the rest of that view. It is an explicit action, and you can look at what it picked before you clean.
+- `A` selects everything cleanable in the view, `n` nothing, `i` inverts.
+
+Then press `d`. The confirmation dialog shows what will be removed and the total, and asks for a typed `yes` when a caution item is included. To rehearse, add `--dry-run` (`-n`).
+
+If you want the recommended items selected from the start, ask for it: `lu-cleaner clean --smart` (or `lu-cleaner --smart`) opens the picker with them selected, and `clean --yes --smart` cleans them without a picker. The [keyboard shortcuts](/lu-cleaner/reference/keyboard-shortcuts/) list every key.
+
 ### Why isn't an item recommended?
 
-[Smart select](/lu-cleaner/concepts/risk-and-smart-select/) (the `★` column, the `a` key, `--smart`) only preselects what you would clean without thinking twice. An item is **not** recommended when:
+[Smart select](/lu-cleaner/concepts/risk-and-smart-select/) (the `★` column, the `a` key, `--smart`) only picks what you would clean without thinking twice. An item is **not** recommended when:
 
 - its risk is <span class="risk caution">caution</span> or <span class="risk never">never</span>;
 - it carries a warning: app running, uncommitted changes, unpushed commits, open in an editor, on an external volume…;
@@ -197,7 +211,7 @@ lu-cleaner never deletes anything outside your home folder and temp folder, so n
 
 ### Do I need to quit my apps first?
 
-It helps. Items owned by an app (Xcode, Simulator, Cursor, Codex, the ChatGPT app, Claude desktop, Android emulators…) show a warning such as "Cursor is running — quit it before cleaning" while that app runs. They are not preselected, `clean --yes` holds them back, and they are skipped during the clean. Everything else is cleaned normally. `lu-cleaner doctor` lists the running apps that block cleaning.
+It helps. Items owned by an app (Xcode, Simulator, Cursor, Codex, the ChatGPT app, Claude desktop, Android emulators…) show a warning such as "Cursor is running — quit it before cleaning" while that app runs. Smart select never picks them, `clean --yes` holds them back, and they are skipped during the clean. Everything else is cleaned normally. `lu-cleaner doctor` lists the running apps that block cleaning.
 
 ### Does lu-cleaner send data anywhere?
 

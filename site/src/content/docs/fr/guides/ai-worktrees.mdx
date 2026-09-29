@@ -225,7 +225,7 @@ Il arrive qu'un dossier de worktree soit supprimé avec `rm`, par Cursor ou Cond
 
 Un orphelin est un dossier qui contient encore un fichier `.git`, mais que git ne connaît plus. Git ne peut pas le supprimer, ni savoir s'il contient du travail qui n'existe nulle part ailleurs. Un orphelin est donc :
 
-- <span class="risk caution">caution</span> et jamais présélectionné ;
+- <span class="risk caution">caution</span> et jamais recommandé ;
 - supprimé comme un simple dossier, après le garde-fou de sécurité, **seulement avec `--force`**. Sans cette option, l'élément est ignoré avec `needs --force: orphaned: …`, y compris lors d'une simulation. En mode Corbeille, il peut être déplacé dans la Corbeille à la place, ce qui est réversible ;
 - revérifié juste avant la suppression : même fichier `.git`, données git toujours absentes, et aucun autre dépôt ni worktree à l'intérieur. Un orphelin qui contient un autre dépôt est seulement signalé : `rm -rf` emporterait ce dépôt avec lui.
 

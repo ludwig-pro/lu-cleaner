@@ -85,7 +85,7 @@ Les fichiers placés dans la Corbeille occupent toujours de l'espace disque tant
 
 Le mode Corbeille ne supprime jamais rien définitivement : les suppressions de worktrees et les commandes (`simctl`, `docker`, `brew`…) sont ignorées, tout comme les éléments qui se trouvent déjà dans la Corbeille.
 
-Pour vider la Corbeille, utilisez le Finder, ou laissez lu-cleaner s'en charger. La Corbeille est un élément de la catégorie `system`. La vider est irréversible, donc la sélection intelligente ne la présélectionne jamais :
+Pour vider la Corbeille, utilisez le Finder, ou laissez lu-cleaner s'en charger. La Corbeille est un élément de la catégorie `system`. La vider est irréversible, donc la sélection intelligente ne la recommande jamais :
 
 ```bash
 lu-cleaner clean -c system          # sélectionnez "Trash (N items)"
@@ -167,7 +167,7 @@ Comparez les chiffres de lu-cleaner à ceux de `df`, pas à ceux du Finder. Il n
 
 Un élément <span class="risk safe">safe</span> est un cache que son outil reconstruit automatiquement. Cela signifie aussi que l'espace est de nouveau occupé dès que l'outil se relance : Xcode reconstruit DerivedData au build suivant, Metro son cache au bundle suivant, Cursor et les autres applications Electron leurs caches au lancement suivant.
 
-C'est normal. Supprimer un cache que vous utilisez tous les jours ne vous apporte qu'un prochain démarrage plus lent. C'est pourquoi la sélection intelligente se concentre sur les éléments inactifs : les éléments <span class="risk moderate">moderate</span> ne sont présélectionnés qu'après `stale_after` (14 jours par défaut) sans utilisation. Pour ne cibler que ce que vous n'avez pas touché depuis un moment :
+C'est normal. Supprimer un cache que vous utilisez tous les jours ne vous apporte qu'un prochain démarrage plus lent. C'est pourquoi la sélection intelligente se concentre sur les éléments inactifs : les éléments <span class="risk moderate">moderate</span> ne sont recommandés qu'après `stale_after` (14 jours par défaut) sans utilisation. Pour ne cibler que ce que vous n'avez pas touché depuis un moment :
 
 ```bash
 lu-cleaner clean --yes --smart --older-than 30d --dry-run

@@ -22,7 +22,7 @@ Per-project folders such as `ios/Pods` and `ios/build` are project artifacts, co
 
 ```bash
 lu-cleaner scan -c xcode,simulators     # what takes space; nothing is touched
-lu-cleaner clean -c xcode,simulators    # picker, recommended items preselected
+lu-cleaner clean -c xcode,simulators    # picker: nothing selected, press a for the recommended items
 lu-cleaner devices                      # simulators and Android emulators only (press a for smart select)
 ```
 
@@ -51,7 +51,7 @@ iOS 18.6 (22G86)                   2.40 GB    2w  <span class="warn">moderate</s
 <span class="warn">! newest iOS symbols — kept for on-device debugging</span>
 </div>
 
-`★` marks what [smart select](/lu-cleaner/concepts/risk-and-smart-select/) picks. Lines starting with `!` are warnings: an item with a warning is never preselected. `info` in the risk column means the item is listed for information and cannot be selected (report-only, or blocked right now, like a booted simulator).
+`★` marks what [smart select](/lu-cleaner/concepts/risk-and-smart-select/) picks. Lines starting with `!` are warnings: an item with a warning is never recommended. `info` in the risk column means the item is listed for information and cannot be selected (report-only, or blocked right now, like a booted simulator).
 
 :::tip[Quit Xcode and shut down simulators first]
 Most items on this page are blocked while Xcode, `xcodebuild` or the Simulator app runs, and booted simulators cannot be selected at all. Quit Xcode and run `xcrun simctl shutdown all` before scanning to get the full picture.
@@ -68,7 +68,7 @@ lu-cleaner lists one item per folder and names it after the workspace recorded i
 - **`MyApp`**: the build cache of an existing workspace. The item note says which one, for example `~/dev/my-app/ios/MyApp.xcworkspace` or `~/.codex/worktrees/a1b2/my-app/ios/MyApp.xcworkspace`.
 - **`MyApp (workspace gone)`**: the workspace no longer exists (removed worktree, deleted clone). Nothing will ever reuse this cache.
 
-Both are <span class="risk safe">safe</span>: the next build recreates everything, at the cost of a full rebuild and re-indexing. Because DerivedData is a pure cache, smart select preselects every folder, **including the project you are building today**. Deselect it in the picker if you want to keep incremental builds, or only target folders you have not built for a while:
+Both are <span class="risk safe">safe</span>: the next build recreates everything, at the cost of a full rebuild and re-indexing. Because DerivedData is a pure cache, smart select recommends every folder, **including the project you are building today**. If you want to keep incremental builds, deselect that project after pressing `a` in the picker, or only target folders you have not built for a while:
 
 ```bash
 lu-cleaner clean --yes -k xcode-derived-data --older-than 14d --dry-run
@@ -83,7 +83,7 @@ A few details:
 - DerivedData items are skipped while Xcode or `xcodebuild` runs.
 
 :::tip[Clean worktrees first]
-Remove finished worktrees before cleaning Xcode data (see [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/)), then rescan: their DerivedData folders now show up as `(workspace gone)` and are preselected.
+Remove finished worktrees before cleaning Xcode data (see [AI agent worktrees](/lu-cleaner/guides/ai-worktrees/)), then rescan: their DerivedData folders now show up as `(workspace gone)` and are recommended.
 :::
 
 ### Archives
@@ -92,7 +92,7 @@ Remove finished worktrees before cleaning Xcode data (see [AI agent worktrees](/
 
 That is why archives get the strictest handling in this category:
 
-- **Risk <span class="risk caution">caution</span>.** Archives are never preselected, and `clean --yes` leaves them out unless you pass `--risk caution`.
+- **Risk <span class="risk caution">caution</span>.** Archives are never recommended, and `clean --yes` leaves them out unless you pass `--risk caution`.
 - **Moved to the Trash, not deleted.** You can still put one back, but the space is only freed once you empty the Trash.
 - **Newest archive of each app flagged.** The most recent archive per bundle identifier carries the warning *latest archive of this app — keep it (or its dSYMs) to symbolicate crashes*.
 
@@ -106,8 +106,8 @@ If your dSYMs are uploaded to App Store Connect, Sentry or Crashlytics, old arch
 
 When you run an app on a physical device, Xcode copies the debug symbols of the device's OS version to `~/Library/Developer/Xcode/iOS DeviceSupport/<version> (<build>)`. That is 2 to 6 GB per OS version, and a new folder appears each time a device you debug on gets an OS update. watchOS, tvOS, visionOS and macOS have their own `… DeviceSupport` folders.
 
-- **The newest version of each platform is kept.** It carries the warning *newest iOS symbols — kept for on-device debugging* and is never preselected.
-- **Older versions** are <span class="risk moderate">moderate</span> and preselected once stale (unused for longer than [`stale_after`](/lu-cleaner/reference/configuration/), 14 days by default).
+- **The newest version of each platform is kept.** It carries the warning *newest iOS symbols — kept for on-device debugging* and is never recommended.
+- **Older versions** are <span class="risk moderate">moderate</span> and recommended once stale (unused for longer than [`stale_after`](/lu-cleaner/reference/configuration/), 14 days by default).
 - **Cost:** the next time a device running that OS version is used for debugging, Xcode copies the symbols again, which takes several minutes.
 
 ### Other Xcode data
@@ -121,8 +121,8 @@ These fixed locations come from the [catalog](/lu-cleaner/reference/catalog/), w
 | Documentation cache | `~/Library/Developer/Xcode/DocumentationCache/*` and `DocumentationIndex/*` | <span class="risk safe">safe</span> | fetched again when the documentation window opens |
 | Export staging | `$TMPDIR/XcodeDistPipeline.*`, `$TMPDIR/*.xcdistributionlogs` | <span class="risk safe">safe</span> | only when older than 24 hours |
 | Component downloads | `~/Library/Developer/DVTDownloads/*` | <span class="risk moderate">moderate</span> | staging area; installed components are not affected |
-| Device crash logs | `~/Library/Developer/Xcode/iOS Device Logs` (and watchOS) | <span class="risk caution">caution</span> | devices purge their own crash logs, so these copies are often the only ones left; never preselected |
-| Metal toolchain | runs `xcodebuild -deleteComponent metalToolchain` | <span class="risk moderate">moderate</span> | only needed to compile `.metal` files; never preselected |
+| Device crash logs | `~/Library/Developer/Xcode/iOS Device Logs` (and watchOS) | <span class="risk caution">caution</span> | devices purge their own crash logs, so these copies are often the only ones left; never recommended |
+| Metal toolchain | runs `xcodebuild -deleteComponent metalToolchain` | <span class="risk moderate">moderate</span> | only needed to compile `.metal` files; never recommended |
 | CocoaPods download cache | `~/Library/Caches/CocoaPods` | <span class="risk safe">safe</span> | same as `pod cache clean --all` |
 | CocoaPods trunk index | `~/.cocoapods/repos/trunk` | <span class="risk moderate">moderate</span> | re-fetched lazily; private spec repos are left alone |
 | Legacy CocoaPods master repo | `~/.cocoapods/repos/master` | <span class="risk moderate">moderate</span> | full git clone of the Specs repo, unused since CocoaPods 1.8 |
@@ -178,7 +178,7 @@ Because this bypasses simctl, the checks are conservative:
 - orphans are only looked for when simctl lists at least one device in that same folder, which proves simctl's answer describes it;
 - a well-formed device of an installed runtime that simctl did not list is never called an orphan;
 - folders modified in the last 24 hours are ignored, since they may be being created;
-- orphans are <span class="risk moderate">moderate</span> and preselected once untouched for 7 days. Leftover app data, if any, is named in the note.
+- orphans are <span class="risk moderate">moderate</span> and recommended once untouched for 7 days. Leftover app data, if any, is named in the note.
 
 ### XCTest recordings
 
@@ -191,7 +191,7 @@ Nothing reads or removes them after the run, and Xcode does not show them. Tens 
 - One <span class="risk safe">safe</span> item per simulator: `XCTest recordings · iPhone 16 Pro`. Only containers that belong to `com.apple.testmanagerd` are considered.
 - Only the recordings are deleted. The `Attachments` folder, the simulator and its apps stay.
 - Partial `*.sb-*` files left by aborted writes are counted in the note.
-- Preselected when the simulator is shut down. While it is booted, the item carries *a UI test may still be recording* and is not preselected. It is skipped while `xcodebuild` runs.
+- Recommended when the simulator is shut down. While it is booted, the item carries *a UI test may still be recording* and is not recommended. It is skipped while `xcodebuild` runs.
 
 The simulator item itself says *Its size includes the XCTest recordings listed separately: clean those first.* In most cases you want to keep the simulator and drop only the recordings. If you select both, the simulator deletion already covers the recordings, and lu-cleaner only runs the simulator deletion.
 
@@ -235,8 +235,8 @@ A simulator runtime is a disk image of several GB managed by macOS in system sto
 | Bundled with Xcode | report only: it goes away with that Xcode |
 | Used by simulators | warning *used by N simulator(s) — deleting it makes them unavailable* |
 | Newest of its platform | warning *newest iOS runtime — needed to run iOS simulators* |
-| Among the `keep_latest` newest runtimes of its platform (only when you raise `keep_latest` above 1) | never preselected |
-| Unused, and a newer runtime of the same platform is installed | preselected |
+| Among the `keep_latest` newest runtimes of its platform (only when you raise `keep_latest` above 1) | never recommended |
+| Unused, and a newer runtime of the same platform is installed | recommended |
 
 Runtimes are <span class="risk moderate">moderate</span>: re-downloading one (around 8 GB) takes a while, from Xcode › Settings › Components or with `xcodebuild -downloadPlatform iOS`. They are skipped while Xcode runs. If you delete a runtime that simulators still use, they become unavailable (and show up as `… (unavailable)` items on the next scan); booted ones are shut down by simctl.
 
@@ -267,7 +267,7 @@ The [safety guard](/lu-cleaner/concepts/safety/) only deletes inside your home f
    lu-cleaner scan -c xcode,simulators --all
    ```
 
-3. Open the picker. Smart select has already preselected the recommended items; open each category with <kbd>enter</kbd>, deselect what you want to keep (the DerivedData of your current project, for example), then press <kbd>d</kbd> to clean.
+3. Open the picker. Nothing is selected yet: press <kbd>a</kbd> to select the recommended items, or pick with <kbd>space</kbd>. Open each category with <kbd>enter</kbd>, deselect what you want to keep (the DerivedData of your current project, for example), then press <kbd>d</kbd> to clean.
 
    ```bash
    lu-cleaner clean -c xcode,simulators
@@ -326,6 +326,6 @@ Catalog entries (`apple-*`) are listed in the [catalog](/lu-cleaner/reference/ca
 <CardGrid>
 	<LinkCard title="React Native projects" href="/lu-cleaner/guides/react-native-projects/" description="ios/Pods, ios/build and the other per-project artifacts." />
 	<LinkCard title="Android SDK, emulators and Gradle" href="/lu-cleaner/guides/android/" description="The same cleanup on the Android side." />
-	<LinkCard title="Risk levels and smart select" href="/lu-cleaner/concepts/risk-and-smart-select/" description="What safe, moderate and caution mean, and what gets preselected." />
+	<LinkCard title="Risk levels and smart select" href="/lu-cleaner/concepts/risk-and-smart-select/" description="What safe, moderate and caution mean, and what gets recommended." />
 	<LinkCard title="lu-cleaner devices" href="/lu-cleaner/reference/commands/devices/" description="Simulators, runtimes, AVDs and system images in one picker." />
 </CardGrid>

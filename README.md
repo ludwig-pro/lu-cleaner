@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="https://ludwig-pro.github.io/lu-cleaner/demos/dashboard.gif" width="900" alt="lu-cleaner dashboard demo: the scan streams in, AI agent worktrees with their status and details, project artifacts added to the smart selection, confirmation, cleaning and the freed-space summary">
+  <img src="https://ludwig-pro.github.io/lu-cleaner/demos/dashboard.gif" width="900" alt="lu-cleaner dashboard demo: the scan streams in and nothing is selected, AI agent worktrees with their status and details, the recommended project artifacts smart-selected with the a key and one more picked by hand with space, confirmation, cleaning and the freed-space summary">
   <br>
   <sub>Recorded on a synthetic home folder (<a href="demo/">demo/</a>), hence sizes in MB. More: <a href="https://ludwig-pro.github.io/lu-cleaner/demos/worktrees.gif">worktrees</a> · <a href="https://ludwig-pro.github.io/lu-cleaner/demos/scan.gif">scan &amp; dry-run</a></sub>
 </p>
@@ -32,13 +32,14 @@ AI coding agents changed what fills a developer's disk. Every Codex, Cursor, Con
 🧹 lu-cleaner  Macintosh HD ███████████████████░ 97% · 16 GB free   ✓ scan done in 39s · 560 items · 238 GB reclaimable
 
   CATEGORY                      SIZE   ITEMS   SELECTED
-▸ 🌳 Worktrees                 45.3 GB      75     8.0 GB
-  📦 Project artifacts         63.2 GB     228    22.5 GB
-  📱 iOS Simulators            70.0 GB      23    29.1 GB
-  🧠 AI tools                  42.2 GB     139    18.4 GB
-  🟨 JS toolchain              33.3 GB      76    18.0 GB
+▸ 🌳 Worktrees                 45.3 GB      75
+  📦 Project artifacts         63.2 GB     228
+  📱 iOS Simulators            70.0 GB      23
+  🧠 AI tools                  42.2 GB     139
+  🟨 JS toolchain              33.3 GB      76
   …
-Selected: 381 items · 106.8 GB · delete        space select · a smart · / filter · d clean · ? help
+Nothing is selected — space picks an item, a picks the recommended ones, d cleans the selection
+nothing selected · delete                      space select · a smart · / filter · d clean · ? help
 ```
 
 ## Features
@@ -48,7 +49,7 @@ Selected: 381 items · 106.8 GB · delete        space select · a smart · / fi
 - **Simulators & emulators** — iOS simulators, runtimes, orphan device folders, hidden XCTest recordings and unified logs; Android AVDs, unused system images, NDKs, Gradle distributions (SDKs on external drives are reported, never touched).
 - **Package managers & node versions** — npm, Yarn v1 and Berry (cache, metadata, store), pnpm, bun, corepack, nvm/fnm/mise/volta node versions (keeps the ones you use), Metro/Jest/Vitest temp caches.
 - **AI tools data** — Claude Code, Claude desktop, Codex, Cursor, ChatGPT, Conductor… old versions, orphaned project data, caches and logs. Credentials, configs, memories and chat databases are protected.
-- **Safe by design** — every path is re-checked right before deletion: protected paths, inode identity since the scan, running apps, open databases, processes working inside, marker files. Dry-run everywhere. Nothing is deleted without your explicit selection.
+- **Safe by design** — every path is re-checked right before deletion: protected paths, inode identity since the scan, running apps, open databases, processes working inside, marker files. Dry-run everywhere. Nothing is preselected: nothing is deleted without your explicit selection.
 - **Fast** — Go, macOS `getattrlistbulk` (≈3× faster than `du`), results streamed into a Bubble Tea TUI.
 - **Scriptable** — `--json` outputs, strict rules for non-interactive `--yes`, exit codes, and LLM-ready docs (`llms.txt`).
 
@@ -67,13 +68,14 @@ git clone https://github.com/ludwig-pro/lu-cleaner && cd lu-cleaner && make inst
 ## Quick start
 
 ```bash
-lu-cleaner                                  # interactive dashboard (recommended items preselected)
-lu-cleaner clean --no-smart                 # same, but nothing preselected: pick everything yourself
+lu-cleaner                                  # interactive dashboard: you pick what to remove, nothing is preselected
+lu-cleaner clean                            # same picker, straight from the command
+lu-cleaner clean --smart                    # picker that starts with the recommended items selected
 lu-cleaner worktrees                        # only git worktrees
 lu-cleaner artifacts                        # npkill-like: node_modules, Pods, builds…
 lu-cleaner devices                          # simulators, runtimes, emulators
 lu-cleaner scan                             # report, no deletion
-lu-cleaner clean --yes --smart --dry-run    # what smart select would clean
+lu-cleaner clean --yes --smart --dry-run    # what the recommended items add up to, nothing deleted
 lu-cleaner doctor                           # why is my disk still full?
 lu-cleaner analyze ~                        # ncdu-like explorer
 ```
@@ -82,7 +84,7 @@ Full documentation: **https://ludwig-pro.github.io/lu-cleaner/**
 
 ## Safety in one paragraph
 
-lu-cleaner never uses `sudo`, never touches system folders, never removes a git repository, your scan roots, credentials or tool configurations, and never follows symlinks. Risky items (user data, dirty worktrees, sessions) are marked *caution*: they are never preselected, never cleaned by `clean --yes` unless you pass `--risk caution`, and need a typed `yes` in the UI. Read the [safety model](https://ludwig-pro.github.io/lu-cleaner/concepts/safety/).
+lu-cleaner never uses `sudo`, never touches system folders, never removes a git repository, your scan roots, credentials or tool configurations, and never follows symlinks. Risky items (user data, dirty worktrees, sessions) are marked *caution*: they are never picked by smart select (the `a` key, `--smart`), never cleaned by `clean --yes` unless you pass `--risk caution`, and need a typed `yes` in the UI. Read the [safety model](https://ludwig-pro.github.io/lu-cleaner/concepts/safety/).
 
 ## Development
 

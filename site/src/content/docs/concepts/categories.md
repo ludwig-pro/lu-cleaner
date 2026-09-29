@@ -101,7 +101,7 @@ Homebrew download cache and old versions (`brew cleanup`), Go build and module c
 
 ## System
 
-The Trash, caches and offline web caches of desktop apps (Slack, Discord, Notion, Figma, Postman…), browser caches and their on-device AI models, app logs and crash reports, app updater downloads, old installers, archives and app builds in `~/Downloads` (<span class="risk caution">caution</span>, never preselected), local iPhone backups (report only), and the macOS facts that explain a full disk: Time Machine local snapshots, swap files and staged macOS updates, all report only. See [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
+The Trash, caches and offline web caches of desktop apps (Slack, Discord, Notion, Figma, Postman…), browser caches and their on-device AI models, app logs and crash reports, app updater downloads, old installers, archives and app builds in `~/Downloads` (<span class="risk caution">caution</span>, never recommended), local iPhone backups (report only), and the macOS facts that explain a full disk: Time Machine local snapshots, swap files and staged macOS updates, all report only. See [Disk space not freed](/lu-cleaner/guides/disk-space-not-freed/).
 
 ## Turning categories off
 
