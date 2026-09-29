@@ -283,6 +283,20 @@ func (s *scanner) yarnGlobalFolders() []string {
 	return uniqDirs(cands...)
 }
 
+// warmYarnBerry measures the Yarn Berry global folders while the project
+// walk that finds the Plug'n'Play projects runs.
+func (s *scanner) warmYarnBerry() {
+	for _, gf := range s.yarnGlobalFolders() {
+		var paths []string
+		for _, sub := range []string{"cache", "metadata", "store", "index"} {
+			if p := filepath.Join(gf, sub); isDirOrLink(p) && s.allowed(p) {
+				paths = append(paths, p)
+			}
+		}
+		s.warm(paths)
+	}
+}
+
 func (s *scanner) yarnBerry() {
 	pnp := s.projects.pnp
 	for _, gf := range s.yarnGlobalFolders() {

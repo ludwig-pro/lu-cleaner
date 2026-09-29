@@ -800,3 +800,36 @@ func TestMultishellNonSymlinkKept(t *testing.T) {
 		}
 	}
 }
+
+// The scanners waiting for the project walk measure beforehand, with the
+// very measurements sized uses afterwards (one walk per path and scan).
+func TestWarmMatchesSized(t *testing.T) {
+	w := newWorld(t)
+	s := &scanner{ctx: context.Background(), env: w.env, p: w.p, emit: func(*core.Item) {}}
+	if dev, ok := s.devOf(w.env.Home); ok {
+		s.homeDev, s.homeDevOK = dev, true
+	}
+	s.warmNodeVersions()
+	s.warmYarnBerry()
+	s.warmExpoGo()
+	warmed := map[sizeKey]bool{}
+	for k := range s.sizes {
+		warmed[k] = true
+	}
+	if len(warmed) == 0 {
+		t.Fatal("nothing warmed")
+	}
+	s.procs = loadProcs(s.ctx, w.env)
+	s.projects = loadProjects(s.ctx, w.env, 0)
+	s.nodeVersions()
+	s.yarnBerry()
+	s.expoGo()
+	for k := range s.sizes {
+		if fi, err := os.Lstat(k.path); err != nil || fi.Mode()&os.ModeSymlink != 0 || strings.Contains(k.path, "/lib/node_modules/") {
+			continue // mise alias links, npm leftovers (not waiting for the project walk)
+		}
+		if !warmed[k] {
+			t.Errorf("%s measured by sized but not warmed", k.path)
+		}
+	}
+}

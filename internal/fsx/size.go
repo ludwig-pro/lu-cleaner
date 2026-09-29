@@ -149,17 +149,25 @@ var ErrNotExist = os.ErrNotExist
 // opt.CrossDevice. The walk stops early (returning partial stats and
 // ctx.Err()) when ctx is cancelled.
 func Size(ctx context.Context, path string, opt *Options) (st Stats, err error) {
-	if traceOn {
-		start := time.Now()
-		defer func() { Trace("walk", path, start, fmt.Sprintf("%d files %s", st.Files, Bytes(st.Bytes))) }()
-	}
 	if c, ok := ctx.Value(cacheKey{}).(*sizeCache); ok && (opt == nil || (opt.Skip == nil && !opt.CrossDevice)) {
 		return c.get(ctx, path)
 	}
 	return size(ctx, path, opt)
 }
 
-func size(ctx context.Context, path string, opt *Options) (Stats, error) {
+// size walks path (the trace and the counters only see real walks, not
+// cache hits).
+func size(ctx context.Context, path string, opt *Options) (res Stats, err error) {
+	if traceOn {
+		start := time.Now()
+		defer func() { Trace("walk", path, start, fmt.Sprintf("%d files %s", res.Files, Bytes(res.Bytes))) }()
+	}
+	defer func() {
+		if res.Files+res.Dirs > 0 { // not a missing or refused root
+			walkCount.Add(1)
+			walkFiles.Add(res.Files)
+		}
+	}()
 	if AppDataProtected(path) {
 		// never touch another app's container without Full Disk Access:
 		// the access would block on a system permission prompt.
@@ -439,8 +447,9 @@ func Within(p, parent string) bool {
 type cacheKey struct{}
 
 type sizeCache struct {
-	mu sync.Mutex
-	m  map[string]*cacheEntry
+	mu    sync.Mutex
+	m     map[string]*cacheEntry
+	store *SizeStore // persistent cache (nil: none)
 }
 
 type cacheEntry struct {
@@ -454,7 +463,33 @@ type cacheEntry struct {
 // a single walk. Use one per scan run so providers measuring the same
 // directory (a worktree's node_modules…) share the work.
 func WithCache(ctx context.Context) context.Context {
-	return context.WithValue(ctx, cacheKey{}, &sizeCache{m: map[string]*cacheEntry{}})
+	return WithSizeStore(ctx, nil)
+}
+
+// WithSizeStore is WithCache backed by a persistent size cache: Size calls
+// without options answer from s when the tree did not change since it was
+// measured, and complete walks are recorded in s. A nil s is WithCache.
+func WithSizeStore(ctx context.Context, s *SizeStore) context.Context {
+	return context.WithValue(ctx, cacheKey{}, &sizeCache{m: map[string]*cacheEntry{}, store: s})
+}
+
+// measure answers from the persistent cache, or walks and records the walk
+// when it is complete.
+func (c *sizeCache) measure(ctx context.Context, path string) (Stats, error) {
+	s := c.store
+	if s == nil || AppDataProtected(path) {
+		return size(ctx, path, nil)
+	}
+	if st, ok := s.lookup(ctx, path); ok {
+		return st, nil
+	}
+	id, idOK := identify(path) // before the walk: a change during it shows next time
+	start := time.Now()
+	st, err := size(ctx, path, nil)
+	if idOK && err == nil && ctx.Err() == nil {
+		s.record(path, id, st, time.Since(start))
+	}
+	return st, err
 }
 
 func (c *sizeCache) get(ctx context.Context, path string) (Stats, error) {
@@ -464,7 +499,7 @@ func (c *sizeCache) get(ctx context.Context, path string) (Stats, error) {
 		e = &cacheEntry{done: make(chan struct{})}
 		c.m[path] = e
 		c.mu.Unlock()
-		e.st, e.err = size(ctx, path, nil)
+		e.st, e.err = c.measure(ctx, path)
 		if ctx.Err() != nil {
 			// partial result: do not keep it
 			c.mu.Lock()

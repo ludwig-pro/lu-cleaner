@@ -26,6 +26,19 @@ const expoMinSDK = 40
 // expoGo emits the Expo Go iOS simulator builds cached by `expo start --ios`
 // (~/.expo/ios-simulator-app-cache). A build superseded by a newer one of the
 // same major (SDK) is safe and recommended; the newest per SDK is moderate.
+// warmExpoGo measures the Expo Go builds while the project walk that finds
+// the Expo SDKs in use runs.
+func (s *scanner) warmExpoGo() {
+	root := s.home(".expo", "ios-simulator-app-cache")
+	var paths []string
+	for _, e := range listDir(root) {
+		if p := filepath.Join(root, e.Name()); e.IsDir() && expoGoName.MatchString(e.Name()) && s.allowed(p) {
+			paths = append(paths, p)
+		}
+	}
+	s.warm(paths)
+}
+
 func (s *scanner) expoGo() {
 	root := s.home(".expo", "ios-simulator-app-cache")
 	type build struct {

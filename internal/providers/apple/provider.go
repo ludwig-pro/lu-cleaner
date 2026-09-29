@@ -304,13 +304,48 @@ func (m measured) apply(it *core.Item) {
 	it.SetReclaim(m.reclaim)
 }
 
+// measureFiles is measure for paths that are mostly big regular files
+// (screen recordings): a file with a single link is sized from lstat alone.
+// fsx.Size also asks APFS how much of a file is shared with clones, which
+// takes seconds for a multi-GB file; nothing clones these recordings.
+func (s *scan) measureFiles(paths ...string) measured {
+	var m measured
+	var rest []string
+	for _, p := range paths {
+		var st unix.Stat_t
+		if unix.Lstat(p, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
+			rest = append(rest, p)
+			continue
+		}
+		m.bytes += st.Blocks * 512
+		m.reclaim += st.Blocks * 512
+		m.files++
+		if t := time.Unix(st.Mtim.Unix()); t.After(m.newest) {
+			m.newest = t
+		}
+	}
+	if len(rest) > 0 {
+		r := s.measure(rest...)
+		m.bytes += r.bytes
+		m.reclaim += r.reclaim
+		m.files += r.files
+		m.newest = maxTime(m.newest, r.newest)
+	}
+	return m
+}
+
 // sizeLater emits it as a placeholder now and measures paths in the
 // background; finish (optional) adjusts the item once measured.
 func (s *scan) sizeLater(it *core.Item, paths []string, finish func(*core.Item, measured)) {
+	s.sizeLaterWith(it, func() measured { return s.measure(paths...) }, finish)
+}
+
+// sizeLaterWith is sizeLater with its own measurement.
+func (s *scan) sizeLaterWith(it *core.Item, measure func() measured, finish func(*core.Item, measured)) {
 	it.Sizing = true
 	s.emit(it.Clone())
 	s.spawn(func() {
-		m := s.measure(paths...)
+		m := measure()
 		if s.ctx.Err() != nil {
 			return
 		}

@@ -138,22 +138,38 @@ func (s *scan) run() error {
 	s.reconcile()
 
 	wts := s.snapshot()
+
+	// 6. sizes, the slowest part, need nothing from git: they are measured
+	// (in discovery order) while the tool state and the git state are read,
+	// and each item gets its size once both its git state and its
+	// measurement are known.
+	join := newSizeJoin(s, wts)
+	sized := make(chan struct{})
+	go func() {
+		defer close(sized)
+		parallel(s.ctx, len(wts), sizeWorkers, func(i int) {
+			if !wts[i].external { // no internal gain: other volumes are never walked
+				join.measured(i, measure(s.ctx, wts[i].path))
+			}
+		})
+	}()
+	defer func() { <-sized }()
+
 	s.tools = loadToolState(s.ctx, s.env, s.home, wts)
 
 	// 4. git state of every worktree, then a Sizing placeholder.
-	items := make([]*core.Item, len(wts))
 	parallel(s.ctx, len(wts), gitWorkers, func(i int) {
 		w := wts[i]
 		s.inspect(w)
 		it := s.item(w)
-		items[i] = it
 		if w.external {
-			s.emit(it) // no internal gain: other volumes are never walked
+			s.emit(it)
 			return
 		}
 		ph := it.Clone()
 		ph.Sizing = true
 		s.emit(ph)
+		join.ready(i, it)
 	})
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
@@ -163,21 +179,53 @@ func (s *scan) run() error {
 	for _, it := range s.pruneItems() {
 		s.emit(it)
 	}
-
-	// 6. sizes (slowest part), biggest trees are not known yet: keep discovery order.
-	parallel(s.ctx, len(wts), sizeWorkers, func(i int) {
-		w, it := wts[i], items[i]
-		if w.external || it == nil {
-			return
-		}
-		m := measure(s.ctx, w.path)
-		if s.ctx.Err() != nil {
-			return
-		}
-		s.applySize(w, it, m)
-		s.emit(it)
-	})
+	<-sized
 	return s.ctx.Err()
+}
+
+// sizeJoin pairs each worktree's item (built from its git state) with its
+// measurement, which run concurrently: whichever comes second applies the
+// size and emits the final item.
+type sizeJoin struct {
+	s     *scan
+	wts   []*worktree
+	mu    sync.Mutex
+	items []*core.Item
+	ms    []*measurement
+}
+
+func newSizeJoin(s *scan, wts []*worktree) *sizeJoin {
+	return &sizeJoin{s: s, wts: wts, items: make([]*core.Item, len(wts)), ms: make([]*measurement, len(wts))}
+}
+
+// ready records the item of worktree i (its placeholder was emitted).
+func (j *sizeJoin) ready(i int, it *core.Item) {
+	j.mu.Lock()
+	j.items[i] = it
+	m := j.ms[i]
+	j.mu.Unlock()
+	if m != nil {
+		j.finish(i, it, *m)
+	}
+}
+
+// measured records the measurement of worktree i.
+func (j *sizeJoin) measured(i int, m measurement) {
+	j.mu.Lock()
+	j.ms[i] = &m
+	it := j.items[i]
+	j.mu.Unlock()
+	if it != nil {
+		j.finish(i, it, m)
+	}
+}
+
+func (j *sizeJoin) finish(i int, it *core.Item, m measurement) {
+	if j.s.ctx.Err() != nil {
+		return // partial measurement
+	}
+	j.s.applySize(j.wts[i], it, m)
+	j.s.emit(it)
 }
 
 // snapshot returns the worktrees found so far, sorted by path.

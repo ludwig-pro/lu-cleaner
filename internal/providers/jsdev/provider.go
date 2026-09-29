@@ -60,37 +60,67 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		s.homeDev, s.homeDevOK = dev, true
 	}
 
-	// Phase 1: shared knowledge (processes, project pins, fnm shell links).
-	var wg sync.WaitGroup
-	for _, f := range []func(){
-		func() { s.procs = loadProcs(ctx, env) },
-		func() { s.projects = loadProjects(ctx, env, p.maxProjectDirs) },
-		s.loadMultishells,
-	} {
-		wg.Add(1)
-		go func(f func()) { defer wg.Done(); f() }(f)
-	}
-	wg.Wait()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
+	// Phase 1: shared knowledge. Processes are read first (every scanner
+	// checks them); the project walk (pins, Plug'n'Play projects, Expo SDKs:
+	// up to 190,000 folders) and the fnm multishell entries (tens of
+	// thousands of symlinks, 7 s to lstat on a cold disk) are read in the
+	// background: only the scanners that need them wait.
+	projects, shells := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(projects)
+		s.projects = loadProjects(ctx, env, p.maxProjectDirs)
+	}()
+	go func() {
+		defer close(shells)
+		s.loadMultishells()
+	}()
+	defer func() { <-projects; <-shells }()
+	s.procs = loadProcs(ctx, env)
 
-	// Phase 2: independent scanners, bounded.
-	tasks := []func(){
-		s.nodeVersions, s.multishells, s.npx, s.pnpm, s.yarnBerry,
-		s.expoGo, s.playwright, s.tmpSignatures, s.watchman,
+	// Phase 2: independent scanners, bounded. Those that wait for the
+	// project walk first measure what they will show (warm).
+	tasks := []struct {
+		run   func()
+		warm  func()
+		needs []chan struct{}
+	}{
+		{s.nodeVersions, s.warmNodeVersions, []chan struct{}{projects, shells}},
+		{s.multishells, nil, []chan struct{}{shells}},
+		{s.npx, nil, nil},
+		{s.pnpm, nil, nil},
+		{s.yarnBerry, s.warmYarnBerry, []chan struct{}{projects}},
+		{s.expoGo, s.warmExpoGo, []chan struct{}{projects}},
+		{s.playwright, nil, nil},
+		{s.tmpSignatures, nil, nil},
+		{s.watchman, nil, nil},
 	}
 	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
 	for _, t := range tasks {
 		if ctx.Err() != nil {
 			break
 		}
 		wg.Add(1)
-		sem <- struct{}{}
-		go func(t func()) {
-			defer func() { <-sem; wg.Done() }()
-			t()
-		}(t)
+		go func() {
+			defer wg.Done()
+			if t.warm != nil {
+				t.warm()
+			}
+			for _, c := range t.needs {
+				select {
+				case <-c:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			t.run()
+		}()
 	}
 	wg.Wait()
 	return ctx.Err()

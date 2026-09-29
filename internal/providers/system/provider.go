@@ -38,16 +38,17 @@ import (
 // The unexported fields are seams for tests; New leaves them nil and Scan
 // fills sane defaults.
 type Provider struct {
-	appDirs    []string                                     // where .app bundles are looked up
-	running    func(names ...string) []string               // sysx.Running
-	devOf      func(path string) (uint64, error)            // st_dev of a path (following symlinks)
-	getenv     func(string) string                          // os.Getenv
-	swapUsage  func() (total, used int64, ok bool)          // sysctl vm.swapusage
-	updatesDir string                                       // /Library/Updates ("-" disables)
-	mdfind     bool                                         // ask Spotlight for app bundles
-	only       map[string]bool                              // test seam: run only these parts (nil = all)
-	lastUsed   func(path string) (time.Time, bool)          // Finder "last opened" date of a file
-	added      func(path string, st *unix.Stat_t) time.Time // when a file arrived in its folder
+	appDirs       []string                                     // where .app bundles are looked up
+	running       func(names ...string) []string               // sysx.Running
+	devOf         func(path string) (uint64, error)            // st_dev of a path (following symlinks)
+	getenv        func(string) string                          // os.Getenv
+	swapUsage     func() (total, used int64, ok bool)          // sysctl vm.swapusage
+	updatesDir    string                                       // /Library/Updates ("-" disables)
+	brewSystemEnv string                                       // /etc/homebrew/brew.env ("-" disables)
+	mdfind        bool                                         // ask Spotlight for app bundles
+	only          map[string]bool                              // test seam: run only these parts (nil = all)
+	lastUsed      func(path string) (time.Time, bool)          // Finder "last opened" date of a file
+	added         func(path string, st *unix.Stat_t) time.Time // when a file arrived in its folder
 }
 
 // New returns the provider.
@@ -77,6 +78,9 @@ func (p *Provider) defaults(env *core.Env) {
 	}
 	if p.updatesDir == "" {
 		p.updatesDir = "/Library/Updates"
+	}
+	if p.brewSystemEnv == "" {
+		p.brewSystemEnv = "/etc/homebrew/brew.env"
 	}
 	if p.lastUsed == nil {
 		p.lastUsed = finderLastUsed

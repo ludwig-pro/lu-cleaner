@@ -315,22 +315,7 @@ func (s *scanner) classify(byRoot map[string][]*nodeInstall) {
 // nodeVersions emits one item per installed Node version (nvm, fnm, mise,
 // asdf, volta) and the npm -g leftovers found in them.
 func (s *scanner) nodeVersions() {
-	byRoot := map[string][]*nodeInstall{}
-	var all []*nodeInstall
-	roots := s.managerRoots()
-	for _, manager := range []string{"nvm", "fnm", "mise", "asdf", "volta"} {
-		for _, root := range roots[manager] {
-			list := loadInstalls(manager, root)
-			var keep []*nodeInstall
-			for _, n := range list {
-				if s.allowed(n.dir) {
-					keep = append(keep, n)
-				}
-			}
-			byRoot[root] = keep
-			all = append(all, keep...)
-		}
-	}
+	byRoot, all := s.nodeInstalls()
 	s.classify(byRoot)
 	s.markLatest(all)
 
@@ -362,6 +347,38 @@ func (s *scanner) nodeVersions() {
 		s.emitNodeVersion(n, elsewhere, managersOf[n.ver], lastUse)
 	}
 	s.npmLeftovers(all)
+}
+
+// nodeInstalls lists the Node versions of every manager, by manager root.
+func (s *scanner) nodeInstalls() (byRoot map[string][]*nodeInstall, all []*nodeInstall) {
+	byRoot = map[string][]*nodeInstall{}
+	roots := s.managerRoots()
+	for _, manager := range []string{"nvm", "fnm", "mise", "asdf", "volta"} {
+		for _, root := range roots[manager] {
+			list := loadInstalls(manager, root)
+			var keep []*nodeInstall
+			for _, n := range list {
+				if s.allowed(n.dir) {
+					keep = append(keep, n)
+				}
+			}
+			byRoot[root] = keep
+			all = append(all, keep...)
+		}
+	}
+	return byRoot, all
+}
+
+// warmNodeVersions measures the Node versions while the project walk that
+// tells which ones are pinned runs.
+func (s *scanner) warmNodeVersions() {
+	_, all := s.nodeInstalls()
+	var dirs []string
+	for _, n := range all {
+		dirs = append(dirs, n.dir)
+	}
+	sort.Strings(dirs)
+	s.warm(dirs)
 }
 
 // keepLatest is config keep_latest (env.KeepLatest), at least 1.

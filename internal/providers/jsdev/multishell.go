@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
@@ -72,29 +73,59 @@ func (s *scanner) loadMultishells() {
 		}
 		names, _ := f.Readdirnames(-1)
 		f.Close()
+		// One lstat (+ readlink) per entry, in parallel: a folder that
+		// collected tens of thousands of entries takes seconds to stat on a
+		// cold disk otherwise.
+		read := make([]*multishellEntry, len(names))
+		var wg sync.WaitGroup
+		workers := min(multishellWorkers, len(names))
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := w; i < len(names); i += workers {
+					if s.ctx.Err() != nil {
+						return
+					}
+					read[i] = readMultishellEntry(dir, names[i])
+				}
+			}()
+		}
+		wg.Wait()
 		md := &multishellDir{dir: dir}
-		for _, name := range names {
-			m := multishellName.FindStringSubmatch(name)
-			if m == nil {
-				continue
+		for _, e := range read {
+			if e != nil {
+				md.entries = append(md.entries, *e)
 			}
-			p := filepath.Join(dir, name)
-			fi, err := os.Lstat(p)
-			if err != nil {
-				continue
-			}
-			e := multishellEntry{name: name, path: p, mtime: fi.ModTime(), size: fi.Size()}
-			e.pid, _ = strconv.Atoi(m[1])
-			if ms, err := strconv.ParseInt(m[2], 10, 64); err == nil && ms > 0 {
-				e.created = time.UnixMilli(ms)
-			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				e.target, _ = os.Readlink(p)
-			}
-			md.entries = append(md.entries, e)
 		}
 		s.shells = append(s.shells, md)
 	}
+}
+
+// multishellWorkers bounds the concurrent lstat calls of loadMultishells.
+const multishellWorkers = 8
+
+// readMultishellEntry reads one entry (nil when it is not a multishell entry
+// or vanished).
+func readMultishellEntry(dir, name string) *multishellEntry {
+	m := multishellName.FindStringSubmatch(name)
+	if m == nil {
+		return nil
+	}
+	p := filepath.Join(dir, name)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return nil
+	}
+	e := &multishellEntry{name: name, path: p, mtime: fi.ModTime(), size: fi.Size()}
+	e.pid, _ = strconv.Atoi(m[1])
+	if ms, err := strconv.ParseInt(m[2], 10, 64); err == nil && ms > 0 {
+		e.created = time.UnixMilli(ms)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		e.target, _ = os.Readlink(p)
+	}
+	return e
 }
 
 // fnmLastUse maps an fnm node-versions/<v> directory (real path) to the

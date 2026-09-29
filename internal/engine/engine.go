@@ -4,6 +4,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -25,8 +26,15 @@ type Event struct {
 // Run starts every provider in its own goroutine and streams events on the
 // returned channel. The channel is closed once all providers are done.
 // A panicking provider is reported as an error instead of crashing the app.
+//
+// Sizes: providers measuring the same directory share one walk, and trees
+// that did not change since a previous run are answered by the persistent
+// size cache (fsx.SizeStore, validated with the FSEvents history; LU_NO_CACHE=1
+// disables it). The cache is saved before the channel is closed.
 func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan Event {
-	ctx = fsx.WithCache(ctx) // providers measuring the same directory share one walk
+	trees0, files0 := fsx.Walked()
+	store := fsx.OpenSizeStore(ctx)
+	ctx = fsx.WithSizeStore(ctx, store)
 	ch := make(chan Event, 256)
 	var wg sync.WaitGroup
 	for _, p := range providers {
@@ -63,7 +71,15 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 			}
 		}(p)
 	}
-	go func() { wg.Wait(); close(ch) }()
+	go func() {
+		wg.Wait()
+		store.Close() // prints its own summary with LU_TRACE
+		if store == nil && fsx.Tracing() {
+			trees, files := fsx.Walked()
+			fmt.Fprintf(os.Stderr, "[trace] cache disabled; walked %d trees, %d files\n", trees-trees0, files-files0)
+		}
+		close(ch)
+	}()
 	return ch
 }
 

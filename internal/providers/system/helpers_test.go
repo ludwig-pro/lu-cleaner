@@ -26,10 +26,11 @@ type fakeRunner struct {
 	bins  map[string]bool
 	calls []string
 	dirs  map[string]string // command -> working directory of its last call
+	paths map[string]string // LookPath answers (default /usr/local/bin/<name>)
 }
 
 func newFakeRunner(bins ...string) *fakeRunner {
-	f := &fakeRunner{out: map[string]string{}, fail: map[string]bool{}, block: map[string]bool{}, bins: map[string]bool{}, dirs: map[string]string{}}
+	f := &fakeRunner{out: map[string]string{}, fail: map[string]bool{}, block: map[string]bool{}, bins: map[string]bool{}, dirs: map[string]string{}, paths: map[string]string{}}
 	for _, b := range bins {
 		f.bins[b] = true
 	}
@@ -60,6 +61,9 @@ func (f *fakeRunner) Output(ctx context.Context, dir, name string, args ...strin
 
 func (f *fakeRunner) LookPath(name string) (string, error) {
 	if f.bins[name] {
+		if p := f.paths[name]; p != "" {
+			return p, nil
+		}
 		return "/usr/local/bin/" + name, nil
 	}
 	return "", exec.ErrNotFound
@@ -90,14 +94,15 @@ func newFixture(t *testing.T, parts ...string) *fixture {
 		only[p] = true
 	}
 	f.p = &Provider{
-		appDirs:    []string{filepath.Join(home, "Applications")},
-		running:    func(...string) []string { return nil },
-		getenv:     func(string) string { return "" },
-		swapUsage:  func() (int64, int64, bool) { return 0, 0, false },
-		updatesDir: "-",
-		only:       only,
-		lastUsed:   func(string) (time.Time, bool) { return time.Time{}, false },
-		added:      func(string, *unix.Stat_t) time.Time { return time.Time{} },
+		appDirs:       []string{filepath.Join(home, "Applications")},
+		running:       func(...string) []string { return nil },
+		getenv:        func(string) string { return "" },
+		swapUsage:     func() (int64, int64, bool) { return 0, 0, false },
+		updatesDir:    "-",
+		brewSystemEnv: "-",
+		only:          only,
+		lastUsed:      func(string) (time.Time, bool) { return time.Time{}, false },
+		added:         func(string, *unix.Stat_t) time.Time { return time.Time{} },
 	}
 	f.env = &core.Env{
 		Home:      home,

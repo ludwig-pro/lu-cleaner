@@ -9,7 +9,16 @@ builds:
   - id: lu-cleaner
     main: ./cmd/lu-cleaner
     binary: lu-cleaner
-    env: [CGO_ENABLED=0]
+    # cgo: the persistent size cache replays the FSEvents history
+    # (internal/fsevents, CoreServices). Both architectures build on the
+    # arm64 macOS runner with the Xcode clang: for darwin cgo builds the go
+    # command passes `-arch x86_64` / `-arch arm64` to it itself. Without
+    # MACOSX_DEPLOYMENT_TARGET the external link would require the runner's
+    # macOS version; 12.0 is Go's minimum.
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - MACOSX_DEPLOYMENT_TARGET=12.0
     goos: [darwin]
     goarch: [arm64, amd64]
     ldflags:

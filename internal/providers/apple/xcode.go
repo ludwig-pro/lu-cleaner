@@ -1,7 +1,6 @@
 package apple
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -201,44 +200,57 @@ func appBundleOf(devDir string) string {
 
 // ---------------------------------------------------------------- Metal toolchain
 
+// metalToolchainAssets is where the MobileAsset daemon stores the Metal
+// toolchain (one <hash>.asset folder per downloaded build).
+const metalToolchainAssets = "/System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain"
+
 // metalToolchain offers `xcodebuild -deleteComponent metalToolchain`: the
 // Metal shader compiler Xcode 26+ downloads separately (~700 MB), only needed
-// to compile .metal files.
+// to compile .metal files. The asset is found on disk (<hash>.asset holding
+// AssetData, build number in its Info.plist): `xcodebuild -showComponent`
+// takes 10-15 s.
 func (s *scan) metalToolchain() {
 	if !s.env.Has("xcodebuild") {
 		return
 	}
-	out, err := s.output(20*time.Second, "xcodebuild", "-showComponent", "metalToolchain", "-json")
+	base := s.sys(metalToolchainAssets)
+	ents, err := os.ReadDir(base)
 	if err != nil {
 		return
 	}
-	var c struct {
-		AssetPath    string `json:"assetPath"`
-		BuildVersion string `json:"buildVersion"`
-		Status       string `json:"status"`
+	var dirs, builds []string
+	for _, e := range ents {
+		dir := filepath.Join(base, e.Name())
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".asset") || !fsx.IsDir(filepath.Join(dir, "AssetData")) {
+			continue // not downloaded (or being downloaded)
+		}
+		dirs = append(dirs, dir)
+		info, _ := readPlistDict(filepath.Join(dir, "Info.plist"))
+		if b := pString(pDict(info, "MobileAssetProperties"), "Build"); b != "" {
+			builds = append(builds, b)
+		}
 	}
-	if json.Unmarshal(jsonPayload(out), &c) != nil || c.Status != "installed" || c.AssetPath == "" {
+	if len(dirs) == 0 {
 		return
-	}
-	dir := filepath.Clean(c.AssetPath)
-	if filepath.Base(dir) == "AssetData" {
-		dir = filepath.Dir(dir)
 	}
 	it := s.item("xcode-metal-toolchain", core.CatXcode, "metalToolchain")
 	it.Name = "Metal toolchain"
-	if c.BuildVersion != "" {
-		it.Name += " (" + c.BuildVersion + ")"
+	if len(builds) > 0 {
+		it.Name += " (" + strings.Join(builds, ", ") + ")"
 	}
-	it.Location = dir
+	it.Location = dirs[0]
+	if len(dirs) > 1 {
+		it.Location = base
+	}
 	it.Method = core.MethodCommand
 	it.Command = []string{"xcodebuild", "-deleteComponent", "metalToolchain"}
 	it.Risk = core.RiskModerate
 	it.ProcessGuard = []string{"Xcode", "xcodebuild"}
 	it.Note = "Metal shader compiler downloaded by Xcode; only needed to build targets with .metal files. Re-download with `xcodebuild -downloadComponent MetalToolchain`."
-	setMeta(it, "build", c.BuildVersion)
-	if !s.applyPlace(it, dir) {
+	setMeta(it, "build", strings.Join(builds, ", "))
+	if !s.applyPlace(it, dirs[0]) {
 		return
 	}
 	s.guardWarn(it)
-	s.sizeLater(it, []string{dir}, nil)
+	s.sizeLater(it, dirs, nil)
 }
