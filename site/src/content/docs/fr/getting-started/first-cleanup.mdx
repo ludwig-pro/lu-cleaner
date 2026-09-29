@@ -9,6 +9,14 @@ import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 Le tableau de bord interactif est la façon la plus sûre de nettoyer : vous voyez chaque élément avant que quoi que ce soit ne soit supprimé, les éléments recommandés sont présélectionnés pour vous, et chaque suppression est revérifiée au dernier moment. Cette visite suit un nettoyage complet, écran par écran. Les projets, chemins et tailles sont donnés à titre d'illustration.
 
+<figure style={{ margin: '1rem 0 1.5rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration d'un nettoyage complet dans le tableau de bord de lu-cleaner : vue d'ensemble des catégories, détails d'une worktree, artefacts de projets, sélection, fenêtre de confirmation et récapitulatif." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
+		<img src="/lu-cleaner/demos/dashboard.gif" alt="Démonstration d'un nettoyage complet dans le tableau de bord de lu-cleaner : vue d'ensemble des catégories, détails d'une worktree, artefacts de projets, sélection, fenêtre de confirmation et récapitulatif." width="1200" height="720" />
+	</video>
+	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}>Toute la visite en moins de 40 secondes, sur un dossier personnel de démonstration (données fictives, d'où les petites tailles).</figcaption>
+</figure>
+
 ## Lancer le tableau de bord
 
 ```bash
@@ -200,6 +208,14 @@ Si la sélection contient au moins un élément <span class="risk caution">cauti
 Tapez `yes` puis appuyez sur `enter`, ou sur `esc` pour annuler. Les éléments caution peuvent contenir quelque chose que vous ne pourrez pas régénérer : du travail non commité dans un worktree, des sessions d'agent, des données d'application. Une confirmation en une touche se déclenche facilement par réflexe ; taper un mot vous oblige à vous arrêter et à relire la liste.
 
 La confirmation n'est pas la dernière vérification. Un worktree verrouillé, qui contient des modifications non commitées ou des fichiers non suivis, qui porte des commits sur aucune branche ou qui contient un autre dépôt est encore refusé au moment de la suppression, sauf si vous avez lancé lu-cleaner avec `--force`. Voir [Modèle de sécurité](/lu-cleaner/fr/concepts/safety/).
+
+<figure style={{ margin: '1rem 0 1.5rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/worktrees.jpg" width="1200" height="720" aria-label="Démonstration de lu-cleaner worktrees : la liste montre chaque worktree avec son outil, sa branche et son état ; une worktree Codex mergée et une worktree Cursor avec des modifications non commitées sont sélectionnées ; après avoir tapé yes, la première est retirée et la seconde refusée." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+		<source src="/lu-cleaner/demos/worktrees.mp4" type="video/mp4" />
+		<img src="/lu-cleaner/demos/worktrees.gif" alt="Démonstration de lu-cleaner worktrees : la liste montre chaque worktree avec son outil, sa branche et son état ; une worktree Codex mergée et une worktree Cursor avec des modifications non commitées sont sélectionnées ; après avoir tapé yes, la première est retirée et la seconde refusée." width="1200" height="720" />
+	</video>
+	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner worktrees</code> : la worktree Codex mergée est retirée (sa branche est conservée) ; la worktree Cursor passe la confirmation tapée mais git la refuse au moment de la suppression, car elle contient des modifications non commitées.</figcaption>
+</figure>
 
 ## 6. Suivre la progression
 

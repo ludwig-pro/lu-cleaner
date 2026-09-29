@@ -16,6 +16,12 @@
   <a href="https://ludwig-pro.github.io/lu-cleaner/llms.txt">llms.txt</a>
 </p>
 
+<p align="center">
+  <img src="https://ludwig-pro.github.io/lu-cleaner/demos/dashboard.gif" width="900" alt="lu-cleaner dashboard demo: the scan streams in, AI agent worktrees with their status and details, project artifacts added to the smart selection, confirmation, cleaning and the freed-space summary">
+  <br>
+  <sub>Recorded on a synthetic home folder (<a href="demo/">demo/</a>), hence sizes in MB. More: <a href="https://ludwig-pro.github.io/lu-cleaner/demos/worktrees.gif">worktrees</a> · <a href="https://ludwig-pro.github.io/lu-cleaner/demos/scan.gif">scan &amp; dry-run</a></sub>
+</p>
+
 ---
 
 AI coding agents changed what fills a developer's disk. Every Codex, Cursor, Conductor or Claude Code task can spawn a **git worktree** with its own `node_modules`, `ios/Pods` and Android build; simulators silently collect gigabytes of UI-test recordings; package managers keep several global caches and node versions. General-purpose cleaners (CleanMyMac, mole, npkill…) either don't know these places or deliberately stay away from them.

@@ -9,6 +9,14 @@ import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 The interactive dashboard is the safest way to clean: you see every item before anything is removed, the recommended ones are preselected for you, and every deletion is re-checked at the last moment. This walkthrough follows one complete cleanup, screen by screen. The projects, paths and sizes are illustrative.
 
+<figure style={{ margin: '1rem 0 1.5rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Demo of a complete cleanup in the lu-cleaner dashboard: category overview, worktree details, project artifacts, selection, confirmation dialog and summary." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
+		<img src="/lu-cleaner/demos/dashboard.gif" alt="Demo of a complete cleanup in the lu-cleaner dashboard: category overview, worktree details, project artifacts, selection, confirmation dialog and summary." width="1200" height="720" />
+	</video>
+	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}>The whole walkthrough in under 40 seconds, on a demo home folder (synthetic data, hence the small sizes).</figcaption>
+</figure>
+
 ## Start the dashboard
 
 ```bash
@@ -200,6 +208,14 @@ If the selection holds at least one <span class="risk caution">caution</span> it
 Type `yes` and press `enter`, or `esc` to cancel. Caution items may hold something you cannot regenerate: uncommitted work in a worktree, agent sessions, application data. A one-key confirmation is easy to hit by reflex; typing a word makes you stop and read the list.
 
 Confirming is not the last check. A worktree that is locked, has uncommitted or untracked changes, has commits on no branch or contains another repository is still refused at removal time unless you started lu-cleaner with `--force`. See [Safety](/lu-cleaner/concepts/safety/).
+
+<figure style={{ margin: '1rem 0 1.5rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/worktrees.jpg" width="1200" height="720" aria-label="Demo of lu-cleaner worktrees: the list shows each worktree with its tool, branch and status; a merged Codex worktree and a Cursor worktree with uncommitted changes are selected; after typing yes, the merged one is removed and the dirty one is refused." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+		<source src="/lu-cleaner/demos/worktrees.mp4" type="video/mp4" />
+		<img src="/lu-cleaner/demos/worktrees.gif" alt="Demo of lu-cleaner worktrees: the list shows each worktree with its tool, branch and status; a merged Codex worktree and a Cursor worktree with uncommitted changes are selected; after typing yes, the merged one is removed and the dirty one is refused." width="1200" height="720" />
+	</video>
+	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner worktrees</code>: the merged Codex worktree is removed (its branch is kept); the Cursor worktree passes the typed confirmation but git refuses it at removal time, because it holds uncommitted changes.</figcaption>
+</figure>
 
 ## 6. Follow the progress
 
