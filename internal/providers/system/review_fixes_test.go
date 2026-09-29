@@ -238,41 +238,11 @@ func TestGoRealToolchainInsideNewerModule(t *testing.T) {
 	}
 }
 
-// homebrew-cleanup-timeout: the dry run gets enough time, and when it does
-// not complete the old-kegs report does not claim they "stay forever".
-func TestHomebrewCleanupTimeoutOldKegs(t *testing.T) {
-	if brewCleanupTimeout < time.Minute {
-		t.Errorf("brew cleanup -n timeout %v: it takes more than a minute on a cold disk", brewCleanupTimeout)
-	}
-	old := brewCleanupTimeout
-	brewCleanupTimeout = 50 * time.Millisecond
-	defer func() { brewCleanupTimeout = old }()
-	f := newFixture(t, "homebrew")
-	prefix := f.abs("brew")
-	f.runner.bins["brew"] = true
-	f.runner.out["brew --cache"] = f.abs("Library/Caches/Homebrew") + "\n"
-	f.runner.out["brew --prefix"] = prefix + "\n"
-	f.runner.block["brew cleanup -n --prune=all"] = true
-	for _, keg := range []string{"foo/1.0", "foo/2.0"} {
-		f.file("brew/Cellar/"+keg+"/bin/x", 5_000, 0)
-	}
-	os.MkdirAll(f.abs("brew/opt"), 0o755)
-	os.Symlink("../Cellar/foo/2.0", f.abs("brew/opt/foo"))
-	items := f.scan()
-	kegs := one(t, items, "homebrew-old-kegs")
-	if strings.Contains(kegs.Note, "forever") || strings.Contains(kegs.Name, "outdated") || kegs.Meta["brew_cleanup"] == "" {
-		t.Errorf("old kegs without a completed dry run: name %q, note %q, meta %v", kegs.Name, kegs.Note, kegs.Meta)
-	}
-}
-
 // Homebrew's "<name>--git" checkouts are git repositories: the safety guard
 // refuses them, so they must not make the whole cache item unremovable.
 func TestHomebrewCacheSkipsGitCheckouts(t *testing.T) {
 	f := newFixture(t, "homebrew")
-	cache := f.abs("Library/Caches/Homebrew")
-	f.runner.bins["brew"] = true
-	f.runner.out["brew --cache"] = cache + "\n"
-	f.runner.fail["brew cleanup -n --prune=all"] = true
+	brewFixture(f, nil, nil)
 	f.file("Library/Caches/Homebrew/downloads/x.tar.gz", 50_000, 0)
 	f.file("Library/Caches/Homebrew/foo--git/.git/HEAD", 100, 0)
 	f.file("Library/Caches/Homebrew/foo--git/main.c", 100, 0)

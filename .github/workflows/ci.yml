@@ -24,6 +24,10 @@ jobs:
         run: go test ./...
       - name: build
         run: make build && ./bin/lu-cleaner --version
+      - name: build without cgo (FSEvents stub)
+        run: make nocgo
+      - name: universal build (cgo, both architectures)
+        run: make universal && lipo -info bin/lu-cleaner-universal && ./bin/lu-cleaner-universal --version
       - name: generated docs are up to date
         run: |
           make docs

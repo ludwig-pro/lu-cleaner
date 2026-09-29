@@ -1,8 +1,10 @@
 package system
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -314,75 +316,281 @@ func TestColimaAndVMs(t *testing.T) {
 
 // ------------------------------------------------------------------ Homebrew
 
-func TestParseBrewCleanup(t *testing.T) {
-	out := `Would remove: /Users/x/Library/Caches/Homebrew/downloads/abc--foo-1.0.bottle.tar.gz (10MB)
-Would remove: /opt/homebrew/Cellar/foo/1.0 (1,234 files, 2.5MB)
-Would remove: /opt/homebrew/Caskroom/bar (old) (3 files, 1KB)
-Warning: Skipping baz: most recent version 3.0 not installed
-==> This operation would free approximately 12.5MB of disk space.
-`
-	c := parseBrewCleanup(out, "/Users/x/Library/Caches/Homebrew")
-	if c.other != 2_621_440+1024 || c.kegs != 2 || len(c.removed) != 3 {
-		t.Errorf("cleanup = %+v", c)
+// brewFixture installs a fake Homebrew in the fixture home: the brew
+// executable (what LookPath answers) in <home>/brew/bin, a Cellar with the
+// given kegs (installed from homebrew/core), and opt links (formula ->
+// version).
+func brewFixture(f *fixture, kegs []string, opt map[string]string) string {
+	f.t.Helper()
+	prefix := f.abs("brew")
+	f.write("brew/bin/brew", "#!/bin/sh\n")
+	f.runner.bins["brew"] = true
+	f.runner.paths["brew"] = filepath.Join(prefix, "bin", "brew")
+	for _, k := range kegs {
+		f.file("brew/Cellar/"+k+"/bin/x", 5_000, 0)
+		f.write("brew/Cellar/"+k+"/INSTALL_RECEIPT.json", `{"source":{"tap":"homebrew/core","spec":"stable"}}`)
 	}
-	if !c.removed["/opt/homebrew/Caskroom/bar (old)"] || !c.removed["/opt/homebrew/Cellar/foo/1.0"] {
-		t.Errorf("paths = %v", c.removed)
+	os.MkdirAll(f.abs("brew/opt"), 0o755)
+	for formula, version := range opt {
+		os.Symlink("../Cellar/"+formula+"/"+version, f.abs("brew/opt/"+formula))
 	}
-	if len(c.skipped) != 1 || c.skipped[0] != "baz" {
-		t.Errorf("skipped = %v", c.skipped)
+	return prefix
+}
+
+// brewAPI writes the API cache brew keeps in ~/Library/Caches/Homebrew
+// (internal/packages.<tag>.jws.json.payload + its byte-offset index) with
+// the given formula entries (name -> JSON object).
+func brewAPI(f *fixture, formulae map[string]string) {
+	f.t.Helper()
+	var names []string
+	for n := range formulae {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	payload := `{"metadata":{"bottle_tag":"arm64_tahoe"},"formulae":{`
+	index := map[string][2]int{}
+	for i, n := range names {
+		if i > 0 {
+			payload += ","
+		}
+		payload += `"` + n + `":`
+		index[n] = [2]int{len(payload), len(formulae[n])}
+		payload += formulae[n]
+	}
+	payload += `},"casks":{}}`
+	header := `{"protected":"x","signature":"y"}` + "\n"
+	dir := "Library/Caches/Homebrew/api/internal/packages.arm64_tahoe.jws.json.payload"
+	f.write(dir, header+payload)
+	b, _ := json.Marshal(map[string]any{"version": 1, "payload_bytesize": len(payload), "formulae": index, "casks": map[string]any{}})
+	f.write(dir+".index", string(b))
+}
+
+// noBrewRun fails when the scan spawned brew: every brew command costs
+// from 0.3 s to more than a minute.
+func noBrewRun(t *testing.T, f *fixture) {
+	t.Helper()
+	for _, c := range f.runner.calls {
+		if c == "brew" || strings.HasPrefix(c, "brew ") {
+			t.Errorf("the scan ran %q", c)
+		}
 	}
 }
 
 func TestHomebrew(t *testing.T) {
 	f := newFixture(t, "homebrew")
-	cache := f.abs("Library/Caches/Homebrew")
-	prefix := f.abs("brew")
-	f.runner.bins["brew"] = true
-	f.runner.out["brew --cache"] = cache + "\n"
-	f.runner.out["brew --prefix"] = prefix + "\n"
-	f.runner.out["brew cleanup -n --prune=all"] = "Would remove: " + cache + "/downloads/x.tar.gz (10MB)\n" +
-		"Would remove: " + prefix + "/Cellar/foo/1.0 (12 files, 2.5MB)\n" +
-		"Warning: Skipping bar: most recent version 3.0 not installed\n"
+	prefix := brewFixture(f,
+		[]string{"foo/1.0", "foo/2.0", "bar/1.0", "bar/2.0", "baz/1.0", "baz/2.0", "solo/1.0",
+			"png/1.6.42", "png/1.6.100", "png/1.6.9", "ssl/3.6.4", "ssl/3.6.4_1", "qux/1.9", "qux/1.10",
+			"old/1.0", "old/2.0", "tapped/1.0", "tapped/2.0"},
+		map[string]string{"foo": "2.0", "bar": "2.0", "solo": "1.0", "png": "1.6.100", "ssl": "3.6.4_1", "qux": "1.9",
+			"old": "2.0", "tapped": "2.0"})
+	// baz has no opt link: unknown which one is used, never counted
+	os.MkdirAll(f.abs("brew/var/homebrew/pinned"), 0o755)
+	os.Symlink("../../../Cellar/bar/2.0", f.abs("brew/var/homebrew/pinned/bar"))
+	f.write("brew/Cellar/tapped/2.0/INSTALL_RECEIPT.json", `{"source":{"tap":"someone/tap"}}`)
+	brewAPI(f, map[string]string{
+		"foo": `{"stable_version":"2.0"}`, "bar": `{"stable_version":"2.0"}`, "png": `{"stable_version":"1.6.100"}`,
+		"ssl": `{"stable_version":"3.6.4","revision":1}`, "qux": `{"stable_version":"1.10"}`,
+		"old": `{"stable_version":"3.0"}`, // newest not installed: brew cleanup skips it
+	})
 	f.file("Library/Caches/Homebrew/downloads/x.tar.gz", 50_000, 0)
-	f.file("Library/Caches/Homebrew/api/formula.jws.json", 50_000, 0)
 	f.file("Library/Caches/Homebrew/bootsnap/x", 10_000, 0)
-	for _, keg := range []string{"foo/1.0", "foo/2.0", "bar/1.0", "bar/2.0", "baz/1.0", "baz/2.0", "solo/1.0"} {
-		f.file("brew/Cellar/"+keg+"/bin/x", 5_000, 0)
-	}
-	os.MkdirAll(f.abs("brew/opt"), 0o755)
-	os.Symlink("../Cellar/foo/2.0", f.abs("brew/opt/foo"))
-	os.Symlink("../Cellar/bar/2.0", f.abs("brew/opt/bar"))
-	os.Symlink("../Cellar/solo/1.0", f.abs("brew/opt/solo"))
-	// baz has no opt link: unknown which one is used, never reported
+	f.file("Library/Logs/Homebrew/foo/01.make", 40_000, 0)
+	f.write("brew/Library/Homebrew/vendor/portable-ruby-version", "4.0.7\n")
+	f.file("brew/Library/Homebrew/vendor/portable-ruby/4.0.7/bin/ruby", 30_000, 0)
+	f.file("brew/Library/Homebrew/vendor/portable-ruby/3.4.8/bin/ruby", 30_000, 0)
+	os.Symlink("4.0.7", f.abs("brew/Library/Homebrew/vendor/portable-ruby/current"))
 	items := f.scan()
+	noBrewRun(t, f)
 
 	c := one(t, items, "homebrew-cache")
 	if !sameStrings(bases(c), []string{"downloads"}) || c.Risk != core.RiskSafe {
 		t.Errorf("cache must keep api/ and bootsnap/: %v", c.Targets())
 	}
 	cl := one(t, items, "homebrew-cleanup")
-	if cl.Size != 2_621_440 || strings.Join(cl.Command, " ") != "brew cleanup --prune=all" || !cl.Recommended || cl.Method != core.MethodCommand {
+	// foo/1.0, png/1.6.42, png/1.6.9, ssl/3.6.4 (4 kegs x 5 KB), logs (40 KB), portable Ruby 3.4.8 (30 KB)
+	if cl.Size < 4*5_000+40_000+30_000 || cl.Size > 400_000 || strings.Join(cl.Command, " ") != "brew cleanup --prune=all" ||
+		!cl.Recommended || cl.Method != core.MethodCommand || cl.Risk != core.RiskModerate || cl.Location != prefix {
 		t.Errorf("cleanup = %+v", cl)
 	}
+	if cl.Meta["kegs"] != "4" || cl.Meta["formulae"] != "foo, png ×2, ssl" || cl.Meta["unknown_kegs"] != "tapped" {
+		t.Errorf("cleanup meta = %v", cl.Meta)
+	}
 	old := one(t, items, "homebrew-old-kegs")
-	if old.CanClean() || len(old.Paths) != 1 || !strings.HasSuffix(old.Paths[0], "/Cellar/bar/1.0") {
-		t.Errorf("old kegs = %+v", old.Paths)
+	if old.CanClean() || !sameStrings(bases(old), []string{"1.0", "1.0", "1.0", "1.10"}) || old.Meta["formulae"] != "bar, old, qux, tapped" ||
+		!strings.Contains(old.Meta["kept_because"], "pinned") || !strings.Contains(old.Meta["kept_because"], "newest version") ||
+		!strings.Contains(old.Meta["kept_because"], "outdated") || !strings.Contains(old.Meta["brew_cleanup"], "tapped") ||
+		!strings.Contains(old.Name, "not linked") {
+		t.Errorf("old kegs = %s %v %v", old.Name, old.Paths, old.Meta)
 	}
 }
 
-func TestHomebrewCleanupTimeout(t *testing.T) {
-	old := brewCleanupTimeout
-	brewCleanupTimeout = 50 * time.Millisecond
-	defer func() { brewCleanupTimeout = old }()
+// Outdated formulae only: `brew cleanup` frees nothing of their old
+// versions, which stay until `brew upgrade` (the report says so).
+func TestHomebrewOutdatedOnly(t *testing.T) {
 	f := newFixture(t, "homebrew")
-	f.runner.bins["brew"] = true
-	f.runner.out["brew --cache"] = f.abs("Library/Caches/Homebrew") + "\n"
-	f.runner.out["brew --prefix"] = f.abs("brew") + "\n"
-	f.runner.block["brew cleanup -n --prune=all"] = true
+	brewFixture(f, []string{"foo/1.0", "foo/2.0"}, map[string]string{"foo": "2.0"})
+	brewAPI(f, map[string]string{"foo": `{"stable_version":"2.1"}`})
 	items := f.scan()
+	if n := len(byKind(items, "homebrew-cleanup")); n != 0 {
+		t.Errorf("brew cleanup frees nothing here: %d items", n)
+	}
+	old := one(t, items, "homebrew-old-kegs")
+	if !strings.Contains(old.Name, "outdated") || !strings.Contains(old.Note, "brew upgrade") || old.Meta["brew_cleanup"] != "" {
+		t.Errorf("outdated: %s / %s / %v", old.Name, old.Note, old.Meta)
+	}
+}
+
+// Without the API cache nothing tells which old versions brew cleanup
+// removes: offered with an unknown size, never preselected, and the old
+// versions are reported without claiming they stay forever.
+func TestHomebrewWithoutAPICache(t *testing.T) {
+	f := newFixture(t, "homebrew")
+	brewFixture(f, []string{"foo/1.0", "foo/2.0"}, map[string]string{"foo": "2.0"})
+	items := f.scan()
+	noBrewRun(t, f)
 	cl := one(t, items, "homebrew-cleanup")
-	if cl.Size != 0 || cl.Recommended || cl.Meta["size"] == "" || core.Recommend(cl, f.now, 14*day) {
+	if cl.Size != 0 || cl.Recommended || !strings.HasPrefix(cl.Meta["size"], "unknown") || core.Recommend(cl, f.now, 14*day) {
 		t.Errorf("unknown-size cleanup must be offered but never preselected: %+v", cl)
+	}
+	kegs := one(t, items, "homebrew-old-kegs")
+	if strings.Contains(kegs.Note, "forever") || strings.Contains(kegs.Name, "outdated") || kegs.Meta["brew_cleanup"] == "" {
+		t.Errorf("old kegs without API data: name %q, note %q, meta %v", kegs.Name, kegs.Note, kegs.Meta)
+	}
+}
+
+// A stale or foreign index never maps a formula to another entry.
+func TestBrewAPIVersionsChecksOffsets(t *testing.T) {
+	f := newFixture(t, "homebrew")
+	brewAPI(f, map[string]string{"aa": `{"stable_version":"1.0"}`, "bb": `{"stable_version":"2.0","revision":3}`})
+	cache := f.abs("Library/Caches/Homebrew")
+	got := brewAPIVersions(cache, []string{"aa", "bb", "zz"})
+	if got["aa"] != "1.0" || got["bb"] != "2.0_3" || len(got) != 2 {
+		t.Fatalf("versions = %v", got)
+	}
+	idx := f.abs("Library/Caches/Homebrew/api/internal/packages.arm64_tahoe.jws.json.payload.index")
+	b, _ := os.ReadFile(idx)
+	var m map[string]any
+	json.Unmarshal(b, &m)
+	fm := m["formulae"].(map[string]any)
+	fm["aa"], fm["bb"] = fm["bb"], fm["aa"] // swapped: keys no longer match
+	b, _ = json.Marshal(m)
+	os.WriteFile(idx, b, 0o644)
+	if got := brewAPIVersions(cache, []string{"aa", "bb"}); len(got) != 0 {
+		t.Errorf("swapped index trusted: %v", got)
+	}
+	m["version"] = 2
+	b, _ = json.Marshal(m)
+	os.WriteFile(idx, b, 0o644)
+	if got := brewAPIVersions(cache, []string{"aa"}); len(got) != 0 {
+		t.Errorf("unknown index format trusted: %v", got)
+	}
+}
+
+// Nothing to estimate: no cleanup item, no brew process either.
+func TestHomebrewNothingOld(t *testing.T) {
+	f := newFixture(t, "homebrew")
+	brewFixture(f, []string{"foo/2.0", "bar/1.0"}, map[string]string{"foo": "2.0", "bar": "1.0"})
+	f.dir("Library/Logs/Homebrew", 0) // empty
+	items := f.scan()
+	noBrewRun(t, f)
+	if len(byKind(items, "homebrew-cleanup")) != 0 || len(byKind(items, "homebrew-old-kegs")) != 0 {
+		t.Errorf("nothing old: got %v", items)
+	}
+}
+
+// HOMEBREW_NO_CLEANUP_FORMULAE and .keepme kegs are kept by brew cleanup.
+func TestHomebrewKeptKegs(t *testing.T) {
+	f := newFixture(t, "homebrew")
+	brewFixture(f, []string{"foo/1.0", "foo/2.0", "bar/1.0", "bar/2.0"}, map[string]string{"foo": "2.0", "bar": "2.0"})
+	brewAPI(f, map[string]string{"foo": `{"stable_version":"2.0"}`, "bar": `{"stable_version":"2.0"}`})
+	f.write("brew/Cellar/bar/1.0/.keepme", "")
+	f.p.getenv = func(k string) string {
+		if k == "HOMEBREW_NO_CLEANUP_FORMULAE" {
+			return "foo,other"
+		}
+		return ""
+	}
+	items := f.scan()
+	if len(byKind(items, "homebrew-cleanup")) != 0 {
+		t.Errorf("every old keg is kept: no cleanup item expected")
+	}
+	old := one(t, items, "homebrew-old-kegs")
+	if len(old.Paths) != 2 || !strings.Contains(old.Meta["kept_because"], "HOMEBREW_NO_CLEANUP_FORMULAE") ||
+		!strings.Contains(old.Meta["kept_because"], ".keepme") || !strings.Contains(old.Name, "kept by brew cleanup") {
+		t.Errorf("kept kegs = %s %v %v", old.Name, old.Paths, old.Meta)
+	}
+}
+
+// Intel layout: /usr/local/bin/brew -> ../Homebrew/bin/brew, Cellar in the
+// prefix; HOMEBREW_CACHE from the environment, overridden by brew.env.
+func TestBrewLayout(t *testing.T) {
+	f := newFixture(t, "homebrew")
+	f.write("usr/local/Homebrew/bin/brew", "#!/bin/sh\n")
+	os.MkdirAll(f.abs("usr/local/bin"), 0o755)
+	os.Symlink("../Homebrew/bin/brew", f.abs("usr/local/bin/brew"))
+	f.dir("usr/local/Cellar", 0)
+	f.runner.bins["brew"] = true
+	f.runner.paths["brew"] = f.abs("usr/local/bin/brew")
+	env := map[string]string{"HOMEBREW_CACHE": f.abs("envcache"), "HOMEBREW_LOGS": "relative/ignored"}
+	f.p.getenv = func(k string) string { return env[k] }
+	s := &scan{p: f.p, env: f.env}
+	l, ok := s.brewLayout()
+	if !ok || l.prefix != f.abs("usr/local") || l.repository != f.abs("usr/local/Homebrew") || l.cellar != f.abs("usr/local/Cellar") {
+		t.Fatalf("layout = %+v", l)
+	}
+	if l.cache != f.abs("envcache") || l.logs != f.abs("Library/Logs/Homebrew") {
+		t.Errorf("cache %s logs %s", l.cache, l.logs)
+	}
+	// user brew.env wins over the environment and the prefix file
+	f.write("usr/local/etc/homebrew/brew.env", "HOMEBREW_CACHE="+f.abs("prefixcache")+"\n")
+	f.write(".homebrew/brew.env", "# comment\n  HOMEBREW_CACHE="+f.abs("usercache")+"  \nHOMEBREW_NO_CLEANUP_FORMULAE=a,b\n")
+	if l, _ = s.brewLayout(); l.cache != f.abs("usercache") || !l.noCleanup["a"] || !l.noCleanup["b"] {
+		t.Errorf("user brew.env: %+v", l)
+	}
+	// ...unless the system file takes priority
+	f.p.brewSystemEnv = f.write("etc/brew.env", "HOMEBREW_SYSTEM_ENV_TAKES_PRIORITY=1\nHOMEBREW_CACHE="+f.abs("syscache")+"\n")
+	if l, _ = s.brewLayout(); l.cache != f.abs("syscache") {
+		t.Errorf("system brew.env with priority: %s", l.cache)
+	}
+	// XDG_CONFIG_HOME moves the user file
+	env["XDG_CONFIG_HOME"] = f.abs("xdg")
+	f.p.brewSystemEnv = "-"
+	f.write("xdg/homebrew/brew.env", "HOMEBREW_CACHE="+f.abs("xdgcache")+"\n")
+	if l, _ = s.brewLayout(); l.cache != f.abs("xdgcache") {
+		t.Errorf("XDG brew.env: %s", l.cache)
+	}
+	// no brew on PATH
+	delete(f.runner.bins, "brew")
+	if _, ok := s.brewLayout(); ok {
+		t.Error("brew is not installed")
+	}
+}
+
+func TestBrewVersionLess(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"1.6.42", "1.6.100", true},
+		{"1.6.100", "1.6.42", false},
+		{"3.1.9", "3.1.12", true},
+		{"2.14.1_1", "2.14.1_2", true},
+		{"3.6.4", "3.6.4_1", true},
+		{"3.6.4_1", "3.6.4", false},
+		{"2026-08-13", "2026-09-25", true},
+		{"1.0", "1.0", false},
+		{"1.0", "1.0.1", true},
+		{"20260817.0", "20240116.2", false},
+		{"1.0beta", "1.0.1", true},
+		{"1.0beta", "1.0", true},
+		{"1.0", "1.0beta", false},
+		{"1.0rc1", "1.0rc2", true},
+		{"1.0", "1.0.0.1", true},
+	} {
+		if got := brewVersionLess(c.a, c.b); got != c.want {
+			t.Errorf("brewVersionLess(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }
 

@@ -433,6 +433,22 @@ func (ss *simScan) deviceItem(dv simDev, recordings bool) {
 	if !ss.applyPlace(it, dv.dir) {
 		return
 	}
+	ss.sizeDevice(it, dv)
+}
+
+// sizeDevice emits a device item with the size simctl reports
+// (dataPathSize + logPathSize, computed by CoreSimulator): walking a device
+// folder costs up to 25 s for a 30 GB simulator, and the items inside it
+// (recordings, logs, caches) are measured on their own. Without that
+// figure (older Xcode), the folder is walked.
+func (ss *simScan) sizeDevice(it *core.Item, dv simDev) {
+	if dv.DataPathSize > 0 {
+		it.Sizing = false
+		it.Size = dv.DataPathSize + max(dv.LogPathSize, 0)
+		setMeta(it, "size", "reported by simctl (dataPathSize + logPathSize)")
+		ss.emit(it)
+		return
+	}
 	ss.sizeLater(it, []string{dv.dir}, nil)
 }
 
@@ -506,7 +522,7 @@ func (ss *simScan) unavailableItem(dv simDev, recordings bool) {
 	if !ss.applyPlace(it, dv.dir) {
 		return
 	}
-	ss.sizeLater(it, []string{dv.dir}, nil)
+	ss.sizeDevice(it, dv)
 }
 
 // mayComeBack explains why an unavailable simulator may become usable again
@@ -755,7 +771,8 @@ func (ss *simScan) attachments(dv simDev) (found bool) {
 		found = true
 		ss.guardWarn(it)
 		it.LastUsed = childrenNewest(att)
-		ss.sizeLater(it, paths, func(it *core.Item, m measured) { it.LastUsed = maxTime(it.LastUsed, m.newest) })
+		ss.sizeLaterWith(it, func() measured { return ss.measureFiles(paths...) },
+			func(it *core.Item, m measured) { it.LastUsed = maxTime(it.LastUsed, m.newest) })
 	}
 	return found
 }

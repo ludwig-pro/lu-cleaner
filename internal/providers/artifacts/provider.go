@@ -44,6 +44,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/sizes"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -52,6 +53,9 @@ const (
 	walkWorkers = 16 // concurrent directory reads while walking
 	gitWorkers  = 6  // concurrent git work tree inspections
 	sizeWorkers = 6  // concurrent artifact size walks (fsx parallelises each walk too)
+	// prefetchWorkers: concurrent size walks started during the walk and git
+	// phases (see scan.prefetch).
+	prefetchWorkers = 6
 
 	defaultMaxDepth = 8
 	// idleForRecommend: safe outputs of projects idle for longer are forced
@@ -209,6 +213,10 @@ type scan struct {
 	// worktrees are the linked worktrees registered in the repositories
 	// found (folded paths): no candidate may swallow one.
 	worktrees []string
+	// prefetch measures the unambiguous candidates (node_modules, Pods...)
+	// as soon as the walk finds them, while the git phase runs: sizeAll then
+	// reads them from the run's size cache.
+	prefetch *sizes.Prefetcher
 }
 
 // Scan walks every root, verifies candidates with git, then sizes them.
@@ -221,7 +229,10 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	if len(s.roots) == 0 {
 		return nil
 	}
-	// 1. walk (placeholders of unambiguous artifacts stream out right away).
+	// 1. walk (placeholders of unambiguous artifacts stream out right away,
+	// and their measurement starts).
+	s.prefetch = sizes.NewPrefetcher(ctx, prefetchWorkers)
+	defer s.prefetch.Close()
 	var wg sync.WaitGroup
 	for _, r := range s.roots {
 		wg.Add(1)
@@ -249,10 +260,12 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	s.worktrees = s.linkedWorktrees()
 	// 3. decisions, placeholders of the verified generic artifacts, groups.
 	items := s.decideAll()
-	// 4. sizes.
+	// 4. sizes, while 5. the rest of the heavy unknown ignored folders
+	// (known artifacts and nested checkouts excluded) is walked.
+	ignored := make(chan []ignSized, 1)
+	go func() { ignored <- s.measureIgnored() }()
 	s.sizeAll(items)
-	// 5. heavy unknown ignored folders.
-	s.sizeIgnored()
+	s.emitIgnored(<-ignored)
 	return ctx.Err()
 }
 
@@ -405,6 +418,10 @@ func (s *scan) addCand(c *cand) {
 		ph.Sizing = true
 		c.placeholder = true
 		s.emit(ph)
+		if s.prefetch != nil {
+			// Measured like sizeAll does (no probe for these rules).
+			s.prefetch.Add(c.path)
+		}
 	}
 }
 
@@ -694,13 +711,25 @@ func (s *scan) sizeAll(jobs []*sizeJob) {
 	})
 }
 
-// sizeIgnored measures the heavy unknown ignored folders: the residual (known
-// artifacts and nested checkouts excluded) decides whether they are shown.
-func (s *scan) sizeIgnored() {
+// ignSized is a heavy unknown ignored folder with the size of its rest.
+type ignSized struct {
+	d         *ignDir
+	st        fsx.Stats
+	nested    []*cand
+	gits      []*gitRoot
+	nestedGit string
+}
+
+// measureIgnored measures the heavy unknown ignored folders without the
+// known artifacts and checkouts inside them: that rest decides whether they
+// are shown. It only needs the decisions (accepted candidates), so it runs
+// while sizeAll measures the artifacts.
+func (s *scan) measureIgnored() []ignSized {
 	s.mu.Lock()
 	dirs := append([]*ignDir(nil), s.ignDirs...)
 	s.mu.Unlock()
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].path < dirs[j].path })
+	out := make([]*ignSized, len(dirs))
 	parallel(s.ctx, len(dirs), sizeWorkers, func(i int) {
 		d := dirs[i]
 		s.mu.Lock()
@@ -721,14 +750,29 @@ func (s *scan) sizeIgnored() {
 		// linked worktrees / submodules of repositories it never met.
 		probe := newCheckoutProbe(d.path, nil, func(p string) bool { return skip[p] })
 		st, err := fsx.Size(s.ctx, d.path, &fsx.Options{Skip: probe.skip})
-		if err != nil && s.ctx.Err() != nil {
+		if (err != nil && s.ctx.Err() != nil) || st.Bytes < ignoredMin {
 			return
 		}
-		if st.Bytes < ignoredMin {
-			return
-		}
-		s.emit(s.ignoredItem(d, st, nested, gits, probe.found()))
+		out[i] = &ignSized{d: d, st: st, nested: nested, gits: gits, nestedGit: probe.found()}
 	})
+	var res []ignSized
+	for _, r := range out {
+		if r != nil {
+			res = append(res, *r)
+		}
+	}
+	return res
+}
+
+// emitIgnored emits the heavy unknown ignored folders once the artifacts
+// inside them are measured (sizeAll done): their size is added.
+func (s *scan) emitIgnored(res []ignSized) {
+	for _, r := range res {
+		if s.ctx.Err() != nil {
+			return
+		}
+		s.emit(s.ignoredItem(r.d, r.st, r.nested, r.gits, r.nestedGit))
+	}
 }
 
 // checkoutProbe watches a size walk for checkouts below its root: folders

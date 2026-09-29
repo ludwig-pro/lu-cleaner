@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
@@ -32,6 +33,84 @@ type scanner struct {
 	procs    *procSnapshot
 	projects *projectInfo
 	shells   []*multishellDir
+
+	// sizes memoizes measurements within the scan (see measure), so the
+	// scanners that wait for the project walk can measure beforehand.
+	sizesMu sync.Mutex
+	sizes   map[sizeKey]*sizeEntry
+}
+
+type sizeKey struct {
+	path     string
+	external bool // measured across devices
+}
+
+type sizeEntry struct {
+	once sync.Once
+	st   fsx.Stats
+}
+
+// measure sizes p once per scan (concurrent callers wait for the first
+// walk). Without CrossDevice it goes through the run's size cache, like
+// before: other providers and later runs may answer it.
+func (s *scanner) measure(p string, external bool) fsx.Stats {
+	k := sizeKey{p, external}
+	s.sizesMu.Lock()
+	if s.sizes == nil {
+		s.sizes = map[sizeKey]*sizeEntry{}
+	}
+	e := s.sizes[k]
+	if e == nil {
+		e = &sizeEntry{}
+		s.sizes[k] = e
+	}
+	s.sizesMu.Unlock()
+	e.once.Do(func() {
+		e.st, _ = fsx.Size(s.ctx, p, &fsx.Options{CrossDevice: external})
+	})
+	return e.st
+}
+
+// warmWorkers bounds the concurrent walks of one warm call: a single walk
+// gets little of the shared walker pool while every scanner walks.
+const warmWorkers = 3
+
+// warm measures paths the way sized will (see measure), before the item
+// can be built.
+func (s *scanner) warm(paths []string) {
+	next := make(chan string)
+	var wg sync.WaitGroup
+	for range min(warmWorkers, len(paths)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range next {
+				s.warmOne(p)
+			}
+		}()
+	}
+	for _, p := range paths {
+		if s.ctx.Err() != nil {
+			break
+		}
+		next <- p
+	}
+	close(next)
+	wg.Wait()
+}
+
+func (s *scanner) warmOne(p string) {
+	target, external, ok := s.locate(p)
+	if !ok {
+		return
+	}
+	if external {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			s.measure(real, true)
+		}
+		return
+	}
+	s.measure(target, false)
 }
 
 func (s *scanner) logf(format string, args ...any) {
@@ -184,7 +263,7 @@ func (s *scanner) sized(it *core.Item, paths []string, useNewest bool) *core.Ite
 	var bytes, reclaim, files int64
 	var newest time.Time
 	for _, p := range measure {
-		st, _ := fsx.Size(s.ctx, p, &fsx.Options{CrossDevice: external})
+		st := s.measure(p, external)
 		bytes += st.Bytes
 		reclaim += st.Reclaim
 		files += st.Files

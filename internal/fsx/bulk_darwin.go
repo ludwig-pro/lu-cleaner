@@ -84,12 +84,14 @@ var privateAttrs = attrList{
 	forkAttr:    attrCmnExtPrivateSize,
 }
 
-// shareAttrs fetches every clone attribute of one file (see shareOf).
+// shareAttrs fetches the cheap clone attributes of one file (see shareOf);
+// its private size is fetched apart, only when needed (privateAttrs): on a
+// big fragmented file (a VM image, a database) it takes seconds.
 var shareAttrs = attrList{
 	bitmapCount: attrBitMapCount,
 	commonAttr:  attrCmnReturnedAttrs,
 	fileAttr:    attrFileAllocSize,
-	forkAttr:    attrCmnExtPrivateSize | bulkAttrsExt.forkAttr,
+	forkAttr:    bulkAttrsExt.forkAttr,
 }
 
 // useCloneAttrs requests the clone attributes; LU_NO_CLONES=1 disables them
@@ -245,23 +247,34 @@ func privateAt(dirfd int, name string) (int64, bool) {
 
 // shareOf returns the clone information of one regular file (not following
 // a final symlink) through getattrlist(2); the zero value when unavailable.
+// Like a walk, it fetches the private size only when needsPrivate says so.
 func shareOf(path string) fileShare {
 	p, err := unix.BytePtrFromString(path)
 	if err != nil {
 		return fileShare{}
 	}
-	var buf [128]byte
-	_, _, errno := syscall.Syscall6(unix.SYS_GETATTRLIST, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&shareAttrs)),
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), fsoptNoFollow|fsoptAttrCmnExtended, 0)
-	if errno != 0 {
-		return fileShare{}
-	}
 	var e bulkEntry
-	if !decodeOne(buf[:], &e) {
+	if !getattrOne(p, &shareAttrs, &e) {
 		return fileShare{}
 	}
 	e.objType = vREG
+	if e.needsPrivate() {
+		privateFetches.Add(1)
+		var pe bulkEntry
+		if getattrOne(p, &privateAttrs, &pe) && pe.hasPrivate {
+			e.private, e.hasPrivate = pe.private, true
+		}
+	}
 	return e.share()
+}
+
+// getattrOne runs getattrlist(2) on path (not following a final symlink)
+// and decodes the result into e.
+func getattrOne(path *byte, attrs *attrList, e *bulkEntry) bool {
+	var buf [128]byte
+	_, _, errno := syscall.Syscall6(unix.SYS_GETATTRLIST, uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(attrs)),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), fsoptNoFollow|fsoptAttrCmnExtended, 0)
+	return errno == 0 && decodeOne(buf[:], e)
 }
 
 // decodeOne decodes a getattrlist(2) result (a single record).

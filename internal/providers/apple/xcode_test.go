@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -315,12 +316,12 @@ func TestXcodeAppsAndMetal(t *testing.T) {
 	os.Symlink(active, filepath.Join(f.sys, "Applications", "Xcode.app"))                         // alias of the active one
 	f.runner.out["xcode-select -p"] = active + "/Contents/Developer\n"
 
-	asset := f.file(filepath.Join(f.sys, "System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/abc.asset/AssetData/metal"), 300_000, ago(day))
-	f.runner.out["xcodebuild -showComponent metalToolchain -json"] = `{
-  "assetPath" : "` + filepath.Dir(asset) + `",
-  "buildVersion" : "17F109",
-  "status" : "installed"
-}`
+	assets := filepath.Join(f.sys, "System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain")
+	f.file(filepath.Join(assets, "abc.asset/AssetData/metal"), 300_000, ago(day))
+	f.plist(filepath.Join(assets, "abc.asset/Info.plist"), `<key>CFBundleIdentifier</key><string>com.apple.MobileAsset.MetalToolchain</string>
+<key>MobileAssetProperties</key><dict><key>Build</key><string>17F109</string></dict>`)
+	f.file(filepath.Join(assets, "def.asset/Info.plist"), 100, ago(day)) // not downloaded: no AssetData
+	f.file(filepath.Join(assets, "com_apple_MobileAsset_MetalToolchain.xml"), 2_000, ago(day))
 	r := f.scan()
 	x := r.one(t, "xcode-app")
 	if x.Path != old || x.Name != "Xcode 26.4.1 (17E202)" || x.Method != core.MethodReport || x.CanClean() {
@@ -328,8 +329,14 @@ func TestXcodeAppsAndMetal(t *testing.T) {
 	}
 	m := r.one(t, "xcode-metal-toolchain")
 	if m.Location != filepath.Join(f.sys, "System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/abc.asset") ||
-		!reflect.DeepEqual(m.Command, []string{"xcodebuild", "-deleteComponent", "metalToolchain"}) || m.Risk != core.RiskModerate || m.Size < 300_000 {
+		!reflect.DeepEqual(m.Command, []string{"xcodebuild", "-deleteComponent", "metalToolchain"}) || m.Risk != core.RiskModerate || m.Size < 300_000 ||
+		m.Name != "Metal toolchain (17F109)" || m.Meta["build"] != "17F109" {
 		t.Errorf("metal toolchain: %+v", m)
+	}
+	for _, c := range f.runner.calls {
+		if strings.HasPrefix(c, "xcodebuild") {
+			t.Errorf("the scan ran %q (10-15 s)", c)
+		}
 	}
 
 	// Command Line Tools selected: nobody knows which Xcode is in use → nothing reported.
@@ -390,5 +397,50 @@ func TestScanHonoursCancellation(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Scan did not stop after cancellation")
+	}
+}
+
+// Two downloaded Metal toolchain builds: one item measuring both, located at
+// their folder; no asset (or no xcodebuild): nothing.
+func TestMetalToolchainAssets(t *testing.T) {
+	f := newFixture(t, "xcodebuild")
+	assets := filepath.Join(f.sys, "System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain")
+	for i, b := range []string{"17E100", "17F109"} {
+		dir := filepath.Join(assets, "a"+strconv.Itoa(i)+".asset")
+		f.file(filepath.Join(dir, "AssetData/metal"), 200_000, ago(day))
+		f.plist(filepath.Join(dir, "Info.plist"), `<key>MobileAssetProperties</key><dict><key>Build</key><string>`+b+`</string></dict>`)
+	}
+	m := f.scan().one(t, "xcode-metal-toolchain")
+	if m.Location != assets || m.Name != "Metal toolchain (17E100, 17F109)" || m.Size < 400_000 || m.Method != core.MethodCommand {
+		t.Errorf("two builds: %+v", m)
+	}
+	delete(f.runner.bins, "xcodebuild")
+	if items := f.scan().byKind("xcode-metal-toolchain"); len(items) != 0 {
+		t.Errorf("without xcodebuild nothing can delete it: %v", names(items))
+	}
+	f.runner.bins["xcodebuild"] = true
+	os.RemoveAll(assets)
+	if items := f.scan().byKind("xcode-metal-toolchain"); len(items) != 0 {
+		t.Errorf("no asset: %v", names(items))
+	}
+}
+
+// Recordings are sized from lstat (fsx.Size's clone query takes seconds on a
+// multi-GB file); hard-linked files and folders still go through fsx.
+func TestMeasureFiles(t *testing.T) {
+	f := newFixture(t)
+	s := newScan(t.Context(), f.prov, f.env, func(*core.Item) {})
+	a := f.file("rec/a.mp4", 300_000, ago(3*day))
+	b := f.file("rec/b.mp4", 100_000, ago(day))
+	d := f.file("rec/dir/c", 50_000, ago(2*day))
+	l := f.file("rec/linked", 70_000, ago(2*day))
+	os.Link(l, f.p("elsewhere"))
+	m := s.measureFiles(a, b, filepath.Dir(d), l)
+	whole := s.measure(a, b, filepath.Dir(d), l)
+	if m.bytes != whole.bytes || m.files != whole.files || !m.newest.Equal(whole.newest) {
+		t.Errorf("measureFiles = %+v, fsx = %+v", m, whole)
+	}
+	if m.reclaim != whole.reclaim { // the hard link is shared: fsx excludes it from both
+		t.Errorf("reclaim %d, want %d", m.reclaim, whole.reclaim)
 	}
 }

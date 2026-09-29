@@ -66,7 +66,10 @@ func (ExecRunner) Output(ctx context.Context, dir, name string, args ...string) 
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
 	killGroupOnCancel(cmd)
-	return cmd.Output()
+	start := time.Now()
+	out, err := cmd.Output()
+	fsx.Trace("cmd", name+" "+strings.Join(args, " "), start, dir)
+	return out, err
 }
 
 // killGroupOnCancel runs cmd in its own process group and, when its context

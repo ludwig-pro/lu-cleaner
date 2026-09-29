@@ -21,20 +21,13 @@ hero:
 
 import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
-<div class="terminal">
-<span class="acc">🧹 lu-cleaner</span>  <span class="dim">Macintosh HD</span> <span class="bad">███████████████████░ 97%</span> <span class="dim">· 16 GB free</span>   <span class="ok">✓</span><span class="dim"> scan done in 39s · 560 items ·</span> 238 GB <span class="dim">reclaimable</span>
-
-  <span class="dim">CATEGORY                      SIZE   ITEMS   SELECTED</span>
-<span class="acc">▸</span> 🌳 Worktrees                 45.3 GB      75     8.0 GB  <span class="dim">Codex · Cursor · Conductor · Claude</span>
-  📦 Project artifacts         63.2 GB     228    22.5 GB  <span class="dim">node_modules · Pods · builds</span>
-  📱 iOS Simulators            70.0 GB      23    29.1 GB  <span class="dim">dont 25 Go d'enregistrements XCTest</span>
-  🧠 AI tools                  42.2 GB     139    18.4 GB
-  🟨 JS toolchain              33.3 GB      76    18.0 GB  <span class="dim">Yarn Berry · jest · npm · pnpm</span>
-  🧩 IDEs                       6.7 GB      21     6.0 GB
-  🔨 Xcode · 🤖 Android · 🐳 Containers · 🧰 Toolchains · 💻 System …
-
-<span class="dim">Selected:</span> 381 items · <span class="ok">106.8 GB</span>  <span class="dim">·</span> <span class="cy">delete</span>   <span class="dim">space select · a smart · / filter · d clean · ? help</span>
-</div>
+<figure style={{ margin: '0 0 1.5rem' }}>
+	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, un artefact de projet est ajouté à la sélection intelligente, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
+		<img src="/lu-cleaner/demos/dashboard.gif" alt="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, un artefact de projet est ajouté à la sélection intelligente, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." width="1200" height="720" />
+	</video>
+	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner</code> sur un dossier personnel de démonstration : analyse, worktrees d'agents IA, artefacts de projets, confirmation, récapitulatif. Les données sont fictives, d'où des tailles en Mo ; sur une vraie machine, comptez en Go.</figcaption>
+</figure>
 
 ## Pourquoi un nouveau nettoyeur ?
 
@@ -85,6 +78,7 @@ lu-cleaner les connaît — et sait lesquels peuvent être supprimés sans risqu
 		lu-cleaner clean --yes --smart --dry-run   # le plan, rien n'est supprimé
 		lu-cleaner clean --yes --smart             # nettoie les éléments recommandés
 		```
+		<img src="/lu-cleaner/demos/scan.gif" alt="Démonstration de lu-cleaner scan --summary puis de lu-cleaner clean --yes --smart --dry-run, qui affiche le plan sans rien supprimer." loading="lazy" width="1200" height="720" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }} />
 	</TabItem>
 </Tabs>
 

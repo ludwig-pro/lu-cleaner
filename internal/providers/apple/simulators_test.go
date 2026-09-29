@@ -45,10 +45,11 @@ func (f *simFixture) dev(udid string) string { return filepath.Join(f.root, udid
 func (f *simFixture) device(udid, name, typ, state string, available bool, lastUsed time.Time) simDevice {
 	d := simDevice{
 		UDID: udid, Name: name, State: state, IsAvailable: available,
-		DataPath:     filepath.Join(f.dev(udid), "data"),
-		DataPathSize: 1 << 20,
-		LogPath:      f.p("Library/Logs/CoreSimulator/" + udid),
-		DeviceType:   "com.apple.CoreSimulator.SimDeviceType." + typ,
+		DataPath:   filepath.Join(f.dev(udid), "data"),
+		LogPath:    f.p("Library/Logs/CoreSimulator/" + udid),
+		DeviceType: "com.apple.CoreSimulator.SimDeviceType." + typ,
+		// No dataPathSize (older Xcode): device folders are walked.
+		// TestSimulatorSizesFromSimctl covers the figures simctl reports.
 	}
 	if !lastUsed.IsZero() {
 		d.LastUsedAt = lastUsed.UTC().Format(time.RFC3339)
@@ -415,5 +416,48 @@ func TestPrettyRuntime(t *testing.T) {
 	}
 	if got := prettyDyld("com.apple.CoreSimulator.SimRuntime.iOS-26-4.23E254a"); got != "iOS 26.4 23E254a" {
 		t.Errorf("prettyDyld = %q", got)
+	}
+}
+
+// simctl's dataPathSize + logPathSize size the device items (walking a
+// 30 GB simulator takes 25 s); the items inside devices are still measured.
+func TestSimulatorSizesFromSimctl(t *testing.T) {
+	f := newSimFixture(t)
+	f.build()
+	f.editList(func(l *simList) {
+		for rt, devs := range l.Devices {
+			for i := range devs {
+				devs[i].DataPathSize = 7_000_000_000
+				devs[i].LogPathSize = 65_536
+			}
+			l.Devices[rt] = devs
+		}
+	})
+	r := f.scan()
+	for _, id := range []string{"apple:ios-simulator:" + udidA, "apple:ios-simulator:" + udidB, "apple:ios-simulators-unavailable:" + udidE} {
+		it := r.final[id]
+		if it == nil {
+			t.Fatalf("missing %s", id)
+		}
+		if it.Size != 7_000_065_536 || it.Files != 0 || it.Meta["size"] == "" {
+			t.Errorf("%s: size %d files %d meta %v, want the simctl figures", id, it.Size, it.Files, it.Meta)
+		}
+		if n := len(r.emits[id]); n != 1 {
+			t.Errorf("%s: emitted %d times, want once (nothing to measure)", id, n)
+		}
+	}
+	a := r.final["apple:ios-simulator:"+udidA]
+	if !a.Recommended || !a.LastUsed.Equal(ago(90*day)) {
+		t.Errorf("A: recommended %v, last used %v", a.Recommended, a.LastUsed)
+	}
+	// recordings, unified logs and system caches keep their exact paths and sizes
+	if rec := r.final["apple:ios-simulator-attachments:"+filepath.Join(f.dev(udidB), "data/Containers/Data/InternalDaemon/22222222-0000-4000-8000-000000000001/tmp/Attachments")]; rec == nil || rec.Size < 3<<20 {
+		t.Errorf("recordings of B: %+v", rec)
+	}
+	if logs := r.one(t, "ios-simulator-logs"); logs.Size < 1<<20+1<<19 {
+		t.Errorf("unified logs: %d", logs.Size)
+	}
+	if caches := r.one(t, "ios-simulator-caches"); caches.Size < 1<<20 {
+		t.Errorf("system caches: %d", caches.Size)
 	}
 }
