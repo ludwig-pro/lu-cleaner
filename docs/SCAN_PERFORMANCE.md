@@ -114,6 +114,13 @@ builds ont été relancés, ainsi que `-race` sur `cli` et `tui`.
 Les tests natifs complets s'exécutent hors sandbox : celle-ci bloque les API
 FSEvents, l'inspection des processus et la politique de priorité macOS.
 
+La CI de revue a également révélé une course dans la fixture Git existante :
+la maintenance automatique supprimait `objects/maintenance.lock` pendant
+que le test vieillissait ses fichiers. La maintenance et le GC automatiques
+sont désactivés dans les commandes de création de cette seule fixture.
+`TestRealGitDirtyActivity` a ensuite réussi 30 exécutions consécutives ;
+aucun paramètre Git utilisateur ni comportement de production n'est modifié.
+
 Les tests natifs avec `-race` émettent parfois un avertissement du linker
 Apple sur `LC_DYSYMTAB` dans un objet Go ; leurs exécutions réussissent.
 Le build du site signale aussi des avertissements Astro/Vite de dépréciation
