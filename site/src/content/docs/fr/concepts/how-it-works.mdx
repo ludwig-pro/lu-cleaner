@@ -79,7 +79,7 @@ Deux techniques gardent une analyse complète rapide :
 - Un **cache partagé par analyse** évite le travail en double : quand deux scanners mesurent le même répertoire (le scanner worktrees et le scanner artifacts mesurent tous deux le `node_modules` d'un worktree), le répertoire est parcouru une seule fois et les deux obtiennent le résultat. Le cache ne vit que le temps d'une analyse : l'analyse suivante mesure toujours des données fraîches.
 
 :::note
-Les analyses utilisent le [profil de ressources `eco`](/lu-cleaner/fr/reference/configuration/#scan_mode) par défaut : 2 opérations d'entrée/sortie simultanées partagées, 1 commande d'inspection, des lots bornés et de courtes pauses annulables. `--scan-mode fast` autorise 8 opérations d'entrée/sortie et 4 commandes, sans pause. Les deux profils mesurent les mêmes entrées et tailles.
+Les analyses utilisent le [profil de ressources `eco`](/lu-cleaner/fr/reference/configuration/#scan_mode) par défaut : 2 opérations d'entrée/sortie simultanées partagées, 1 commande d'inspection, des lots bornés et la priorité macOS d'arrière-plan. `--scan-mode fast` autorise 8 opérations d'entrée/sortie et 4 commandes, sans pause. Les deux profils mesurent les mêmes entrées et tailles.
 
 Deux variables d'environnement existent pour le dépannage : `LU_NO_BULK=1` force le parcours classique avec un `lstat` par entrée, et `LU_WALKERS=<entier positif>` remplace la limite d'entrée/sortie simultanée partagée entre découverte et mesure. Les valeurs invalides gardent le défaut du profil et sont signalées en mode `--verbose`.
 :::

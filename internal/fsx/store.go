@@ -459,6 +459,10 @@ func (s *SizeStore) validate(ctx context.Context) {
 		s.valid = valid
 	}
 	s.mu.Unlock()
+	if traceOn {
+		fmt.Fprintf(os.Stderr, "[trace] cache validation %s: entries=%d valid=%d events=%d took=%s%s\n",
+			stateName(s.state), len(s.entries), len(s.valid), s.events, s.replay.Round(time.Millisecond), reasonSuffix(s.reason))
+	}
 	close(s.ready)
 }
 

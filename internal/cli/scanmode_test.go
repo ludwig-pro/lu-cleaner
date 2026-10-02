@@ -229,7 +229,7 @@ func TestConfigShowScanLimitsAndWalkersWarning(t *testing.T) {
 	if err := json.Unmarshal(h.out.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Scan.Mode != "eco" || v.Scan.IO != 3 || v.Scan.Commands != 1 || v.Scan.Prefetch != 1 || v.Scan.BatchSize != 256 || v.Scan.PauseMS != 5 || v.Scan.GOMAXPROCS != min(runtime.GOMAXPROCS(0), 2) || v.Scan.Priority != "background" {
+	if v.Scan.Mode != "eco" || v.Scan.IO != 3 || v.Scan.Commands != 1 || v.Scan.Prefetch != 1 || v.Scan.BatchSize != 256 || v.Scan.PauseMS != 0 || v.Scan.GOMAXPROCS != min(runtime.GOMAXPROCS(0), 2) || v.Scan.Priority != "background" {
 		t.Fatalf("effective scan=%+v", v.Scan)
 	}
 	if v.Config["scan_mode"] != "fast" {
@@ -327,8 +327,8 @@ func TestScanSetupControlsInitialRootReadsAndPureSetupDoesNotActivate(t *testing
 			if scanning {
 				initial := c.scanCtl
 				stats := initial.Snapshot()
-				if stats.IOMax != 1 || stats.ThrottleWait <= 0 {
-					t.Fatalf("initial root reads escaped eco admission/cooldown: %+v", stats)
+				if stats.IOMax != 1 || stats.ThrottleWait != 0 {
+					t.Fatalf("initial root reads must use eco admission without artificial pauses: %+v", stats)
 				}
 				ctx, err := c.startScan(context.Background(), s)
 				if err != nil || scanctl.From(ctx) != initial || activated != 1 || s.env.ProtectedContext == nil {

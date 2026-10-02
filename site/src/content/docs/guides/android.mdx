@@ -56,7 +56,7 @@ When a React Native project has no `node_modules`, the `react-native` version in
 This walk always uses your configured (or auto-detected) roots. Roots passed on the command line (`--root`, `lu-cleaner artifacts <root>`) only narrow the artifacts scan: with a single project as root, every version your other projects use would look unused.
 
 :::caution[When usage is unknown, nothing is recommended]
-The project walk stops after 20 seconds or 250,000 directories. If it does not finish, or if no project root exists, lu-cleaner cannot prove that a package is unused: items show *no project roots scanned — usage unknown* and are not recommended. Point `roots` at the folders that hold your projects if the auto-detected ones miss them.
+The project walk is limited to 250,000 directories and can be cancelled; it has no wall-clock timeout, so the eco profile can take longer without ending discovery early. If it does not finish, or if no project root exists, lu-cleaner cannot prove that a package is unused: items show *no project roots scanned — usage unknown* and are not recommended. Point `roots` at the folders that hold your projects if the auto-detected ones miss them.
 :::
 
 ## Where the SDK lives

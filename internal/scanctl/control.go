@@ -34,7 +34,10 @@ func Resolve(mode, walkers string) (Limits, string, error) {
 	l := Limits{Mode: Mode(mode), BatchSize: 256}
 	switch l.Mode {
 	case Eco:
-		l.IO, l.Commands, l.Prefetch, l.Pause = 2, 1, 1, 5*time.Millisecond
+		// Keep Go CPU parallelism and process priority bounded separately.
+		// Bounded concurrent reads overlap kernel waits without unbounded fan-out.
+		// Fixed sleeps would also penalize time already spent waiting on I/O.
+		l.IO, l.Commands, l.Prefetch = 2, 1, 1
 	case Fast:
 		l.IO, l.Commands, l.Prefetch = 8, 4, 4
 	default:

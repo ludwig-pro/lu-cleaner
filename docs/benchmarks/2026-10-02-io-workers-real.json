@@ -1,0 +1,177 @@
+{
+  "date": "2026-10-02",
+  "machine": {
+    "model": "Mac14,9",
+    "logical_cpus": 10,
+    "memory_bytes": 17179869184
+  },
+  "notes": [
+    "Three full real HOME scans in order 2/4/2; no category or root reduction.",
+    "LU_NO_CACHE=1 for all trials; no size-cache warmup advantage. OS page caches are not purged.",
+    "100% CPU means one logical core. Sampled parent CPU uses Mach ticks converted with mach_timebase_info; wait4 CPU includes waited children.",
+    "Data and external machine load remain mutable. This is not an isolated cohabitation benchmark or a guarantee on other machines.",
+    "The 2-I/O control is repeated after the 4-I/O scan to check the effect of order and OS caches.",
+    "Raw logs remain private in /private/tmp/lu-current-real-* folders."
+  ],
+  "runs": [
+    {
+      "walkers": 2,
+      "trial": 1,
+      "started_at": "2026-10-02T23:02:09.576630+02:00",
+      "binary_sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "command": "LU_NO_CACHE=1 LU_WALKERS=2 LU_TRACE=1 LU_TRACE_MS=1000 ./bin/lu-cleaner scan --dry-run --verbose",
+      "wall_s": 195.69680162507575,
+      "user_s": 21.558056,
+      "system_s": 98.942123,
+      "cpu_s": 120.500179,
+      "parent_cpu_average_percent": 54.184288604955455,
+      "parent_cpu_peak_percent": 114.92599865830549,
+      "max_rss_bytes": 95764480,
+      "sampled_disk_read_bytes": 3823177728,
+      "exit_code": 0,
+      "provider_failures": [],
+      "providers_done": {
+        "apple": "54.011s",
+        "android": "1m34.618s",
+        "system": "2m35.441s",
+        "worktrees": "2m54.131s",
+        "js": "3m5.345s",
+        "catalog": "3m9.319s",
+        "artifacts": "3m11.752s",
+        "ai": "3m15.57s"
+      },
+      "limits": {
+        "mode": "eco",
+        "io": 2,
+        "commands": 1,
+        "prefetch": 1,
+        "batch_size": 256,
+        "pause_ms": 0,
+        "work_window_ms": 0,
+        "gomaxprocs": 2,
+        "priority": "background"
+      },
+      "load_average_before": [
+        10.61669921875,
+        18.86181640625,
+        18.21533203125
+      ],
+      "load_average_after": [
+        9.68359375,
+        15.3271484375,
+        16.9072265625
+      ],
+      "timed_out": false,
+      "forced_stop": false,
+      "resource_diagnostics": "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=5h56m0.482611037s pause_cumulative=0s command_wait_cumulative=2m24.093141004s files=2932713 dirs=345235 cache_hits=319 cache_misses=9089 cancel_join=0s",
+      "files": 2932713,
+      "dirs": 345235
+    },
+    {
+      "walkers": 4,
+      "trial": 1,
+      "started_at": "2026-10-02T23:05:25.882000+02:00",
+      "binary_sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "command": "LU_NO_CACHE=1 LU_WALKERS=4 LU_TRACE=1 LU_TRACE_MS=1000 ./bin/lu-cleaner scan --dry-run --verbose",
+      "wall_s": 130.34140695794486,
+      "user_s": 20.934499,
+      "system_s": 96.841148,
+      "cpu_s": 117.775647,
+      "parent_cpu_average_percent": 79.80281524662854,
+      "parent_cpu_peak_percent": 124.73774322843629,
+      "max_rss_bytes": 105480192,
+      "sampled_disk_read_bytes": 3605938176,
+      "exit_code": 0,
+      "provider_failures": [],
+      "providers_done": {
+        "apple": "21.829s",
+        "android": "48.916s",
+        "system": "1m34.256s",
+        "worktrees": "1m57.183s",
+        "js": "2m8.147s",
+        "catalog": "2m8.435s",
+        "artifacts": "2m8.633s",
+        "ai": "2m10.282s"
+      },
+      "limits": {
+        "mode": "eco",
+        "io": 4,
+        "commands": 1,
+        "prefetch": 1,
+        "batch_size": 256,
+        "pause_ms": 0,
+        "work_window_ms": 0,
+        "gomaxprocs": 2,
+        "priority": "background"
+      },
+      "load_average_before": [
+        9.68359375,
+        15.3271484375,
+        16.9072265625
+      ],
+      "load_average_after": [
+        10.68994140625,
+        13.94189453125,
+        16.13623046875
+      ],
+      "timed_out": false,
+      "forced_stop": false,
+      "resource_diagnostics": "debug: scan resources: io_max=4/4 commands_max=1/1 io_wait_cumulative=3h36m8.588811913s pause_cumulative=0s command_wait_cumulative=3m28.230857212s files=2932713 dirs=345235 cache_hits=302 cache_misses=9089 cancel_join=0s",
+      "files": 2932713,
+      "dirs": 345235
+    },
+    {
+      "walkers": 2,
+      "trial": 2,
+      "started_at": "2026-10-02T23:08:16.409126+02:00",
+      "binary_sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "command": "LU_NO_CACHE=1 LU_WALKERS=2 LU_TRACE=1 LU_TRACE_MS=1000 ./bin/lu-cleaner scan --dry-run --verbose",
+      "wall_s": 221.4795766249299,
+      "user_s": 21.893937,
+      "system_s": 100.010861,
+      "cpu_s": 121.904798,
+      "parent_cpu_average_percent": 48.482563690735915,
+      "parent_cpu_peak_percent": 90.93743032644099,
+      "max_rss_bytes": 94928896,
+      "sampled_disk_read_bytes": 3836755968,
+      "exit_code": 0,
+      "provider_failures": [],
+      "providers_done": {
+        "apple": "1m3.254s",
+        "android": "1m41.071s",
+        "system": "2m46.562s",
+        "worktrees": "3m8.493s",
+        "js": "3m24.845s",
+        "catalog": "3m28.84s",
+        "artifacts": "3m37.319s",
+        "ai": "3m41.319s"
+      },
+      "limits": {
+        "mode": "eco",
+        "io": 2,
+        "commands": 1,
+        "prefetch": 1,
+        "batch_size": 256,
+        "pause_ms": 0,
+        "work_window_ms": 0,
+        "gomaxprocs": 2,
+        "priority": "background"
+      },
+      "load_average_before": [
+        32.14990234375,
+        18.97216796875,
+        17.87158203125
+      ],
+      "load_average_after": [
+        9.6337890625,
+        14.35986328125,
+        16.1474609375
+      ],
+      "timed_out": false,
+      "forced_stop": false,
+      "resource_diagnostics": "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=6h16m38.36298758s pause_cumulative=0s command_wait_cumulative=3m18.36250524s files=2932719 dirs=345245 cache_hits=319 cache_misses=9089 cancel_join=0s",
+      "files": 2932719,
+      "dirs": 345245
+    }
+  ]
+}

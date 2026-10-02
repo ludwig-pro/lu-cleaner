@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -17,12 +18,35 @@ func limits(t *testing.T, mode, walkers string) Limits {
 	return l
 }
 
+func TestEcoDoesNotDelayAlreadyBoundedIO(t *testing.T) {
+	c := New(limits(t, "eco", ""))
+	ctx := With(context.Background(), c)
+	defer c.Close()
+	now := time.Unix(1, 0)
+	c.now = func() time.Time { return now }
+	c.sleep = func(context.Context, time.Duration) error {
+		t.Error("eco added an artificial pause after bounded I/O")
+		return nil
+	}
+	for range 4 {
+		if err := DoIO(ctx, func() error {
+			now = now.Add(time.Second) // A slow syscall is not sustained CPU work.
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.Limits().IO != 2 || c.Limits().Commands != 1 || c.Limits().Prefetch != 1 {
+		t.Fatal("eco resource limits must stay in place")
+	}
+}
+
 func TestResolve(t *testing.T) {
 	for _, tc := range []struct {
 		mode, walkers     string
 		io, cmd, prefetch int
 		pause             time.Duration
-	}{{"", "", 2, 1, 1, 5 * time.Millisecond}, {"fast", "", 8, 4, 4, 0}, {"eco", "1", 1, 1, 1, 5 * time.Millisecond}} {
+	}{{"", "", 2, 1, 1, 0}, {"fast", "", 8, 4, 4, 0}, {"eco", "1", 1, 1, 1, 0}} {
 		l, warning, err := Resolve(tc.mode, tc.walkers)
 		if err != nil || warning != "" || l.IO != tc.io || l.Commands != tc.cmd || l.Prefetch != tc.prefetch || l.Pause != tc.pause || l.BatchSize != 256 {
 			t.Fatalf("%+v: %+v %q %v", tc, l, warning, err)
@@ -85,7 +109,9 @@ func TestSharedAdmissionAndCanceledWait(t *testing.T) {
 }
 
 func TestCooldownRetainsSlotAndCancels(t *testing.T) {
-	c := New(limits(t, "eco", "1"))
+	l := limits(t, "eco", "1")
+	l.Pause = 5 * time.Millisecond // Optional controller pacing; public profiles do not sleep.
+	c := New(l)
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = With(ctx, c)
 	defer c.Close()
@@ -158,38 +184,41 @@ func TestPanicReleasesAndCanceledContextNeverStarts(t *testing.T) {
 }
 
 func TestCommandTimeoutStartsAfterAdmission(t *testing.T) {
-	c := New(limits(t, "eco", ""))
-	ctx := With(context.Background(), c)
-	defer c.Close()
-	running, finish := make(chan struct{}), make(chan struct{})
-	first := make(chan error, 1)
-	go func() {
-		_, err := Command(ctx, 0, func(context.Context) ([]byte, error) { close(running); <-finish; return nil, nil })
-		first <- err
-	}()
-	<-running
-	// The queued command's timeout is deliberately shorter than its wait. The
-	// wait is controlled by a barrier, with a timer only to cross its deadline.
-	queued := make(chan error, 1)
-	go func() {
-		_, err := Command(ctx, time.Millisecond, func(run context.Context) ([]byte, error) {
-			if err := run.Err(); err != nil {
-				return nil, err
-			}
-			return []byte("ok"), nil
-		})
-		queued <- err
-	}()
-	timer := time.NewTimer(10 * time.Millisecond)
-	<-timer.C
-	close(finish)
-	if err := <-first; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-queued; err != nil {
-		t.Fatalf("queue consumed execution timeout: %v", err)
-	}
-	if s := c.Snapshot(); s.CommandMax != 1 || s.CommandActive != 0 {
-		t.Fatalf("commands %+v", s)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		c := New(limits(t, "eco", ""))
+		ctx := With(context.Background(), c)
+		defer c.Close()
+		running, finish := make(chan struct{}), make(chan struct{})
+		first := make(chan error, 1)
+		go func() {
+			_, err := Command(ctx, 0, func(context.Context) ([]byte, error) { close(running); <-finish; return nil, nil })
+			first <- err
+		}()
+		<-running
+		// The queued command's timeout is deliberately shorter than its wait. The
+		// wait is controlled by a barrier and virtual time crosses its deadline.
+		queued := make(chan error, 1)
+		go func() {
+			_, err := Command(ctx, time.Millisecond, func(run context.Context) ([]byte, error) {
+				if err := run.Err(); err != nil {
+					return nil, err
+				}
+				return []byte("ok"), nil
+			})
+			queued <- err
+		}()
+		synctest.Wait() // Ensure the second command reached the occupied slot.
+		timer := time.NewTimer(10 * time.Millisecond)
+		<-timer.C
+		close(finish)
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-queued; err != nil {
+			t.Fatalf("queue consumed execution timeout: %v", err)
+		}
+		if s := c.Snapshot(); s.CommandMax != 1 || s.CommandActive != 0 {
+			t.Fatalf("commands %+v", s)
+		}
+	})
 }

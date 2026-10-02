@@ -28,24 +28,32 @@ func TestTwelveRootsShareActualIOAdmission(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		write(t, filepath.Join(base, fmt.Sprint(i), "nested", "file"), 4096)
 	}
-	ctx, c := controlled(t, context.Background(), "1")
-	defer c.Close()
-	ctx = WithCache(ctx)
-	var wg sync.WaitGroup
-	for i := 0; i < 12; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			st, err := Size(ctx, filepath.Join(base, fmt.Sprint(i)), nil)
-			if err != nil || st.Files != 1 || st.Dirs != 2 {
-				t.Errorf("root %d: %+v %v", i, st, err)
+	for _, walkers := range []string{"1", ""} {
+		t.Run("walkers="+walkers, func(t *testing.T) {
+			l, _, err := scanctl.Resolve("eco", walkers)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}(i)
-	}
-	wg.Wait()
-	WaitCache(ctx)
-	if s := c.Snapshot(); s.IOMax != 1 || s.IOActive != 0 || s.Files != 12 {
-		t.Fatalf("real I/O admissions %+v", s)
+			c := scanctl.New(l)
+			defer c.Close()
+			ctx := WithCache(scanctl.With(context.Background(), c))
+			var wg sync.WaitGroup
+			for i := 0; i < 12; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					st, err := Size(ctx, filepath.Join(base, fmt.Sprint(i)), nil)
+					if err != nil || st.Files != 1 || st.Dirs != 2 {
+						t.Errorf("root %d: %+v %v", i, st, err)
+					}
+				}(i)
+			}
+			wg.Wait()
+			WaitCache(ctx)
+			if s := c.Snapshot(); s.IOMax < 1 || s.IOMax > int64(l.IO) || s.IOActive != 0 || s.Files != 12 {
+				t.Fatalf("real I/O admissions %+v, limit %d", s, l.IO)
+			}
+		})
 	}
 }
 

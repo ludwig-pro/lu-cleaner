@@ -85,7 +85,7 @@ Full documentation: **https://ludwig-pro.github.io/lu-cleaner/**
 
 Set `scan_mode = "eco"` or `"fast"` in `config.toml` to keep a preferred profile; `--scan-mode` overrides it for one invocation. `lu-cleaner config show` displays the effective limits. `LU_WALKERS=<positive integer>` overrides the shared I/O limit (2 in eco, 8 in fast); invalid values fall back to the profile and are reported with `--verbose`.
 
-`eco` prioritises other applications and can make scans substantially longer. `--dry-run` still performs the full scan and safety checks. For resource and cache diagnostics, use `LU_TRACE=1 lu-cleaner scan --dry-run --verbose`; see [resource profiles and cancellation](https://ludwig-pro.github.io/lu-cleaner/reference/configuration/#scan_mode).
+`eco` uses macOS background priority and bounded concurrency to prioritise other applications, without fixed pauses after reads. Large scans can still take several minutes, especially when the size cache cannot be validated. `--dry-run` still performs the full scan and safety checks. For resource and cache diagnostics, use `LU_TRACE=1 lu-cleaner scan --dry-run --verbose`; see [resource profiles and cancellation](https://ludwig-pro.github.io/lu-cleaner/reference/configuration/#scan_mode).
 
 ## Safety in one paragraph
 

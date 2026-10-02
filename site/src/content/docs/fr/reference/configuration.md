@@ -115,13 +115,15 @@ lu-cleaner config show --scan-mode eco # montre les limites effectives sans lanc
 | Commandes d'inspection simultanées | 1 | 4 |
 | Mesures anticipées par groupe de workers | 1 | 4 |
 | Entrées par lot de lecture | 256 | 256 |
-| Pause après chaque opération d'entrée/sortie | 5 ms | aucune |
+| Pause artificielle après les entrées/sorties | Aucune | Aucune |
 | Parallélisme CPU de Go | Valeur actuelle, plafonnée à 2 | Hérité |
 | Priorité d'ordonnancement macOS | Arrière-plan pendant l'exécution | Héritée |
 
+Les quotas partagés et la priorité macOS d'arrière-plan limitent l'impact sur les autres applications. Eco n'ajoute pas de pause fixe après les lectures : attendre le disque n'est pas du travail CPU, et macOS retarde déjà le travail d'arrière-plan lorsque nécessaire. `config show --json` affiche zéro pour `scan.pause_ms`. Ces contrôles ne garantissent ni un pourcentage CPU, ni un ralentissement maximal des autres jobs, ni une durée maximale des appels noyau.
+
 Le réglage CPU précédent et la priorité du processus sont rétablis en fin d'exécution. Si macOS ne peut pas changer la priorité, un avertissement s'affiche et les quotas restent actifs. L'aide et les commandes de configuration, d'historique, de version et de catalogue ne changent pas les priorités du processus. `--verbose` affiche les limites résolues et les compteurs de ressources sur stderr ; la progression des scans et de l'analyseur indique le profil actif.
 
-`config show` affiche aussi la valeur résolue de `GOMAXPROCS` et la priorité demandée (`background` ou `inherited`), sans les appliquer. Dans les compteurs verbose, `files` et `dirs` comptent les entrées parcourues pour mesurer les tailles ; `cache_hits` et `cache_misses` décrivent les demandes de taille mémorisées pendant cette invocation. Utilisez `LU_TRACE=1` pour les diagnostics du cache persistant.
+`config show` affiche aussi la valeur résolue de `GOMAXPROCS` et la priorité demandée (`background` ou `inherited`), sans les appliquer. Dans les compteurs verbose, `files` et `dirs` comptent les entrées parcourues pour mesurer les tailles ; `cache_hits` et `cache_misses` décrivent les demandes de taille mémorisées pendant cette invocation. Utilisez `LU_TRACE=1` pour les diagnostics du cache persistant, dont le résultat de validation dès qu'il est disponible et les échecs de relecture native.
 
 Les durées d'attente et de pause suffixées `_cumulative` additionnent le temps de tous les workers et peuvent dépasser la durée réelle de l'exécution. Les durées des providers sont aussi affichées avec `--verbose`. Pour séparer JSON et diagnostics :
 

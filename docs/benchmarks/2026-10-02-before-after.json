@@ -1,0 +1,1185 @@
+{
+  "parameters": {
+    "before": "/private/tmp/lu-cleaner-baseline",
+    "released": "/private/tmp/lu-cleaner-v030-before-pacing",
+    "current": "./bin/lu-cleaner",
+    "output": "/private/tmp/lu-scan-three-versions.json",
+    "samples": 3,
+    "packages": 128,
+    "timeout": 120.0
+  },
+  "machine": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "cpu_count": 10,
+    "inherited_nice": 0,
+    "inherited_darwin_background": 0,
+    "hw.model": "Mac14,9",
+    "hw.memsize": "17179869184",
+    "hw.physicalcpu": "10",
+    "hw.logicalcpu": "10"
+  },
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/lu-cleaner-baseline",
+      "sha256": "3bbb29fc6ab3e6447ee90e963d7351be73808785fcf25a4aa6095ba343dfae82"
+    },
+    "released": {
+      "path": "/private/tmp/lu-cleaner-v030-before-pacing",
+      "sha256": "80bd48e734ab40da49fa0b7be98fe40fa45fd5b1535cb71b337a15ffb0927cc8"
+    },
+    "current": {
+      "path": "/Users/ludwig/local_sources/lu-cleaner/bin/lu-cleaner",
+      "sha256": "a07f8aa78620970237931ab03624147255d9a83e8ab0d8b4352e1b2d9d19e679"
+    }
+  },
+  "notes": [
+    "Same immutable artifact roots for every version; no general home scan.",
+    "Cold means empty application size cache; the OS page cache is not flushed.",
+    "Warm means a reused cache, not necessarily a cache hit; see diagnostics.",
+    "CPU is cumulative user + system time; 100% average means one logical core.",
+    "Disk bytes are sampled lower bounds for the scanner process, excluding descendants.",
+    "Other applications are not controlled; load averages and trial order are recorded."
+  ],
+  "scan_environment": {
+    "GOMAXPROCS": "unset",
+    "LU_WALKERS": "unset",
+    "GOFLAGS": "unset",
+    "HOME": "isolated fixture",
+    "config": "isolated",
+    "LU_TRACE": "1"
+  },
+  "profiles": {
+    "before": {
+      "cold": [
+        {
+          "wall_s": 0.20476591703481972,
+          "user_s": 0.088336,
+          "system_s": 0.305491,
+          "max_rss_bytes": 24920064,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            14.11376953125,
+            38.318359375,
+            28.43896484375
+          ],
+          "load_average_after": [
+            14.11376953125,
+            38.318359375,
+            28.43896484375
+          ],
+          "disk_read_bytes_sampled": 774144,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: provider artifacts done in 32ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.2332777091069147,
+          "user_s": 0.098925,
+          "system_s": 0.267837,
+          "max_rss_bytes": 23986176,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 7249920,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: provider artifacts done in 36ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.2490544590400532,
+          "user_s": 0.094095,
+          "system_s": 0.359012,
+          "max_rss_bytes": 23543808,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: provider artifacts done in 62ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 0.22025020804721862,
+          "user_s": 0.081861,
+          "system_s": 0.10000099999999999,
+          "max_rss_bytes": 22331392,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            14.11376953125,
+            38.318359375,
+            28.43896484375
+          ],
+          "load_average_after": [
+            14.11376953125,
+            38.318359375,
+            28.43896484375
+          ],
+          "disk_read_bytes_sampled": 942080,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: provider artifacts done in 74ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 70ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.5628553749993443,
+          "user_s": 0.10257,
+          "system_s": 0.139215,
+          "max_rss_bytes": 21905408,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 81920,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: provider artifacts done in 253ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 248ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.35898866690695286,
+          "user_s": 0.08870399999999999,
+          "system_s": 0.10922599999999999,
+          "max_rss_bytes": 22839296,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: provider artifacts done in 50ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 47ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ]
+    },
+    "released_eco": {
+      "cold": [
+        {
+          "wall_s": 28.268614166998304,
+          "user_s": 0.418381,
+          "system_s": 1.062357,
+          "max_rss_bytes": 27607040,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            14.11376953125,
+            38.318359375,
+            28.43896484375
+          ],
+          "load_average_after": [
+            9.90869140625,
+            34.98828125,
+            27.5732421875
+          ],
+          "disk_read_bytes_sampled": 794624,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 23.913s",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=10m55.712753241s pause_cumulative=50.53472865s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 28.455533166998066,
+          "user_s": 0.41643199999999997,
+          "system_s": 0.96449,
+          "max_rss_bytes": 27787264,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "load_average_after": [
+            6.68603515625,
+            31.41552734375,
+            26.5693359375
+          ],
+          "disk_read_bytes_sampled": 1630208,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 23.981s",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=10m32.981919723s pause_cumulative=50.581527801s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 55.406780750025064,
+          "user_s": 0.512796,
+          "system_s": 1.050175,
+          "max_rss_bytes": 19169280,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            27.43310546875,
+            32.07177734375,
+            27.5341796875
+          ],
+          "disk_read_bytes_sampled": 18001920,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 45.406s",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=20m22.026210677s pause_cumulative=1m21.302635262s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 5.9030807910021394,
+          "user_s": 0.15068399999999998,
+          "system_s": 0.339441,
+          "max_rss_bytes": 20938752,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            9.90869140625,
+            34.98828125,
+            27.5732421875
+          ],
+          "load_average_after": [
+            9.51513671875,
+            34.490234375,
+            27.44091796875
+          ],
+          "disk_read_bytes_sampled": 1056768,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 983ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 637ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=1.825346562s pause_cumulative=5.781286525s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 38.57368150004186,
+          "user_s": 0.377916,
+          "system_s": 0.8822409999999999,
+          "max_rss_bytes": 18382848,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            6.68603515625,
+            31.41552734375,
+            26.5693359375
+          ],
+          "load_average_after": [
+            22.734375,
+            32.66748046875,
+            27.26318359375
+          ],
+          "disk_read_bytes_sampled": 14479360,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 28.794s",
+            "[trace] cache hits 6 (3084 files not walked), misses 6 (6 before the replay ended); walked 6 trees, 5133 files; replay ok: 5 events in 8.871s; saved 12 entries (6 kept, 6 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=14m3.413949141s pause_cumulative=47.341965931s command_wait_cumulative=0s files=5133 dirs=973 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 20.401572832954116,
+          "user_s": 0.189279,
+          "system_s": 0.39404,
+          "max_rss_bytes": 19398656,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            27.43310546875,
+            32.07177734375,
+            27.5341796875
+          ],
+          "load_average_after": [
+            30.78515625,
+            32.58740234375,
+            27.8271484375
+          ],
+          "disk_read_bytes_sampled": 9027584,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 pause=5ms",
+            "debug: provider artifacts done in 2.757s",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 2.336s; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=2.895981339s pause_cumulative=12.323603485s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ]
+    },
+    "current_eco": {
+      "cold": [
+        {
+          "wall_s": 1.5285882499301806,
+          "user_s": 0.135326,
+          "system_s": 0.38459099999999996,
+          "max_rss_bytes": 29097984,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            9.51513671875,
+            34.490234375,
+            27.44091796875
+          ],
+          "load_average_after": [
+            9.51513671875,
+            34.490234375,
+            27.44091796875
+          ],
+          "disk_read_bytes_sampled": 6983680,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 650ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=17.352047495s pause_cumulative=1.226460505s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 15.19188454200048,
+          "user_s": 0.21556599999999998,
+          "system_s": 0.633088,
+          "max_rss_bytes": 24608768,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            22.734375,
+            32.66748046875,
+            27.26318359375
+          ],
+          "load_average_after": [
+            27.19580078125,
+            33.15869140625,
+            27.53173828125
+          ],
+          "disk_read_bytes_sampled": 11624448,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 10.527s",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=4m42.274857837s pause_cumulative=8.478248531s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 1.3184338330756873,
+          "user_s": 0.134966,
+          "system_s": 0.344661,
+          "max_rss_bytes": 30605312,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 1163264,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 520ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=13.11172237s pause_cumulative=1.061791336s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 0.7228266249876469,
+          "user_s": 0.091012,
+          "system_s": 0.198938,
+          "max_rss_bytes": 22183936,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            9.51513671875,
+            34.490234375,
+            27.44091796875
+          ],
+          "load_average_after": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "disk_read_bytes_sampled": 32768,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 236ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 217ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=6.038381ms pause_cumulative=360.574084ms command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 1.9739595419960096,
+          "user_s": 0.102366,
+          "system_s": 0.23660199999999998,
+          "max_rss_bytes": 20545536,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            27.19580078125,
+            33.15869140625,
+            27.53173828125
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 3305472,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 1.071s",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 1.053s; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=249.022621ms pause_cumulative=674.702833ms command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 1.1836569999577478,
+          "user_s": 0.097149,
+          "system_s": 0.21509599999999998,
+          "max_rss_bytes": 20381696,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 16384,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=eco io=2 commands=1 prefetch=1 batch=256 work_window=2ms pause=5ms",
+            "debug: provider artifacts done in 507ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 412ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=2/2 commands_max=0/1 io_wait_cumulative=32.383825ms pause_cumulative=452.785794ms command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ]
+    },
+    "current_fast": {
+      "cold": [
+        {
+          "wall_s": 0.15462737495545298,
+          "user_s": 0.08283599999999999,
+          "system_s": 0.21719,
+          "max_rss_bytes": 32555008,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "load_average_after": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "disk_read_bytes_sampled": 32768,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 41ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=970.118973ms pause_cumulative=0s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.26245891710277647,
+          "user_s": 0.095568,
+          "system_s": 0.325605,
+          "max_rss_bytes": 33914880,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 98304,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 86ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=2.216067673s pause_cumulative=0s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.3874491249443963,
+          "user_s": 0.093209,
+          "system_s": 0.22929999999999998,
+          "max_rss_bytes": 38420480,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 110ms",
+            "[trace] cache hits 0 (0 files not walked), misses 12 (0 before the replay ended); walked 12 trees, 8217 files; replay ok: 0 events in 0s; saved 12 entries (0 kept, 12 new)",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=3.105709252s pause_cumulative=0s command_wait_cumulative=0s files=8217 dirs=1945 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 0.20579270808957517,
+          "user_s": 0.043764,
+          "system_s": 0.081203,
+          "max_rss_bytes": 22298624,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "load_average_after": [
+            8.9130859375,
+            33.95068359375,
+            27.29150390625
+          ],
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 93ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 90ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=924.615\u00b5s pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 1,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.18984866701066494,
+          "user_s": 0.048984,
+          "system_s": 0.092112,
+          "max_rss_bytes": 22675456,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 58ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 55ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=1.798947ms pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 2,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        },
+        {
+          "wall_s": 0.21206104196608067,
+          "user_s": 0.050880999999999996,
+          "system_s": 0.113369,
+          "max_rss_bytes": 21872640,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "timed_out": false,
+          "forced_stop": false,
+          "load_average_before": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "load_average_after": [
+            26.05859375,
+            32.82373046875,
+            27.4462890625
+          ],
+          "disk_read_bytes_sampled": 4096,
+          "disk_written_bytes_sampled": 8192,
+          "diagnostics": [
+            "debug: scan limits: mode=fast io=8 commands=4 prefetch=4 batch=256 work_window=0s pause=0s",
+            "debug: provider artifacts done in 52ms",
+            "[trace] cache hits 12 (8217 files not walked), misses 0 (0 before the replay ended); walked 0 trees, 0 files; replay ok: 5 events in 48ms; saved 12 entries (12 kept, 0 new); 0 invalidated by changes",
+            "debug: scan resources: io_max=8/8 commands_max=0/4 io_wait_cumulative=1.53349ms pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+          ],
+          "trial": 3,
+          "normalized_results_sha256": "849294da1b4cf51c14c2a36f4fa924f1e719ec27241cbefcf7f81529ac285d6e",
+          "items": 12,
+          "totals": {
+            "size": 33603584,
+            "recommended": 0,
+            "items": 12,
+            "by_category": {
+              "artifacts": 33603584
+            },
+            "shared_by_category": {}
+          }
+        }
+      ]
+    }
+  },
+  "order": [
+    [
+      1,
+      "before",
+      "cold"
+    ],
+    [
+      1,
+      "before",
+      "warm"
+    ],
+    [
+      1,
+      "released_eco",
+      "cold"
+    ],
+    [
+      1,
+      "released_eco",
+      "warm"
+    ],
+    [
+      1,
+      "current_eco",
+      "cold"
+    ],
+    [
+      1,
+      "current_eco",
+      "warm"
+    ],
+    [
+      1,
+      "current_fast",
+      "cold"
+    ],
+    [
+      1,
+      "current_fast",
+      "warm"
+    ],
+    [
+      2,
+      "released_eco",
+      "cold"
+    ],
+    [
+      2,
+      "released_eco",
+      "warm"
+    ],
+    [
+      2,
+      "current_eco",
+      "cold"
+    ],
+    [
+      2,
+      "current_eco",
+      "warm"
+    ],
+    [
+      2,
+      "current_fast",
+      "cold"
+    ],
+    [
+      2,
+      "current_fast",
+      "warm"
+    ],
+    [
+      2,
+      "before",
+      "cold"
+    ],
+    [
+      2,
+      "before",
+      "warm"
+    ],
+    [
+      3,
+      "current_eco",
+      "cold"
+    ],
+    [
+      3,
+      "current_eco",
+      "warm"
+    ],
+    [
+      3,
+      "current_fast",
+      "cold"
+    ],
+    [
+      3,
+      "current_fast",
+      "warm"
+    ],
+    [
+      3,
+      "before",
+      "cold"
+    ],
+    [
+      3,
+      "before",
+      "warm"
+    ],
+    [
+      3,
+      "released_eco",
+      "cold"
+    ],
+    [
+      3,
+      "released_eco",
+      "warm"
+    ]
+  ],
+  "complete": true,
+  "fixture": {
+    "roots": 12,
+    "apfs_clone_created": true,
+    "files": 8229,
+    "directories": 1957
+  },
+  "failures": [],
+  "results_identical": true,
+  "versions": {
+    "before": "08e5ed43c901c4c5b3da089f4a9610107ad85156 (before scan profiles)",
+    "released": "v0.3.0 / 6670034ba0cf37fd2016f077dd192f4ceeecb953",
+    "current": "v0.3.0-dirty, local cumulative 2 ms work-window pacing fix; binary hash recorded"
+  }
+}

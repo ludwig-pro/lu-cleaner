@@ -1,0 +1,379 @@
+{
+  "machine": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "cpu_count": 10,
+    "inherited_nice": 0,
+    "inherited_darwin_background": 0,
+    "go": "go version go1.25.6 darwin/arm64",
+    "hw.model": "Mac14,9",
+    "hw.memsize": "17179869184",
+    "hw.physicalcpu": "10",
+    "hw.logicalcpu": "10"
+  },
+  "parameters": {
+    "baseline": "/private/tmp/lu-before-latency-optimizations",
+    "current": "./bin/lu-cleaner",
+    "output": "/private/tmp/lu-latency-cohabitation-io-long.json",
+    "samples": 5,
+    "packages": 32,
+    "cpu_iterations": 16000,
+    "io_iterations": 1024,
+    "witness_kind": "io",
+    "io_sync": "fullfsync",
+    "io_no_cache": true,
+    "witness_only": true
+  },
+  "modes": {},
+  "witness": {
+    "io": {
+      "alone": [
+        1.77319937502034,
+        2.1594866670202464,
+        3.017423667013645,
+        5.308222999912687,
+        1.7112424590159208,
+        1.8493812499800697,
+        1.9204396249260753,
+        1.7730611249571666,
+        2.569929291959852,
+        2.0801930419402197,
+        2.153770125005394,
+        4.658658165950328,
+        2.4129560420988128,
+        2.0274760000174865,
+        1.9466923750005662
+      ],
+      "baseline": [
+        {
+          "witness_s": 1.6394983330974355,
+          "scan_invocations": 3,
+          "scan_exit_codes": [
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 1.77319937502034,
+          "alone_after_s": 1.6614125419873744
+        },
+        {
+          "witness_s": 1.9190355419414118,
+          "scan_invocations": 2,
+          "scan_exit_codes": [
+            0,
+            130
+          ],
+          "alone_before_s": 1.8493812499800697,
+          "alone_after_s": 1.7633762919576839
+        },
+        {
+          "witness_s": 1.9600317910080776,
+          "scan_invocations": 3,
+          "scan_exit_codes": [
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 1.7730611249571666,
+          "alone_after_s": 3.602771917008795
+        },
+        {
+          "witness_s": 2.1257897089235485,
+          "scan_invocations": 2,
+          "scan_exit_codes": [
+            0,
+            130
+          ],
+          "alone_before_s": 2.0801930419402197,
+          "alone_after_s": 2.6492197090992704
+        },
+        {
+          "witness_s": 1.749588374979794,
+          "scan_invocations": 4,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 1.9466923750005662,
+          "alone_after_s": 4.344041250064038
+        }
+      ],
+      "fast": [
+        {
+          "witness_s": 4.310042500030249,
+          "scan_invocations": 24,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 2.1594866670202464,
+          "alone_after_s": 2.431545333005488
+        },
+        {
+          "witness_s": 2.313013125094585,
+          "scan_invocations": 22,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 5.308222999912687,
+          "alone_after_s": 2.0739722079597414
+        },
+        {
+          "witness_s": 2.1784265420865268,
+          "scan_invocations": 25,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 2.569929291959852,
+          "alone_after_s": 2.125190041027963
+        },
+        {
+          "witness_s": 2.4805010840063915,
+          "scan_invocations": 24,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 2.153770125005394,
+          "alone_after_s": 3.2470499579794705
+        },
+        {
+          "witness_s": 2.8992343329591677,
+          "scan_invocations": 24,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -2
+          ],
+          "alone_before_s": 2.4129560420988128,
+          "alone_after_s": 1.8442868329584599
+        }
+      ],
+      "eco": [
+        {
+          "witness_s": 7.400819250033237,
+          "scan_invocations": 17,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 3.017423667013645,
+          "alone_after_s": 6.480363875045441
+        },
+        {
+          "witness_s": 2.0208664159290493,
+          "scan_invocations": 7,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 1.7112424590159208,
+          "alone_after_s": 1.6432501670205966
+        },
+        {
+          "witness_s": 2.0137658750172704,
+          "scan_invocations": 8,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 1.9204396249260753,
+          "alone_after_s": 2.107701916946098
+        },
+        {
+          "witness_s": 1.8736614590743557,
+          "scan_invocations": 8,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 4.658658165950328,
+          "alone_after_s": 2.1132355000590906
+        },
+        {
+          "witness_s": 2.0187000409932807,
+          "scan_invocations": 7,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ],
+          "alone_before_s": 2.0274760000174865,
+          "alone_after_s": 1.9032637909986079
+        }
+      ]
+    }
+  },
+  "scan_environment": {
+    "GOMAXPROCS": "unset",
+    "LU_WALKERS": "unset",
+    "GOFLAGS": "unset",
+    "cache": "isolated HOME; empty then reused"
+  },
+  "notes": [
+    "RSS is wait4 peak; disk bytes are sampled proc_pid_rusage lower bounds, excluding descendants.",
+    "Filesystem page cache is not flushed; cold means an empty lu-cleaner size cache.",
+    "Cohabitation repeats uncached scans for the duration of fixed two-worker CPU or bounded I/O work.",
+    "baseline means the previous local 2 ms work / 5 ms pause eco binary, not v0.3.0 or 08e5ed4."
+  ],
+  "binaries": {
+    "baseline": {
+      "path": "/private/tmp/lu-before-latency-optimizations",
+      "sha256": "a07f8aa78620970237931ab03624147255d9a83e8ab0d8b4352e1b2d9d19e679"
+    },
+    "current": {
+      "path": "/Users/ludwig/local_sources/lu-cleaner/bin/lu-cleaner",
+      "sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d"
+    }
+  },
+  "complete": true,
+  "apfs_clone_created": true,
+  "results_identical": null
+}

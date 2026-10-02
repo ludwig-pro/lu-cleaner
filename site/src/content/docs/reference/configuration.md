@@ -115,13 +115,15 @@ lu-cleaner config show --scan-mode eco # inspect effective limits without starti
 | Concurrent inspection commands | 1 | 4 |
 | Prefetch jobs per sizing pool | 1 | 4 |
 | Entries per read batch | 256 | 256 |
-| Pause after each I/O operation | 5 ms | none |
+| Artificial delay after I/O | None | None |
 | Go CPU parallelism | Current value, capped at 2 | Inherited |
 | macOS scheduling priority | Background during the invocation | Inherited |
 
+The shared limits and macOS background scheduling reduce the impact on other applications. Eco does not add fixed sleeps after reads: time spent waiting on the disk is not CPU work, and macOS already delays background work when needed. `config show --json` reports zero for `scan.pause_ms`. These controls do not guarantee a CPU percentage, a maximum slowdown for other jobs or a deadline on kernel calls.
+
 The previous CPU setting and process priority are restored when the invocation ends. If macOS cannot change the priority, a warning is printed and the quotas still apply. Help, configuration, history, version and catalog commands do not change process priorities. `--verbose` prints the resolved limits and resource counters on stderr; scan and analyzer progress displays the active profile.
 
-`config show` also displays the resolved `GOMAXPROCS` value and requested priority (`background` or `inherited`) without applying them. In verbose counters, `files` and `dirs` count entries walked for sizing; `cache_hits` and `cache_misses` describe memoized size requests within this invocation. Use `LU_TRACE=1` for the persistent cache's diagnostics.
+`config show` also displays the resolved `GOMAXPROCS` value and requested priority (`background` or `inherited`) without applying them. In verbose counters, `files` and `dirs` count entries walked for sizing; `cache_hits` and `cache_misses` describe memoized size requests within this invocation. Use `LU_TRACE=1` for the persistent cache's diagnostics, including its validation result as soon as it is available and native replay failures.
 
 Wait and pause durations ending in `_cumulative` sum time across workers and can exceed the invocation's wall time. Provider durations are also printed with `--verbose`. Keep JSON and diagnostics separate:
 
