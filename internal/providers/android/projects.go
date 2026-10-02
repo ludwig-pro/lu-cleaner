@@ -3,6 +3,8 @@ package android
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -10,7 +12,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // projectInfo is what the Android projects under the user's roots (and AI
@@ -28,7 +31,7 @@ type projectInfo struct {
 	ndkPathRef bool                       // some project pins ndk.dir / ndkPath
 
 	roots    int  // project roots walked
-	complete bool // the walk finished (no timeout, no cap)
+	complete bool // the walk finished (no cancellation, no cap)
 }
 
 func newProjectInfo() *projectInfo {
@@ -73,7 +76,6 @@ func (pi *projectInfo) gradleVersions() map[string][]string {
 }
 
 const (
-	projectWalkTimeout = 20 * time.Second
 	projectWalkMaxDirs = 250_000
 )
 
@@ -112,8 +114,7 @@ func (s *scan) scanProjects() *projectInfo {
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, projectWalkTimeout)
-	defer cancel()
+	ctx := s.ctx
 	w := &projectWalker{s: s, pi: pi, ctx: ctx, maxDepth: maxDepth, sem: make(chan struct{}, 8)}
 	for _, r := range roots {
 		w.wg.Add(1)
@@ -122,7 +123,7 @@ func (s *scan) scanProjects() *projectInfo {
 	w.wg.Wait()
 	pi.complete = !w.truncated.Load() && ctx.Err() == nil
 	if !pi.complete {
-		s.logf("project walk incomplete (timeout or %d dirs cap)", projectWalkMaxDirs)
+		s.logf("project walk incomplete (cancelled, unreadable, or %d dirs cap)", projectWalkMaxDirs)
 	}
 	return pi
 }
@@ -153,8 +154,11 @@ func (w *projectWalker) walk(dir string, depth int) {
 	if w.s.env.Excluded(dir) {
 		return
 	}
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(w.ctx, dir)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			w.truncated.Store(true)
+		}
 		return
 	}
 	names := make(map[string]bool, len(ents))

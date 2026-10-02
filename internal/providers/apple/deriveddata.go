@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // DerivedData folders are named "<Project>-<28 lowercase letters>" (hash of
@@ -49,7 +50,7 @@ func (s *scan) customDerivedData() string {
 }
 
 func (s *scan) derivedDataRoot(root string, custom bool) {
-	ents, err := os.ReadDir(root)
+	ents, err := fsx.ReadDir(s.ctx, root)
 	if err != nil {
 		return
 	}
@@ -123,7 +124,7 @@ func (s *scan) derivedDataItem(path, name string) {
 		filepath.Join(path, "info.plist"),
 	))
 	if it.LastUsed.IsZero() {
-		it.LastUsed = childrenNewest(path)
+		it.LastUsed = childrenNewest(s.ctx, path)
 	}
 	setMeta(it, "hash_dir", name)
 	switch {

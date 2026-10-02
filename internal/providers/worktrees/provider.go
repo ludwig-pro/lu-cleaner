@@ -37,6 +37,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // Provider implements core.Provider.
@@ -64,6 +65,7 @@ const (
 // Scan emits one item per linked worktree and one prune item per main
 // repository holding stale worktree metadata.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	if env == nil || env.Runner == nil || env.Home == "" || !env.Has("git") {
 		return nil
 	}

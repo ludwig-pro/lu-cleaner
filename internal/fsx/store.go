@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsevents"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -231,7 +232,8 @@ func storeDisabled() bool {
 // home directory that is not on the data volume of the running system). ctx
 // bounds the replay. Call Close at the end of the run.
 func OpenSizeStore(ctx context.Context) *SizeStore {
-	if storeDisabled() || !fsevents.Supported() {
+	ctx = scanctl.Ensure(ctx)
+	if ctx.Err() != nil || storeDisabled() || !fsevents.Supported() {
 		return nil
 	}
 	file := SizeCachePath()
@@ -239,17 +241,17 @@ func OpenSizeStore(ctx context.Context) *SizeStore {
 	if file == "" || err != nil || homeEnv == "" {
 		return nil
 	}
-	home, ok := canonicalDir(homeEnv)
-	if !ok || !onBootDataVolume(home) {
+	home, ok := canonicalDirContext(ctx, homeEnv)
+	if !ok || !onBootDataVolumeContext(ctx, home) {
 		// The history of another volume misses what changed while it was
 		// mounted elsewhere, or here with its ownership ignored (fseventsd
 		// does not log then): an external disk can come back with the same
 		// FSEvents UUID and changes the history never saw.
 		return nil
 	}
-	boot := bootSession()
+	boot := bootSessionContext(ctx)
 	var hst unix.Stat_t
-	if boot == "" || unix.Stat(home, &hst) != nil {
+	if boot == "" || scanctl.DoIO(ctx, func() error { return unix.Stat(home, &hst) }) != nil {
 		return nil
 	}
 	// The id comes before any walk: every change after it is replayed next
@@ -257,11 +259,18 @@ func OpenSizeStore(ctx context.Context) *SizeStore {
 	// (fseventsd records them with a small delay), which would otherwise
 	// invalidate the trees measured now at the next run.
 	runID, _ := fsevents.Sync(ctx, syncTimeout)
+	var volume string
+	if err := scanctl.DoIO(ctx, func() error {
+		volume = fsevents.VolumeUUID(home)
+		return nil
+	}); err != nil || ctx.Err() != nil {
+		return nil
+	}
 	s := &SizeStore{
 		file: file, home: home, dev: hst.Dev,
 		boot:   boot,
 		runID:  runID,
-		volume: fsevents.VolumeUUID(home),
+		volume: volume,
 		loaded: map[string]*storedSize{},
 		valid:  map[*storedSize]bool{},
 		fresh:  map[string]*storedSize{},
@@ -273,7 +282,10 @@ func OpenSizeStore(ctx context.Context) *SizeStore {
 		return nil
 	}
 	s.walks0, s.files0 = Walked()
-	s.load(time.Now())
+	s.load(ctx, time.Now())
+	if ctx.Err() != nil {
+		return nil
+	}
 	if len(s.entries) == 0 {
 		s.state = replayOK
 		s.cancel = func() {}
@@ -289,8 +301,12 @@ func OpenSizeStore(ctx context.Context) *SizeStore {
 // onBootDataVolume reports whether p lies on the data volume of the running
 // system, which only this system mounts (and always while it runs).
 func onBootDataVolume(p string) bool {
+	return onBootDataVolumeContext(context.Background(), p)
+}
+
+func onBootDataVolumeContext(ctx context.Context, p string) bool {
 	var fs unix.Statfs_t
-	return unix.Statfs(p, &fs) == nil && unix.ByteSliceToString(fs.Mntonname[:]) == "/System/Volumes/Data"
+	return scanctl.DoIO(ctx, func() error { return unix.Statfs(p, &fs) }) == nil && ctx.Err() == nil && unix.ByteSliceToString(fs.Mntonname[:]) == "/System/Volumes/Data"
 }
 
 // bootSession identifies the current boot. Entries measured before it are
@@ -298,8 +314,17 @@ func onBootDataVolume(p string) bool {
 // Recovery, another system, target disk mode) are not in its history, nor
 // the events a crash may have lost (fseventsd writes its log lazily).
 func bootSession() string {
-	b, err := unix.Sysctl("kern.bootsessionuuid")
-	if err != nil {
+	return bootSessionContext(context.Background())
+}
+
+func bootSessionContext(ctx context.Context) string {
+	var b string
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		b, err = unix.Sysctl("kern.bootsessionuuid")
+		return err
+	})
+	if err != nil || ctx.Err() != nil {
 		return ""
 	}
 	return b
@@ -315,13 +340,23 @@ func (e *storedSize) expired(now time.Time) bool {
 }
 
 // load reads the cache file; anything unexpected starts from scratch.
-func (s *SizeStore) load(now time.Time) {
-	fi, err := os.Stat(s.file)
+func (s *SizeStore) load(ctx context.Context, now time.Time) {
+	var fi os.FileInfo
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		fi, err = os.Stat(s.file)
+		return err
+	})
 	if err != nil || fi.Size() > storeMaxBytes {
 		return
 	}
-	data, err := os.ReadFile(s.file)
-	if err != nil {
+	var data []byte
+	err = scanctl.DoIO(ctx, func() error {
+		var err error
+		data, err = os.ReadFile(s.file)
+		return err
+	})
+	if err != nil || ctx.Err() != nil {
 		return
 	}
 	f, ok := decodeStore(data)
@@ -329,6 +364,9 @@ func (s *SizeStore) load(now time.Time) {
 		return
 	}
 	for i := range f.Entries {
+		if ctx.Err() != nil {
+			return
+		}
 		e := &f.Entries[i]
 		if e.expired(now) || e.EventID == 0 || e.Path == "" || e.Real == "" || e.Dir == "" || s.loaded[e.Path] != nil {
 			continue
@@ -350,13 +388,20 @@ func (s *SizeStore) load(now time.Time) {
 func (s *SizeStore) validate(ctx context.Context) {
 	start := time.Now()
 	state, reason := replayOK, ""
-	ix := newStoreIndex(s.entries)
+	ix, _ := newStoreIndexContext(ctx, s.entries)
 	// Files open for writing change without events until they are closed
 	// (the close is reported): listed after runID, they cover every write
 	// the replay cannot see.
-	writers, writersOK := listWriters()
+	var writers []string
+	writersOK := false
+	var writerErr error
+	if ctx.Err() == nil {
+		writers, writersOK, writerErr = listWriters(ctx)
+	}
 	switch {
-	case !writersOK:
+	case ctx.Err() != nil:
+		state, reason = replayCancelled, "cancelled"
+	case !writersOK || writerErr != nil:
 		state, reason = replayFailed, "cannot list the files open for writing"
 	case s.newest > s.runID: // any of them: the ids are not comparable
 		state, reason = replayFailed, "event ids went backwards"
@@ -365,6 +410,9 @@ func (s *SizeStore) validate(ctx context.Context) {
 	default:
 		rescan := ""
 		ok := replayChanges(ctx, s.watchRoots(), s.since, replayTimeout, func(e fsevents.Event) bool {
+			if ctx.Err() != nil {
+				return false
+			}
 			if e.Flags&fsevents.FlagsRescanAll != 0 {
 				rescan = fmt.Sprintf("events were dropped: %s flags %#x", e.Path, e.Flags)
 				return false
@@ -373,9 +421,14 @@ func (s *SizeStore) validate(ctx context.Context) {
 			return true
 		})
 		for _, w := range writers {
+			if ctx.Err() != nil {
+				break
+			}
 			ix.applyWriter(w)
 		}
-		ix.finish()
+		if ctx.Err() == nil {
+			ix.finish()
+		}
 		switch {
 		case ctx.Err() != nil:
 			state, reason = replayCancelled, "cancelled"
@@ -385,15 +438,25 @@ func (s *SizeStore) validate(ctx context.Context) {
 			state, reason = replayFailed, rescan
 		}
 	}
+	valid := map[*storedSize]bool{}
+	if state == replayOK {
+		for _, e := range s.entries {
+			if ctx.Err() != nil {
+				break
+			}
+			if !ix.invalid[e] {
+				valid[e] = true
+			}
+		}
+	}
 	s.mu.Lock()
+	if ctx.Err() != nil {
+		state, reason = replayCancelled, "cancelled"
+	}
 	s.state, s.reason, s.replay, s.events = state, reason, time.Since(start), ix.events
 	s.invalidations = ix.summary()
 	if state == replayOK {
-		for _, e := range s.entries {
-			if !ix.invalid[e] {
-				s.valid[e] = true
-			}
-		}
+		s.valid = valid
 	}
 	s.mu.Unlock()
 	close(s.ready)
@@ -416,7 +479,7 @@ func (s *SizeStore) watchRoots() []string {
 
 // lookup answers from the cache when the entry for path is still valid.
 func (s *SizeStore) lookup(ctx context.Context, path string) (Stats, bool) {
-	if s == nil {
+	if s == nil || ctx.Err() != nil {
 		return Stats{}, false
 	}
 	e := s.loaded[path]
@@ -440,11 +503,17 @@ func (s *SizeStore) lookup(ctx context.Context, path string) (Stats, bool) {
 			return Stats{}, false
 		}
 	}
+	if ctx.Err() != nil {
+		return Stats{}, false
+	}
 	s.mu.Lock()
 	ok := s.valid[e]
 	s.mu.Unlock()
 	if ok {
-		id, idOK := identify(path)
+		id, idOK := identifyContext(ctx, path)
+		if ctx.Err() != nil {
+			return Stats{}, false
+		}
 		ok = idOK && id.dev == s.dev && id.ino == e.Ino && id.mtime == e.Mtime && id.ctime == e.Ctime && id.real == e.Real
 		if !ok {
 			s.mu.Lock()
@@ -454,6 +523,9 @@ func (s *SizeStore) lookup(ctx context.Context, path string) (Stats, bool) {
 	}
 	if !ok {
 		s.misses.Add(1)
+		return Stats{}, false
+	}
+	if ctx.Err() != nil {
 		return Stats{}, false
 	}
 	s.hits.Add(1)
@@ -601,7 +673,10 @@ func decodeStore(data []byte) (storeFile, bool) {
 	return f, true
 }
 
-// writeStore writes the cache file atomically (private to the user).
+// writeStore writes the cache file atomically (private to the user, at most
+// storeMaxBytes). Close still saves after cancellation so unchanged entries
+// keep their history. This maintenance has no scan context and is confined
+// to the cache directory and its own .sizes-* temporary files.
 func writeStore(file string, f storeFile) error {
 	var buf bytes.Buffer
 	buf.WriteString(storeMagic)
@@ -656,15 +731,19 @@ type rootID struct {
 }
 
 func identify(path string) (rootID, bool) {
+	return identifyContext(context.Background(), path)
+}
+
+func identifyContext(ctx context.Context, path string) (rootID, bool) {
 	var st unix.Stat_t
-	if unix.Lstat(path, &st) != nil {
+	if scanctl.DoIO(ctx, func() error { return unix.Lstat(path, &st) }) != nil || ctx.Err() != nil {
 		return rootID{}, false
 	}
 	clean := filepath.Clean(path)
 	if !filepath.IsAbs(clean) || clean == "/" {
 		return rootID{}, false
 	}
-	dir, ok := canonicalDir(filepath.Dir(clean))
+	dir, ok := canonicalDirContext(ctx, filepath.Dir(clean))
 	if !ok || Within(dir, "/System/Volumes") {
 		// (the data volume is reported through its firmlinks, /Users…:
 		// FSEvents would not match events spelled any other way)
@@ -679,12 +758,12 @@ func identify(path string) (rootID, bool) {
 		// The on-disk spelling of the root's own name, which events carry:
 		// APFS folds names more than FoldPath does ("STRASSE" opens
 		// "straße", "λογοσ" opens "λογος").
-		if p, ok := canonicalPath(clean, unix.O_NOFOLLOW); ok && filepath.Dir(p) == dir {
+		if p, ok := canonicalPathContext(ctx, clean, unix.O_NOFOLLOW); ok && filepath.Dir(p) == dir {
 			name = filepath.Base(p)
 		}
 	}
 	id.real = FoldPath(filepath.Join(dir, name))
-	return id, true
+	return id, ctx.Err() == nil
 }
 
 // canonicalDir returns the path of directory p as the kernel knows it:
@@ -692,15 +771,29 @@ func identify(path string) (rootID, bool) {
 // reports events below a root spelled that way).
 func canonicalDir(p string) (string, bool) { return canonicalPath(p, 0) }
 
+func canonicalDirContext(ctx context.Context, p string) (string, bool) {
+	return canonicalPathContext(ctx, p, 0)
+}
+
 // canonicalPath is canonicalDir with extra open flags (O_NOFOLLOW).
 func canonicalPath(p string, flags int) (string, bool) {
-	fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|flags, 0)
-	if err != nil {
-		return "", false
-	}
-	defer unix.Close(fd)
+	return canonicalPathContext(context.Background(), p, flags)
+}
+
+func canonicalPathContext(ctx context.Context, p string, flags int) (string, bool) {
 	var buf [unix.PathMax]byte
-	if _, _, errno := unix.Syscall(unix.SYS_FCNTL, uintptr(fd), unix.F_GETPATH, uintptr(unsafe.Pointer(&buf[0]))); errno != 0 {
+	err := scanctl.DoIO(ctx, func() error {
+		fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|flags, 0)
+		if err != nil {
+			return err
+		}
+		defer unix.Close(fd)
+		if _, _, errno := unix.Syscall(unix.SYS_FCNTL, uintptr(fd), unix.F_GETPATH, uintptr(unsafe.Pointer(&buf[0]))); errno != 0 {
+			return errno
+		}
+		return nil
+	})
+	if err != nil || ctx.Err() != nil {
 		return "", false
 	}
 	n := bytes.IndexByte(buf[:], 0)
@@ -739,8 +832,16 @@ func (ix *storeIndex) summary() string {
 }
 
 func newStoreIndex(entries []*storedSize) *storeIndex {
+	ix, _ := newStoreIndexContext(context.Background(), entries)
+	return ix
+}
+
+func newStoreIndexContext(ctx context.Context, entries []*storedSize) (*storeIndex, error) {
 	ix := &storeIndex{byReal: map[string][]*storedSize{}, ancestors: map[string]bool{}, invalid: map[*storedSize]bool{}}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return ix, err
+		}
 		ix.byReal[e.Real] = append(ix.byReal[e.Real], e)
 		for q := parentOf(e.Real); q != ""; q = parentOf(q) {
 			if ix.ancestors[q] {
@@ -751,7 +852,7 @@ func newStoreIndex(entries []*storedSize) *storeIndex {
 		ix.sorted = append(ix.sorted, e)
 	}
 	sort.Slice(ix.sorted, func(i, j int) bool { return ix.sorted[i].Real < ix.sorted[j].Real })
-	return ix
+	return ix, ctx.Err()
 }
 
 // parentOf returns the parent of a clean absolute path ("" for "/").

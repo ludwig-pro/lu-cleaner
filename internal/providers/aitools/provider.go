@@ -24,6 +24,10 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanwalk"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -87,9 +91,7 @@ type Provider struct {
 // New returns the provider.
 func New() *Provider {
 	return &Provider{
-		running:    sysx.Running,
-		appDirs:    []string{"/Applications", "~/Applications", "/Applications/Setapp"},
-		execInside: sysExecInside,
+		appDirs: []string{"/Applications", "~/Applications", "/Applications/Setapp"},
 	}
 }
 
@@ -102,6 +104,7 @@ func (p *Provider) Categories() []core.Category {
 // Scan emits items. Every sub-scanner is independent and silent when its
 // tool is absent.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	s := newScanner(ctx, p, env, emit)
 	jobs := []struct {
 		name string
@@ -158,38 +161,31 @@ type scanner struct {
 	emit    core.Emit
 	now     time.Time
 	homeDev int64
-	running func(names ...string) []string
-	// execInside: see Provider.execInside (never nil).
+	// execInside is an optional legacy test seam.
 	execInside func(dir string) bool
 
-	procOnce sync.Once
+	procOnce scanmemo.Once
 	procs    []string // executable paths of running processes
+	procErr  error
 
-	pinnedOnce sync.Once
+	pinnedOnce scanmemo.Once
 	pinned     map[string]bool // rollout paths of pinned Codex threads
 
 	claudeRes *resolver
 	cursorRes *resolver
 
-	appMu sync.Mutex
-	apps  map[string]string // Spotlight lookups of <name>.app ("" = not found)
+	apps scanmemo.Cache[string, string] // Spotlight lookups of <name>.app
 }
 
 func newScanner(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *scanner {
+	ctx = scanctl.Ensure(ctx)
 	s := &scanner{ctx: ctx, p: p, env: env, emit: emit, now: env.Now}
 	if s.now.IsZero() {
 		s.now = time.Now()
 	}
-	s.running = p.running
-	if s.running == nil {
-		s.running = sysx.Running
-	}
 	s.execInside = p.execInside
-	if s.execInside == nil {
-		s.execInside = sysExecInside
-	}
 	var st unix.Stat_t
-	if unix.Stat(env.Home, &st) == nil {
+	if scanctl.DoIO(ctx, func() error { return unix.Stat(env.Home, &st) }) == nil {
 		s.homeDev = int64(st.Dev)
 	}
 	s.claudeRes = newResolver(claudeEncode)
@@ -212,7 +208,7 @@ func (s *scanner) appSupport(rel string) string {
 
 // usable reports whether p may be scanned / proposed at all.
 func (s *scanner) usable(p string) bool {
-	return !s.env.Excluded(p) && !s.env.IsProtected(p)
+	return !s.env.Excluded(p) && !s.env.IsProtectedContext(s.ctx, p)
 }
 
 // findApp returns the path of the first installed <name>.app, or "". The
@@ -240,46 +236,39 @@ func (s *scanner) findApp(names ...string) string {
 // spotlightApp asks Spotlight for an application bundle named <name>.app
 // outside the Trash ("" when none, or when mdfind is unavailable).
 func (s *scanner) spotlightApp(name string) string {
-	s.appMu.Lock()
-	defer s.appMu.Unlock()
-	if p, ok := s.apps[name]; ok {
-		return p
-	}
-	if s.apps == nil {
-		s.apps = map[string]string{}
-	}
-	s.apps[name] = ""
-	if strings.ContainsAny(name, `'"\*`) {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-	defer cancel()
-	q := "kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '" + name + ".app'"
-	out, err := s.env.Output(ctx, "", "mdfind", q)
+	p, err := s.apps.Get(s.ctx, name, func(ctx context.Context) (string, error) {
+		if strings.ContainsAny(name, `'"\*`) {
+			return "", nil
+		}
+		q := "kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '" + name + ".app'"
+		out, err := s.env.OutputTimeout(ctx, 3*time.Second, "", "mdfind", q)
+		if err != nil {
+			return "", err
+		}
+		trash := s.home(".Trash")
+		for _, l := range strings.Split(string(out), "\n") {
+			l = filepath.Clean(strings.TrimSpace(l))
+			if !filepath.IsAbs(l) || fsx.Within(l, trash) || strings.Contains(l, "/.Trashes/") || !isDir(l) {
+				continue
+			}
+			return l, nil
+		}
+		return "", nil
+	})
 	if err != nil {
 		return ""
 	}
-	trash := s.home(".Trash")
-	for _, l := range strings.Split(string(out), "\n") {
-		l = filepath.Clean(strings.TrimSpace(l))
-		if !filepath.IsAbs(l) || fsx.Within(l, trash) || strings.Contains(l, "/.Trashes/") || !isDir(l) {
-			continue
-		}
-		s.apps[name] = l
-		return l
-	}
-	return ""
+	return p
 }
 
 // processPaths returns the absolute executable paths of the running
 // processes (`ps -axo comm=`), plus their symlink-resolved form, fetched
 // once per scan.
-func (s *scanner) processPaths() []string {
-	s.procOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-		defer cancel()
-		out, err := s.env.Output(ctx, "", "ps", "-axo", "comm=")
+func (s *scanner) processPaths() ([]string, error) {
+	if err := s.procOnce.Do(s.ctx, func() {
+		out, err := s.env.OutputTimeout(s.ctx, 3*time.Second, "", "ps", "-axo", "comm=")
 		if err != nil {
+			s.procErr = err
 			return
 		}
 		for _, l := range strings.Split(string(out), "\n") {
@@ -292,8 +281,10 @@ func (s *scanner) processPaths() []string {
 				s.procs = append(s.procs, r)
 			}
 		}
-	})
-	return s.procs
+	}); err != nil {
+		return nil, err
+	}
+	return s.procs, s.procErr
 }
 
 // runningWithin reports whether a running process executable lives in dir.
@@ -304,10 +295,21 @@ func (s *scanner) processPaths() []string {
 // view (proc_pidpath: the resolved executable vnode) is therefore the
 // authority; ps paths are kept as a cheap extra signal.
 func (s *scanner) runningWithin(dir string) bool {
-	if s.execInside(dir) {
+	if s.ctx.Err() != nil {
+		return true // incomplete inspection never proves an old binary is unused
+	}
+	if s.execInside != nil {
+		if s.execInside(dir) {
+			return true
+		}
+	} else if pids, err := sysx.ExecInsideContext(s.ctx, dir); err != nil || pids != "" {
 		return true
 	}
-	for _, p := range s.processPaths() {
+	paths, err := s.processPaths()
+	if err != nil {
+		return true
+	}
+	for _, p := range paths {
 		if fsx.Within(p, dir) {
 			return true
 		}
@@ -317,6 +319,16 @@ func (s *scanner) runningWithin(dir string) bool {
 
 // sysExecInside is the real execInside.
 func sysExecInside(dir string) bool { return sysx.ExecInside(dir) != "" }
+
+func (s *scanner) runningNames(names ...string) ([]string, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.p.running != nil {
+		return s.p.running(names...), nil
+	}
+	return sysx.RunningContext(s.ctx, names...)
+}
 
 // ---------------------------------------------------------------- volumes
 
@@ -331,7 +343,7 @@ const (
 // where tells on which volume p really lives. Parent symlinks are followed
 // by lstat; a symlink p is resolved explicitly.
 func (s *scanner) where(p string) volState {
-	fi, err := os.Lstat(p)
+	fi, err := fsx.Lstat(s.ctx, p)
 	if err != nil {
 		return volGone
 	}
@@ -344,7 +356,7 @@ func (s *scanner) where(p string) volState {
 			return volGone
 		}
 		var st unix.Stat_t
-		if unix.Stat(real, &st) != nil {
+		if scanctl.DoIO(s.ctx, func() error { return unix.Stat(real, &st) }) != nil {
 			return volGone
 		}
 		return s.devState(int64(st.Dev))
@@ -475,7 +487,11 @@ func (s *scanner) publish(it *core.Item, o pubOpts) {
 		it.Recommended = false
 		it.Warn = "on external volume — no internal gain"
 	} else if it.Warn == "" && len(it.ProcessGuard) > 0 && it.Method.Cleanable() {
-		if r := s.running(it.ProcessGuard...); len(r) > 0 {
+		r, err := s.runningNames(it.ProcessGuard...)
+		if err != nil {
+			it.Warn = "process state unavailable — rescan before cleaning"
+			it.Recommended = false
+		} else if len(r) > 0 {
 			it.Warn = strings.Join(r, ", ") + " is running — quit it before cleaning"
 		}
 	}
@@ -571,17 +587,25 @@ type entry struct {
 
 // list returns the entries of dir (symlinks are reported as non-dirs and
 // never followed). Hidden entries are skipped unless hidden is true.
-func list(dir string, hidden bool) []entry {
-	des, err := os.ReadDir(dir)
+func list(ctx context.Context, dir string, hidden bool) []entry {
+	des, err := fsx.ReadDir(ctx, dir)
+	if err != nil {
+		return nil
+	}
+	paths := make([]string, len(des))
+	for i, e := range des {
+		paths[i] = filepath.Join(dir, e.Name())
+	}
+	infos, err := scanio.Lstats(ctx, paths)
 	if err != nil {
 		return nil
 	}
 	out := make([]entry, 0, len(des))
-	for _, d := range des {
+	for i, d := range des {
 		if !hidden && strings.HasPrefix(d.Name(), ".") {
 			continue
 		}
-		fi, err := d.Info()
+		fi, err := infos[i].File, infos[i].Err
 		if err != nil {
 			continue
 		}
@@ -596,9 +620,9 @@ func list(dir string, hidden bool) []entry {
 }
 
 // newestShallow returns the newest mtime of p and its direct children.
-func newestShallow(p string) time.Time {
+func newestShallow(ctx context.Context, p string) time.Time {
 	t := fsx.ModTime(p)
-	for _, e := range list(p, true) {
+	for _, e := range list(ctx, p, true) {
 		if e.mtime.After(t) {
 			t = e.mtime
 		}
@@ -613,7 +637,7 @@ func newestShallow(p string) time.Time {
 func newestDeep(ctx context.Context, p string) (newest time.Time, ok bool) {
 	n := 0
 	ok = true
-	err := filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
+	err := scanwalk.WalkDir(ctx, p, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			ok = false
 			return filepath.SkipAll
@@ -622,7 +646,7 @@ func newestDeep(ctx context.Context, p string) (newest time.Time, ok bool) {
 			ok = false
 			return filepath.SkipAll
 		}
-		fi, err := d.Info()
+		fi, err := fsx.Lstat(ctx, path)
 		if err != nil {
 			ok = false
 			return filepath.SkipAll

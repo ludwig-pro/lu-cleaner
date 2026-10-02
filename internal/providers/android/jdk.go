@@ -69,7 +69,7 @@ func (s *scan) javaHomesInUse(pi *projectInfo) map[string]string {
 // studioJDKs returns the JDK homes registered in Android Studio (jdk.table.xml).
 func (s *scan) studioJDKs() map[string]bool {
 	out := map[string]bool{}
-	ms, _ := filepath.Glob(filepath.Join(s.env.Home, "Library", "Application Support", "Google", "AndroidStudio*", "options", "jdk.table.xml"))
+	ms, _ := fsx.Glob(s.ctx, filepath.Join(s.env.Home, "Library", "Application Support", "Google", "AndroidStudio*", "options", "jdk.table.xml"))
 	for _, m := range ms {
 		for _, sm := range reStudioJDK.FindAllStringSubmatch(readSmall(m), -1) {
 			v := strings.ReplaceAll(sm[1], "$USER_HOME$", s.env.Home)
@@ -104,7 +104,7 @@ func (s *scan) jdks() {
 	var inUse map[string]string
 	var studio map[string]bool
 	for _, sr := range srcs {
-		names := dirNames(sr.dir)
+		names := dirNames(s.ctx, sr.dir)
 		if len(names) == 0 {
 			continue
 		}

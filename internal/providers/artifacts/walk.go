@@ -6,7 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,47 +57,66 @@ var pruneSuffixes = []string{
 type walker struct {
 	s   *scan
 	sem chan struct{}
-	wg  sync.WaitGroup
 }
 
 func newWalker(s *scan) *walker {
-	return &walker{s: s, sem: make(chan struct{}, walkWorkers)}
+	return &walker{s: s, sem: make(chan struct{}, min(walkWorkers, scanctl.From(s.ctx).Limits().IO))}
 }
 
-// run walks dir (inclusive) and waits for the whole subtree.
+// runRoots shares the same worker pool across every root. The sentinel keeps
+// the task count positive until all initial tasks have been submitted.
+func (w *walker) runRoots(roots []*scanRoot) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	for _, r := range roots {
+		if w.s.ctx.Err() != nil {
+			break
+		}
+		wc := walkCtx{root: r, tool: r.tool, git: w.s.findGitAbove(r)}
+		if wc.git != nil && wc.git.linked {
+			wc.tool = wc.git.tool
+		}
+		w.spawn(r.path, wc, &wg)
+	}
+	wg.Done()
+	wg.Wait()
+}
+
+// run walks an extra tree with the scan's pool. Each invocation owns its task
+// count, so concurrent ignored-directory walks never reuse a WaitGroup.
 func (w *walker) run(dir string, wc walkCtx) {
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		w.walk(dir, wc)
-	}()
-	w.wg.Wait()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	w.spawn(dir, wc, &wg)
+	wg.Done()
+	wg.Wait()
 }
 
-func (w *walker) spawn(dir string, wc walkCtx) {
+func (w *walker) spawn(dir string, wc walkCtx, wg *sync.WaitGroup) {
+	if w.s.ctx.Err() != nil {
+		return
+	}
 	select {
 	case w.sem <- struct{}{}:
-		w.wg.Add(1)
+		wg.Add(1)
 		go func() {
-			defer func() { <-w.sem; w.wg.Done() }()
-			w.walk(dir, wc)
+			defer func() { <-w.sem; wg.Done() }()
+			w.walk(dir, wc, wg)
 		}()
 	default:
-		w.walk(dir, wc)
+		w.walk(dir, wc, wg)
 	}
 }
 
-func (w *walker) walk(dir string, wc walkCtx) {
+func (w *walker) walk(dir string, wc walkCtx, wg *sync.WaitGroup) {
 	s := w.s
 	if s.ctx.Err() != nil || !s.markVisited(dir) {
 		return
 	}
-	f, err := os.Open(dir)
+	entries, err := fsx.ReadDir(s.ctx, dir)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	entries, _ := f.ReadDir(-1)
 	names := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		names[e.Name()] = true
@@ -136,8 +159,21 @@ func (w *walker) walk(dir string, wc walkCtx) {
 		}
 	}
 
-	fd := int(f.Fd())
-	var st unix.Stat_t
+	var children []string
+	for _, e := range entries {
+		child := filepath.Join(dir, e.Name())
+		if e.IsDir() && e.Name() != ".git" && !s.env.Excluded(child) && !s.isOtherRoot(child, wc.root) {
+			children = append(children, child)
+		}
+	}
+	infos, err := scanio.Lstats(s.ctx, children)
+	if err != nil {
+		return
+	}
+	metadata := make(map[string]scanio.Info, len(children))
+	for i, child := range children {
+		metadata[filepath.Base(child)] = infos[i]
+	}
 	for _, e := range entries {
 		if s.ctx.Err() != nil {
 			return
@@ -153,7 +189,17 @@ func (w *walker) walk(dir string, wc walkCtx) {
 		if s.env.Excluded(child) || s.isOtherRoot(child, wc.root) {
 			continue
 		}
-		if unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || uint64(st.Dev) != wc.root.dev {
+		info := metadata[name]
+		fi, err := info.File, info.Err
+		if err != nil || fi == nil {
+			continue
+		}
+		stp, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || !fi.IsDir() {
+			continue
+		}
+		st := stp
+		if uint64(st.Dev) != wc.root.dev {
 			continue // unreadable, or a mount point: stay on the root's device
 		}
 		if r := s.rootKeys[fileKey{uint64(st.Dev), st.Ino}]; r != nil && r != wc.root {
@@ -185,7 +231,7 @@ func (w *walker) walk(dir string, wc walkCtx) {
 			if wc.root.tool == "" && wc.tool == "" {
 				next.tool = tool
 			}
-			w.spawn(sub, next)
+			w.spawn(sub, next, wg)
 			continue
 		case strings.HasPrefix(name, "."):
 			continue // hidden folders: only known artifact names (matched above)
@@ -198,7 +244,7 @@ func (w *walker) walk(dir string, wc walkCtx) {
 			s.logf("artifacts: walk capped at %d directories", maxWalkDirs)
 			return
 		}
-		w.spawn(child, next)
+		w.spawn(child, next, wg)
 	}
 }
 
@@ -231,7 +277,7 @@ func (s *scan) match(parent string, parentNames map[string]bool, name, child str
 		if r.Sub != "" {
 			target = filepath.Join(child, r.Sub)
 			var st unix.Stat_t
-			if unix.Lstat(target, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(st.Dev) != wc.root.dev {
+			if scanctl.DoIO(s.ctx, func() error { return unix.Lstat(target, &st) }) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(st.Dev) != wc.root.dev {
 				continue
 			}
 			tkey = fileKey{uint64(st.Dev), st.Ino}
@@ -246,14 +292,14 @@ func (s *scan) match(parent string, parentNames map[string]bool, name, child str
 		var content map[string]bool
 		contentOK, strongOK := false, false
 		if len(r.Content) > 0 || r.Generic {
-			content = dirNames(target)
+			content = dirNames(s.ctx, target)
 			_, contentOK = matchAny(r.Content, content)
 		}
 		if r.NeedContent && !contentOK {
 			continue
 		}
 		if contentOK && len(r.Strong) > 0 && wc.git == nil {
-			strongOK = r.strongOutput(target, content) // only decisive outside git
+			strongOK = r.strongOutput(s.ctx, target, content) // only decisive outside git
 		}
 		s.addCand(&cand{
 			path: target, key: tkey, rule: r, kind: r.kindFor(target), parent: parent,

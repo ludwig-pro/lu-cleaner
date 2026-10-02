@@ -4,11 +4,13 @@ package fsx
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"strings"
 	"syscall"
 	"unsafe"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -34,6 +36,12 @@ const (
 	vnodeFdPathOff          = 24 + 152
 	fWrite                  = 0x0002 // FWRITE in fi_openflags
 	maxFdsPerProc           = 1 << 20
+	writerBatchSize         = 256
+)
+
+var (
+	readWriterTable = func() ([]unix.KinfoProc, error) { return unix.SysctlKinfoProcSlice("kern.proc.all") }
+	writerProcInfo  = procInfoCall
 )
 
 func procInfoCall(call, pid, flavor int, arg uint64, buf []byte) (int, syscall.Errno) {
@@ -47,57 +55,113 @@ func procInfoCall(call, pid, flavor int, arg uint64, buf []byte) (int, syscall.E
 
 // openForWriting returns the paths of the files that inspectable processes
 // hold open for writing (for a file with several hard links, the path it
-// was opened by). ok is false when the process table cannot be read.
-func openForWriting() (paths []string, ok bool) {
-	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+// was opened by). ok is false when the process table cannot be read or an fd
+// table was truncated. Cancellation returns an error and no partial paths.
+func openForWriting(ctx context.Context) (paths []string, ok bool, err error) {
+	var procs []unix.KinfoProc
+	err = scanctl.DoIO(ctx, func() error {
+		var err error
+		procs, err = readWriterTable()
+		return err
+	})
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
 	if err != nil || len(procs) == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 	var fds []byte
 	info := make([]byte, vnodeFdInfoWithPathSize)
 	seen := map[string]bool{}
-	for _, kp := range procs {
-		pid := int(kp.Proc.P_pid)
-		if pid <= 0 {
-			continue
+	pidIndex, fdOffset, fdBytes := 0, 0, 0
+	listed, incomplete := false, false
+	for pidIndex < len(procs) {
+		err := scanctl.DoIO(ctx, func() error {
+			for work := 0; work < writerBatchSize && pidIndex < len(procs); {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				pid := int(procs[pidIndex].Proc.P_pid)
+				if pid <= 0 {
+					pidIndex++
+					continue
+				}
+				if !listed {
+					// NULL buffer: the size the fd table needs now.
+					work++
+					need, errno := writerProcInfo(procInfoCallPidInfo, pid, procPidListFds, 0, nil)
+					if errno != 0 || need <= 0 {
+						pidIndex++ // not ours to inspect, or exited
+						continue
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if need > maxFdsPerProc*procFdInfoSize {
+						incomplete = true
+						return nil
+					}
+					need = min(need+64*procFdInfoSize, maxFdsPerProc*procFdInfoSize)
+					if len(fds) < need {
+						fds = make([]byte, need)
+					}
+					work++
+					n, errno := writerProcInfo(procInfoCallPidInfo, pid, procPidListFds, 0, fds[:need])
+					if errno != 0 || n <= 0 {
+						pidIndex++
+						continue
+					}
+					if n >= need || n%procFdInfoSize != 0 {
+						incomplete = true
+						return nil
+					}
+					fdOffset, fdBytes, listed = 0, n, true
+					continue
+				}
+				work++
+				i := fdOffset
+				fdOffset += procFdInfoSize
+				if fdOffset == fdBytes {
+					pidIndex++
+					listed = false
+				}
+				if binary.LittleEndian.Uint32(fds[i+4:]) != proxFdTypeVnode {
+					continue
+				}
+				fd := int32(binary.LittleEndian.Uint32(fds[i:]))
+				m, errno := writerProcInfo(procInfoCallPidFdInfo, pid, procPidFdVnodePathInfo, uint64(fd), info)
+				if errno != 0 || m < vnodeFdInfoWithPathSize || binary.LittleEndian.Uint32(info)&fWrite == 0 {
+					continue
+				}
+				p := info[vnodeFdPathOff:]
+				if j := bytes.IndexByte(p, 0); j >= 0 {
+					p = p[:j]
+				}
+				if len(p) == 0 || p[0] != '/' || seen[string(p)] {
+					continue
+				}
+				s := string(p)
+				seen[s] = true
+				paths = append(paths, s)
+				// the data volume may be reported through its mount point
+				if rest, found := strings.CutPrefix(s, "/System/Volumes/Data/"); found {
+					paths = append(paths, "/"+rest)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, false, err
 		}
-		// NULL buffer: the size the fd table needs now.
-		need, errno := procInfoCall(procInfoCallPidInfo, pid, procPidListFds, 0, nil)
-		if errno != 0 || need <= 0 {
-			continue // not ours to inspect, or exited
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err()
 		}
-		need = min(need+64*procFdInfoSize, maxFdsPerProc*procFdInfoSize)
-		if len(fds) < need {
-			fds = make([]byte, need)
-		}
-		n, errno := procInfoCall(procInfoCallPidInfo, pid, procPidListFds, 0, fds[:need])
-		if errno != 0 {
-			continue
-		}
-		for i := 0; i+procFdInfoSize <= n; i += procFdInfoSize {
-			if binary.LittleEndian.Uint32(fds[i+4:]) != proxFdTypeVnode {
-				continue
-			}
-			fd := int32(binary.LittleEndian.Uint32(fds[i:]))
-			m, errno := procInfoCall(procInfoCallPidFdInfo, pid, procPidFdVnodePathInfo, uint64(fd), info)
-			if errno != 0 || m < vnodeFdInfoWithPathSize || binary.LittleEndian.Uint32(info)&fWrite == 0 {
-				continue
-			}
-			p := info[vnodeFdPathOff:]
-			if j := bytes.IndexByte(p, 0); j >= 0 {
-				p = p[:j]
-			}
-			if len(p) == 0 || p[0] != '/' || seen[string(p)] {
-				continue
-			}
-			s := string(p)
-			seen[s] = true
-			paths = append(paths, s)
-			// the data volume may be reported through its mount point
-			if rest, found := strings.CutPrefix(s, "/System/Volumes/Data/"); found {
-				paths = append(paths, "/"+rest)
-			}
+		if incomplete {
+			return nil, false, nil
 		}
 	}
-	return paths, true
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return paths, true, nil
 }

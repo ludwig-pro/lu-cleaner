@@ -2,7 +2,6 @@ package apple
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,7 +36,7 @@ func (s *scan) deviceSets() {
 	}
 	for _, set := range deviceSets {
 		dir := s.lib(set.rel...)
-		ents, err := os.ReadDir(dir)
+		ents, err := fsx.ReadDir(s.ctx, dir)
 		if err != nil {
 			continue
 		}
@@ -69,7 +68,7 @@ func (s *scan) deviceSets() {
 			continue
 		}
 		m.apply(it)
-		it.LastUsed = maxTime(childrenNewest(dir), m.newest)
+		it.LastUsed = maxTime(childrenNewest(s.ctx, dir), m.newest)
 		s.emit(it)
 	}
 }
@@ -83,7 +82,7 @@ func (s *scan) coreSimulatorCaches() {
 	var paths []string
 	for _, sub := range []string{"Caches", "Temp"} {
 		dir := filepath.Join(base, sub)
-		ents, err := os.ReadDir(dir)
+		ents, err := fsx.ReadDir(s.ctx, dir)
 		if err != nil {
 			continue
 		}
@@ -139,11 +138,11 @@ func (s *scan) xcodeApps() {
 	}
 	var apps []string
 	for _, pat := range []string{s.sys("/Applications/Xcode*.app"), filepath.Join(s.env.Home, "Applications", "Xcode*.app")} {
-		m, _ := filepath.Glob(pat)
+		m, _ := fsx.Glob(s.ctx, pat)
 		apps = append(apps, m...)
 	}
 	for _, app := range apps {
-		fi, err := os.Lstat(app)
+		fi, err := fsx.Lstat(s.ctx, app)
 		if err != nil || !fi.IsDir() { // symlinks (Xcode.app -> Xcode-16.2.app) are not copies
 			continue
 		}
@@ -214,7 +213,7 @@ func (s *scan) metalToolchain() {
 		return
 	}
 	base := s.sys(metalToolchainAssets)
-	ents, err := os.ReadDir(base)
+	ents, err := fsx.ReadDir(s.ctx, base)
 	if err != nil {
 		return
 	}

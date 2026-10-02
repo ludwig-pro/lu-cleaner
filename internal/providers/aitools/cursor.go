@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // ---------------------------------------------------------------- CachedData
@@ -28,7 +29,7 @@ func (s *scanner) cursorCommit() string {
 	if app == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(app, "Contents/Resources/app/product.json"))
+	data, err := fsx.ReadFile(s.ctx, filepath.Join(app, "Contents/Resources/app/product.json"))
 	if err != nil {
 		return ""
 	}
@@ -49,7 +50,7 @@ func (s *scanner) cursorCachedData() {
 		return
 	}
 	var dirs []entry
-	for _, e := range list(root, false) {
+	for _, e := range list(s.ctx, root, false) {
 		if e.dir {
 			dirs = append(dirs, e)
 		}
@@ -97,7 +98,7 @@ func (s *scanner) cursorWorkspaceStorage() {
 	if !s.usable(root) {
 		return
 	}
-	entries := list(root, false)
+	entries := list(s.ctx, root, false)
 	if len(entries) == 0 {
 		return
 	}
@@ -124,7 +125,7 @@ func (s *scanner) cursorWorkspaceStorage() {
 		if !e.dir {
 			continue
 		}
-		target, ok := workspaceTarget(filepath.Join(e.path, "workspace.json"))
+		target, ok := workspaceTarget(s.ctx, filepath.Join(e.path, "workspace.json"))
 		if !ok {
 			continue
 		}
@@ -134,7 +135,7 @@ func (s *scanner) cursorWorkspaceStorage() {
 			if !ok {
 				last = s.now
 			}
-			chat := workspaceHasChat(e.path)
+			chat := workspaceHasChat(s.ctx, e.path)
 			it := review
 			if !chat && ok && !s.restorable(target) && s.now.Sub(last) >= orphanRecommendAge {
 				it = orphans
@@ -149,7 +150,7 @@ func (s *scanner) cursorWorkspaceStorage() {
 		if !knowAll {
 			continue
 		}
-		for _, c := range list(e.path, false) {
+		for _, c := range list(s.ctx, e.path, false) {
 			if !c.dir || !reExtID.MatchString(c.name) || installed[strings.ToLower(c.name)] {
 				continue
 			}
@@ -196,9 +197,13 @@ func (s *scanner) cursorWorkspaceStorage() {
 // cleaning: every recorded folder must still be missing.
 func workspaceOrphanRecheck(dirs []string) func(context.Context) error {
 	dirs = append([]string(nil), dirs...)
-	return func(context.Context) error {
+	return func(ctx context.Context) error {
 		for _, d := range dirs {
-			if t, ok := workspaceTarget(filepath.Join(d, "workspace.json")); ok && pathExistence(t) != existNo {
+			t, ok := workspaceTarget(ctx, filepath.Join(d, "workspace.json"))
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if ok && pathExistence(t) != existNo {
 				return fmt.Errorf("folder %s exists again (or cannot be checked): rescan", t)
 			}
 		}
@@ -218,9 +223,9 @@ var cursorChatKeys = []string{
 // workspaceHasChat reports whether a workspaceStorage entry holds AI chat
 // data: one of cursorChatKeys in its state DB (a byte search: SQLite stores
 // short text keys inline), or chat session files. Unreadable means yes.
-func workspaceHasChat(dir string) bool {
+func workspaceHasChat(ctx context.Context, dir string) bool {
 	for _, sub := range []string{"chatSessions", "chatEditingSessions"} {
-		if len(list(filepath.Join(dir, sub), true)) > 0 {
+		if len(list(ctx, filepath.Join(dir, sub), true)) > 0 {
 			return true
 		}
 	}
@@ -272,8 +277,8 @@ var reExtID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0
 
 // workspaceTarget returns the local folder (or .code-workspace file) of a
 // workspace.json. Remote URIs are not ok.
-func workspaceTarget(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+func workspaceTarget(ctx context.Context, path string) (string, bool) {
+	data, err := fsx.ReadFile(ctx, path)
 	if err != nil {
 		return "", false
 	}
@@ -301,22 +306,22 @@ func workspaceTarget(path string) (string, bool) {
 func (s *scanner) cursorInstalledExtensions() (map[string]bool, bool) {
 	ids := map[string]bool{}
 	extDir := s.home(".cursor/extensions")
-	for _, e := range list(extDir, false) {
+	for _, e := range list(s.ctx, extDir, false) {
 		if id, _, ok := parseExtensionDir(e.name); ok && e.dir {
 			ids[strings.ToLower(id)] = true
 		}
 	}
-	for _, rec := range readExtensionsJSON(filepath.Join(extDir, "extensions.json")) {
+	for _, rec := range readExtensionsJSON(s.ctx, filepath.Join(extDir, "extensions.json")) {
 		ids[strings.ToLower(rec.Identifier.ID)] = true
 	}
 	app := s.findApp("Cursor")
 	if app == "" {
 		return ids, false
 	}
-	pkgs, _ := filepath.Glob(filepath.Join(app, "Contents/Resources/app/extensions/*/package.json"))
+	pkgs, _ := fsx.Glob(s.ctx, filepath.Join(app, "Contents/Resources/app/extensions/*/package.json"))
 	n := 0
 	for _, p := range pkgs {
-		data, err := os.ReadFile(p)
+		data, err := fsx.ReadFile(s.ctx, p)
 		if err != nil {
 			continue
 		}
@@ -346,8 +351,8 @@ type extensionRecord struct {
 	} `json:"location"`
 }
 
-func readExtensionsJSON(path string) []extensionRecord {
-	data, err := os.ReadFile(path)
+func readExtensionsJSON(ctx context.Context, path string) []extensionRecord {
+	data, err := fsx.ReadFile(ctx, path)
 	if err != nil {
 		return nil
 	}
@@ -377,12 +382,12 @@ func (s *scanner) cursorExtensions() {
 	if !s.usable(root) {
 		return
 	}
-	dirs := list(root, false)
+	dirs := list(s.ctx, root, false)
 	if len(dirs) == 0 {
 		return
 	}
 	obsolete := map[string]bool{}
-	if data, err := os.ReadFile(filepath.Join(root, ".obsolete")); err == nil {
+	if data, err := fsx.ReadFile(s.ctx, filepath.Join(root, ".obsolete")); err == nil {
 		var m map[string]bool
 		if json.Unmarshal(data, &m) == nil {
 			for k, v := range m {
@@ -392,7 +397,7 @@ func (s *scanner) cursorExtensions() {
 			}
 		}
 	}
-	recs := readExtensionsJSON(filepath.Join(root, "extensions.json"))
+	recs := readExtensionsJSON(s.ctx, filepath.Join(root, "extensions.json"))
 	referenced := map[string]bool{} // dir names
 	refIDs := map[string]string{}   // lowercased id -> referenced dir
 	for _, r := range recs {
@@ -468,17 +473,17 @@ var reDigits = regexp.MustCompile(`^\d+$`)
 // (.workspace-trusted "workspacePath"); otherwise the lossy directory name is
 // resolved. Names that are not path encodings (numeric chat ids,
 // "empty-window" for folder-less chats) are unknown.
-func cursorProjectExistence(r *resolver, dir, name string) (ex existence, target string, verified bool) {
+func cursorProjectExistence(ctx context.Context, r *resolver, dir, name string) (ex existence, target string, verified bool) {
 	if reDigits.MatchString(name) || name == "empty-window" {
 		return existUnknown, "", false
 	}
-	if data, err := os.ReadFile(filepath.Join(dir, ".workspace-trusted")); err == nil {
+	if data, err := fsx.ReadFile(ctx, filepath.Join(dir, ".workspace-trusted")); err == nil {
 		if p := findJSONString(data, "workspacePath"); filepath.IsAbs(p) {
 			p = filepath.Clean(p)
 			return pathExistence(p), p, true
 		}
 	}
-	_, ex = r.resolve(name)
+	_, ex = r.resolve(ctx, name)
 	return ex, "", false
 }
 
@@ -490,7 +495,7 @@ func (s *scanner) cursorProjects() {
 	if !s.usable(root) {
 		return
 	}
-	entries := list(root, false)
+	entries := list(s.ctx, root, false)
 	if len(entries) == 0 {
 		return
 	}
@@ -519,7 +524,7 @@ func (s *scanner) cursorProjects() {
 		if !e.dir {
 			continue
 		}
-		ex, target, verified := cursorProjectExistence(s.cursorRes, e.path, e.name)
+		ex, target, verified := cursorProjectExistence(s.ctx, s.cursorRes, e.path, e.name)
 		if ex == existNo {
 			// deep: an ongoing chat writes inside agent-transcripts/<id>/
 			t, ok := newestDeep(s.ctx, e.path)
@@ -537,7 +542,7 @@ func (s *scanner) cursorProjects() {
 		}
 		if p := filepath.Join(e.path, "mcps"); isDir(p) {
 			mcps.Paths = append(mcps.Paths, p)
-			mcps.LastUsed = maxTime(mcps.LastUsed, newestShallow(p))
+			mcps.LastUsed = maxTime(mcps.LastUsed, newestShallow(s.ctx, p))
 		}
 		counted := false
 		for _, sub := range cursorTranscriptDirs {
@@ -545,7 +550,7 @@ func (s *scanner) cursorProjects() {
 			if !isDir(p) {
 				continue
 			}
-			t := newestShallow(p)
+			t := newestShallow(s.ctx, p)
 			if s.now.Sub(t) < transcriptAge {
 				continue
 			}
@@ -595,7 +600,7 @@ func (s *scanner) cursorOrphanRecheck(dirs []string) func(context.Context) error
 		r := newResolver(cursorEncode)
 		r.root = root
 		for _, d := range dirs {
-			if ex, _, _ := cursorProjectExistence(r, d, filepath.Base(d)); ex != existNo {
+			if ex, _, _ := cursorProjectExistence(ctx, r, d, filepath.Base(d)); ex != existNo {
 				return fmt.Errorf("the folder of %s may exist again: rescan", filepath.Base(d))
 			}
 			if t, ok := newestDeep(ctx, d); !ok || time.Since(t) < liveGrace {

@@ -6,23 +6,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
 // output runs a system tool and returns its stdout. WaitDelay bounds the wait
 // for the pipes once the context expired (a helper holding stdout would
 // otherwise keep Output blocked past the timeout).
-func output(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.WaitDelay = time.Second
-	return cmd.Output()
+func output(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return scanctl.Command(ctx, timeout, func(ctx context.Context) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
+				if errors.Is(err, unix.ESRCH) {
+					return os.ErrProcessDone
+				}
+				return err
+			}
+			return nil
+		}
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return out, err
+	})
 }
 
 // Disk describes the volume holding a path.
@@ -52,13 +70,37 @@ func DiskOf(path string) (Disk, error) {
 	return d, nil
 }
 
-var (
-	procMu    sync.Mutex
-	procPaths []string        // full executable paths (ps comm)
-	procBase  map[string]bool // executable basenames (case-sensitive)
-	procAt    time.Time
-	procErr   error
-)
+type processList struct {
+	paths []string
+	base  map[string]bool
+}
+
+var processes probeCache[processList]
+
+// A hook for tests; the cache only receives complete process lists.
+var listProcesses = readProcesses
+
+func readProcesses(ctx context.Context) (processList, error) {
+	out, err := output(ctx, 3*time.Second, "/bin/ps", "-axo", "comm=")
+	if err != nil {
+		return processList{}, fmt.Errorf("cannot list processes: %w", err)
+	}
+	list := processList{base: map[string]bool{}}
+	for _, line := range strings.Split(string(out), "\n") {
+		if err := ctx.Err(); err != nil {
+			return processList{}, err
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			list.paths = append(list.paths, line)
+			list.base[filepath.Base(line)] = true
+		}
+	}
+	if len(list.paths) == 0 {
+		return processList{}, errors.New("cannot list processes: empty process list")
+	}
+	return list, nil
+}
 
 // Running reports which of the given process patterns are currently running.
 //
@@ -76,63 +118,55 @@ func Running(patterns ...string) []string {
 // not be read: callers about to delete must then treat the state as unknown
 // and refuse (mole-style tri-state probe).
 func RunningStrict(patterns ...string) ([]string, error) {
+	return RunningContext(context.Background(), patterns...)
+}
+
+// RunningContext is RunningStrict with cancellation, including while waiting
+// for another caller's process-list refresh.
+func RunningContext(ctx context.Context, patterns ...string) ([]string, error) {
+	ctx = scanctl.Ensure(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(patterns) == 0 {
 		return nil, nil
 	}
-	procMu.Lock()
-	defer procMu.Unlock()
-	if procBase == nil || time.Since(procAt) > 2*time.Second || procErr != nil {
-		procBase = map[string]bool{}
-		procPaths = nil
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		out, err := output(ctx, "/bin/ps", "-axo", "comm=")
-		cancel()
-		procErr = err
-		if err == nil && len(out) == 0 {
-			procErr = errors.New("empty process list")
-		}
-		if err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				procPaths = append(procPaths, line)
-				procBase[filepath.Base(line)] = true
-			}
-		}
-		procAt = time.Now()
+	list, err := processes.get(ctx, 2*time.Second, listProcesses)
+	if err != nil {
+		return nil, err
 	}
 	var hit []string
 	for _, p := range patterns {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if strings.Contains(p, "/") {
-			for _, full := range procPaths {
+			for _, full := range list.paths {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if strings.Contains(full, p) {
 					hit = append(hit, p)
 					break
 				}
 			}
-		} else if procBase[p] {
+		} else if list.base[p] {
 			hit = append(hit, p)
 		}
 	}
-	if procErr != nil {
-		return hit, fmt.Errorf("cannot list processes: %w", procErr)
-	}
-	return hit, nil
+	return hit, ctx.Err()
 }
 
 // InvalidateProcesses forces the next Running call to refresh the process list.
 func InvalidateProcesses() {
-	procMu.Lock()
-	procBase = nil
-	procMu.Unlock()
+	processes.invalidate()
 }
 
 // LocalSnapshots lists APFS local (Time Machine) snapshots of the root
 // volume. They pin deleted blocks: space is not returned until they expire.
 func LocalSnapshots(ctx context.Context) []string {
-	out, err := output(ctx, "/usr/bin/tmutil", "listlocalsnapshots", "/")
+	ctx = scanctl.Ensure(ctx)
+	out, err := output(ctx, 15*time.Second, "/usr/bin/tmutil", "listlocalsnapshots", "/")
 	if err != nil {
 		return nil
 	}
@@ -147,14 +181,11 @@ func LocalSnapshots(ctx context.Context) []string {
 }
 
 var (
-	lsofMu    sync.Mutex
-	lsofCache = map[string]*lsofSnap{}
+	cwdPaths     probeCache[[]procPath]
+	execPaths    probeCache[[]procPath]
+	inspectCwds  = nativeCwds
+	inspectExecs = nativeExecs
 )
-
-type lsofSnap struct {
-	at    time.Time
-	procs []procPath
-}
 
 type procPath struct {
 	pid  string
@@ -163,66 +194,90 @@ type procPath struct {
 }
 
 // newSnap caches procs with their comparison keys.
-func newSnap(procs []procPath) *lsofSnap {
+func newSnap(ctx context.Context, procs []procPath) ([]procPath, error) {
 	for i := range procs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		procs[i].key = fsx.FoldPath(procs[i].path)
 	}
-	return &lsofSnap{at: time.Now(), procs: procs}
+	return procs, ctx.Err()
 }
 
 // openFDs lists (pid, path) pairs for one class: "cwd" = current
 // directories, "txt" = executables, loaded libraries and other mapped files.
 // It uses proc_info(2) natively and falls back to a system-wide
 // `lsof -d <fd> -Fpn`; cached for 5 seconds.
-func openFDs(fd string) []procPath {
-	lsofMu.Lock()
-	defer lsofMu.Unlock()
-	if c := lsofCache[fd]; c != nil && time.Since(c.at) < 5*time.Second {
-		return c.procs
-	}
-	native := nativeCwds
+func openFDs(ctx context.Context, fd string) ([]procPath, error) {
+	cache, native := &cwdPaths, inspectCwds
 	if fd == "txt" {
-		native = nativeExecs
+		cache, native = &execPaths, inspectExecs
 	}
-	if procs, ok := native(); ok {
-		lsofCache[fd] = newSnap(procs)
-		return procs
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	out, _ := output(ctx, "/usr/sbin/lsof", "-w", "-n", "-P", "-d", fd, "-Fpn")
-	cancel()
-	var procs []procPath
-	pid := ""
-	for _, l := range strings.Split(string(out), "\n") {
-		if len(l) < 2 {
-			continue
+	return cache.get(ctx, 5*time.Second, func(ctx context.Context) ([]procPath, error) {
+		procs, ok, err := native(ctx)
+		if err != nil {
+			return nil, err
 		}
-		switch l[0] {
-		case 'p':
-			pid = l[1:]
-		case 'n':
-			procs = append(procs, procPath{pid: pid, path: l[1:]})
+		if ok {
+			return newSnap(ctx, procs)
 		}
-	}
-	lsofCache[fd] = newSnap(procs)
-	return procs
+		out, err := output(ctx, 15*time.Second, "/usr/sbin/lsof", "-w", "-n", "-P", "-d", fd, "-Fpn")
+		if err != nil {
+			return nil, fmt.Errorf("cannot list process %s paths: %w", fd, err)
+		}
+		pid := ""
+		for _, l := range strings.Split(string(out), "\n") {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if len(l) < 2 {
+				continue
+			}
+			switch l[0] {
+			case 'p':
+				pid = l[1:]
+			case 'n':
+				procs = append(procs, procPath{pid: pid, path: l[1:]})
+			}
+		}
+		return newSnap(ctx, procs)
+	})
 }
 
 // invalidateFDs drops the cached process paths (tests).
 func invalidateFDs() {
-	lsofMu.Lock()
-	clear(lsofCache)
-	lsofMu.Unlock()
+	cwdPaths.invalidate()
+	execPaths.invalidate()
 }
 
-func pidsInside(fd, dir string) string {
+func pidsInside(ctx context.Context, fd, dir string) (string, error) {
+	ctx = scanctl.Ensure(ctx)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	dirs := []string{fsx.FoldPath(filepath.Clean(dir))}
-	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+	var real string
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		real, err = filepath.EvalSymlinks(dir)
+		return err
+	})
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err == nil && real != dir {
 		dirs = append(dirs, fsx.FoldPath(real)) // the kernel reports resolved paths (/private/var/…)
+	}
+	procs, err := openFDs(ctx, fd)
+	if err != nil {
+		return "", err
 	}
 	var pids []string
 	seen := map[string]bool{}
-	for _, c := range openFDs(fd) {
+	for _, c := range procs {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if seen[c.pid] {
 			continue
 		}
@@ -240,14 +295,30 @@ func pidsInside(fd, dir string) string {
 			pids = append(pids, c.pid)
 		}
 	}
-	return strings.Join(pids, ",")
+	return strings.Join(pids, ","), ctx.Err()
 }
 
 // CwdInside returns the PIDs (comma separated) of processes whose current
 // directory is dir or below it ("" if none).
-func CwdInside(dir string) string { return pidsInside("cwd", dir) }
+func CwdInside(dir string) string {
+	pids, _ := CwdInsideContext(context.Background(), dir)
+	return pids
+}
+
+// CwdInsideContext reports an error when inspection is incomplete or cancelled.
+func CwdInsideContext(ctx context.Context, dir string) (string, error) {
+	return pidsInside(ctx, "cwd", dir)
+}
 
 // ExecInside returns the PIDs (comma separated) of processes running an
 // executable, or having a library (e.g. a native .node addon) or another
 // file mapped in memory, located in dir.
-func ExecInside(dir string) string { return pidsInside("txt", dir) }
+func ExecInside(dir string) string {
+	pids, _ := ExecInsideContext(context.Background(), dir)
+	return pids
+}
+
+// ExecInsideContext reports an error when inspection is incomplete or cancelled.
+func ExecInsideContext(ctx context.Context, dir string) (string, error) {
+	return pidsInside(ctx, "txt", dir)
+}

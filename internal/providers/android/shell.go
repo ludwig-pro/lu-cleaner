@@ -97,7 +97,7 @@ func cleanShellPath(v, home string) (string, bool) {
 
 // shell returns the variables exported by the user's shell startup files.
 func (s *scan) shell() map[string][]string {
-	s.shellOnce.Do(func() {
+	if err := s.shellOnce.Do(s.ctx, func() {
 		var contents []string
 		for _, f := range shellFiles {
 			if c := readSmall(filepath.Join(s.env.Home, f)); c != "" {
@@ -105,7 +105,9 @@ func (s *scan) shell() map[string][]string {
 			}
 		}
 		s.shellVars = parseShellExports(s.env.Home, contents...)
-	})
+	}); err != nil {
+		return nil
+	}
 	return s.shellVars
 }
 

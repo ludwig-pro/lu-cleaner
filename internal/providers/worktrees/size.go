@@ -2,6 +2,7 @@ package worktrees
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // artifactOrder is the display order of the size breakdown (Meta keys).
@@ -79,16 +81,24 @@ func measure(ctx context.Context, root string) measurement {
 	var found []struct{ path, key string }
 	var nested []string
 	skip := func(path, name string) bool {
+		if ctx.Err() != nil {
+			return true
+		}
 		rel := strings.TrimPrefix(path, root+"/")
 		if rel == path {
 			return false
 		}
 		// (Nothing inside a .git directory counts: its modules/ look bare.)
-		if name != ".git" && !strings.Contains("/"+rel+"/", "/.git/") &&
-			(fsx.Exists(filepath.Join(path, ".git")) || looksBare(path)) {
-			mu.Lock()
-			nested = append(nested, path)
-			mu.Unlock()
+		if name != ".git" && !strings.Contains("/"+rel+"/", "/.git/") {
+			checkout, err := nestedCheckout(ctx, path)
+			if err != nil {
+				return true
+			}
+			if checkout {
+				mu.Lock()
+				nested = append(nested, path)
+				mu.Unlock()
+			}
 		}
 		if k := artifactKey(rel); k != "" {
 			mu.Lock()
@@ -115,6 +125,18 @@ func measure(ctx context.Context, root string) measurement {
 		m.artifacts[f.key] += a.Bytes
 	}
 	return m
+}
+
+// nestedCheckout admits the repeated size-walk marker probes as one small
+// metadata lot. Its caller records the result only after releasing the permit.
+func nestedCheckout(ctx context.Context, path string) (bool, error) {
+	var checkout bool
+	err := scanctl.DoIO(ctx, func() error {
+		_, err := os.Lstat(filepath.Join(path, ".git"))
+		checkout = err == nil || looksBare(path)
+		return ctx.Err()
+	})
+	return checkout, err
 }
 
 // applySize sets the measured size on the item.

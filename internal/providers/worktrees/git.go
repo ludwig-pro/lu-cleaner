@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanwalk"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 const (
@@ -23,10 +25,8 @@ const (
 
 // git runs git with a timeout and returns stdout.
 func (s *scan) git(timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(s.ctx, timeout)
-	defer cancel()
-	out, err := s.env.Output(ctx, "", "git", args...)
-	if err != nil && ctx.Err() != nil && s.ctx.Err() == nil {
+	out, err := s.env.OutputTimeout(s.ctx, timeout, "", "git", args...)
+	if errors.Is(err, context.DeadlineExceeded) && s.ctx.Err() == nil {
 		err = errTimeout
 	}
 	return string(out), err
@@ -135,8 +135,8 @@ func parseWorktreeList(out string) []listEntry {
 
 // repoInfo resolves (once; concurrent callers wait) whether r has remotes
 // and its default branch.
-func (s *scan) repoInfo(r *repo) {
-	r.info.Do(func() { s.resolveRepoInfo(r) })
+func (s *scan) repoInfo(r *repo) error {
+	return r.info.Do(s.ctx, func() { s.resolveRepoInfo(r) })
 }
 
 func (s *scan) resolveRepoInfo(r *repo) {
@@ -264,7 +264,11 @@ func (s *scan) gitState(w *worktree) {
 
 	r := w.repo
 	if r != nil {
-		s.repoInfo(r)
+		if err := s.repoInfo(r); err != nil {
+			w.gitOK = false
+			w.gitErr = "repository state unavailable"
+			return
+		}
 	}
 	// Unpushed commits.
 	switch {
@@ -501,7 +505,7 @@ func (s *scan) ignoredSecrets(w *worktree) (lost []string, errMsg string) {
 			// target (an ignored target inside the worktree is listed itself).
 			// An lstat error keeps the entry (fail closed).
 			if isSecretFile(e) {
-				if fi, err := os.Lstat(filepath.Join(w.path, e)); err != nil || fi.Mode().IsRegular() {
+				if fi, err := fsx.Lstat(s.ctx, filepath.Join(w.path, e)); err != nil || fi.Mode().IsRegular() {
 					found = append(found, filepath.Clean(e))
 				}
 			}
@@ -517,10 +521,10 @@ func (s *scan) ignoredSecrets(w *worktree) (lost []string, errMsg string) {
 		if regenerable(filepath.Base(dir)) {
 			continue
 		}
-		found = append(found, secretsIn(w.path, dir)...)
+		found = append(found, secretsIn(s.ctx, w.path, dir)...)
 	}
 	for _, rel := range found {
-		if !sameAsMain(w, rel) {
+		if !sameAsMain(s.ctx, w, rel) {
 			lost = append(lost, rel)
 		}
 	}
@@ -529,11 +533,11 @@ func (s *scan) ignoredSecrets(w *worktree) (lost []string, errMsg string) {
 
 // secretsIn searches the ignored folder dir (relative to root) for secret
 // files, without following symlinks or entering build output.
-func secretsIn(root, dir string) []string {
+func secretsIn(ctx context.Context, root, dir string) []string {
 	var found []string
 	seen := 0
 	base := filepath.Join(root, dir)
-	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+	_ = scanwalk.WalkDir(ctx, base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -561,18 +565,28 @@ const maxCompare = 1 << 20
 
 // sameAsMain reports whether the file rel of w has an identical copy at the
 // same place in the main working tree.
-func sameAsMain(w *worktree, rel string) bool {
+func sameAsMain(ctx context.Context, w *worktree, rel string) bool {
 	if w.bare || w.main == "" || w.main == w.path {
 		return false
 	}
 	a, b := filepath.Join(w.path, rel), filepath.Join(w.main, rel)
-	fa, err1 := os.Lstat(a)
-	fb, err2 := os.Lstat(b)
+	fa, err1 := fsx.Lstat(ctx, a)
+	fb, err2 := fsx.Lstat(ctx, b)
 	if err1 != nil || err2 != nil || !fa.Mode().IsRegular() || !fb.Mode().IsRegular() ||
 		fa.Size() != fb.Size() || fa.Size() > maxCompare {
 		return false
 	}
-	ca, err1 := os.ReadFile(a)
-	cb, err2 := os.ReadFile(b)
+	var ca, cb []byte
+	err := scanctl.DoIO(ctx, func() error {
+		ca, err1 = os.ReadFile(a)
+		if err1 != nil {
+			return err1
+		}
+		cb, err2 = os.ReadFile(b)
+		return err2
+	})
+	if err != nil {
+		return false
+	}
 	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
 }

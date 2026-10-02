@@ -104,7 +104,7 @@ func resolveFrom(cur string, parts []string, hops int) (string, bool, bool) {
 // locate classifies p. Nothing is followed on disk beyond reading links.
 func (s *scan) locate(p string) location {
 	l := location{Path: p}
-	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+	if fi, err := fsx.Lstat(s.ctx, p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		l.IsLink = true
 	}
 	real, exists, dangling := resolvePartial(p)

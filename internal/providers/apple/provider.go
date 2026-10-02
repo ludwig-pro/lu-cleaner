@@ -10,7 +10,6 @@ package apple
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -19,7 +18,9 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -33,7 +34,7 @@ type Provider struct {
 }
 
 // New returns the provider.
-func New() *Provider { return &Provider{running: sysx.Running} }
+func New() *Provider { return &Provider{} }
 
 func (p *Provider) ID() string    { return "apple" }
 func (p *Provider) Title() string { return "Xcode & iOS simulators" }
@@ -44,6 +45,7 @@ func (p *Provider) Categories() []core.Category {
 // Scan emits items. Every part runs concurrently; missing tools or folders
 // simply produce no items.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	s := newScan(ctx, p, env, emit)
 	parts := []func(){
 		s.derivedData,
@@ -84,7 +86,8 @@ type scan struct {
 
 	// running is the set of guarded processes alive when the scan started
 	// (taken before we spawn xcodebuild/xcrun ourselves).
-	running map[string]bool
+	running    map[string]bool
+	runningErr error
 
 	mu       sync.Mutex
 	panicErr error // first panic of a background part (the engine only recovers Scan's goroutine)
@@ -94,12 +97,17 @@ type scan struct {
 var guardedProcesses = []string{"Xcode", "xcodebuild", "Simulator"}
 
 func newScan(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *scan {
-	running := p.running
-	if running == nil {
-		running = sysx.Running
-	}
+	ctx = scanctl.Ensure(ctx)
 	s := &scan{ctx: ctx, p: p, env: env, emit: emit, homeDev: -1, sizeSem: make(chan struct{}, 4), running: map[string]bool{}}
-	for _, n := range running(guardedProcesses...) {
+	var names []string
+	if ctx.Err() != nil {
+		s.runningErr = ctx.Err()
+	} else if p.running != nil {
+		names = p.running(guardedProcesses...)
+	} else {
+		names, s.runningErr = sysx.RunningContext(ctx, guardedProcesses...)
+	}
+	for _, n := range names {
 		s.running[n] = true
 	}
 	s.realHome = filepath.Clean(env.Home)
@@ -107,7 +115,7 @@ func newScan(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *s
 		s.realHome = r
 	}
 	var st unix.Stat_t
-	if unix.Stat(s.realHome, &st) == nil {
+	if scanctl.DoIO(ctx, func() error { return unix.Stat(s.realHome, &st) }) == nil {
 		s.homeDev = int64(st.Dev)
 	}
 	// Mirror the guard: never the parent of an unset or shared TMPDIR (/tmp
@@ -162,14 +170,12 @@ func (s *scan) item(kind string, cat core.Category, key string) *core.Item {
 
 // skipPath reports paths that must not even be proposed.
 func (s *scan) skipPath(p string) bool {
-	return s.env.Excluded(p) || s.env.IsProtected(p)
+	return s.env.Excluded(p) || s.env.IsProtectedContext(s.ctx, p)
 }
 
 // output runs an external command with a timeout.
 func (s *scan) output(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(s.ctx, timeout)
-	defer cancel()
-	return s.env.Output(ctx, "", name, args...)
+	return s.env.OutputTimeout(s.ctx, timeout, "", name, args...)
 }
 
 func addWarn(it *core.Item, w string) {
@@ -196,6 +202,11 @@ func setMeta(it *core.Item, k, v string) {
 // guardWarn flags items whose ProcessGuard processes are running right now.
 func (s *scan) guardWarn(it *core.Item) {
 	if len(it.ProcessGuard) == 0 {
+		return
+	}
+	if s.runningErr != nil {
+		addWarn(it, "process state unavailable — rescan before cleaning")
+		it.Recommended = false
 		return
 	}
 	var r []string
@@ -227,7 +238,7 @@ func (s *scan) place(p string) placement {
 		return placeMissing
 	}
 	var st unix.Stat_t
-	if unix.Stat(real, &st) != nil {
+	if scanctl.DoIO(s.ctx, func() error { return unix.Stat(real, &st) }) != nil {
 		return placeMissing
 	}
 	if s.homeDev >= 0 && int64(st.Dev) != s.homeDev {
@@ -311,9 +322,13 @@ func (m measured) apply(it *core.Item) {
 func (s *scan) measureFiles(paths ...string) measured {
 	var m measured
 	var rest []string
-	for _, p := range paths {
-		var st unix.Stat_t
-		if unix.Lstat(p, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
+	stats, err := scanio.UnixLstats(s.ctx, paths)
+	if err != nil {
+		return m
+	}
+	for i, p := range paths {
+		st := stats[i].File
+		if stats[i].Err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
 			rest = append(rest, p)
 			continue
 		}
@@ -373,15 +388,23 @@ func setTargets(it *core.Item, paths []string, location string) {
 func newestMTime(paths ...string) time.Time { return fsx.NewestOf(paths...) }
 
 // childrenNewest returns the newest mtime of dir and its direct children.
-func childrenNewest(dir string) time.Time {
+func childrenNewest(ctx context.Context, dir string) time.Time {
 	t := fsx.ModTime(dir)
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
 		return t
 	}
-	for _, e := range ents {
-		if fi, err := e.Info(); err == nil && fi.ModTime().After(t) {
-			t = fi.ModTime()
+	paths := make([]string, len(ents))
+	for i, e := range ents {
+		paths[i] = filepath.Join(dir, e.Name())
+	}
+	infos, err := scanio.Lstats(ctx, paths)
+	if err != nil {
+		return t
+	}
+	for _, info := range infos {
+		if info.Err == nil && info.File.ModTime().After(t) {
+			t = info.File.ModTime()
 		}
 	}
 	return t

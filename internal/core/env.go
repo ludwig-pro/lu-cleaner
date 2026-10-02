@@ -10,13 +10,17 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // Env is everything a provider needs to scan. Built once per run by the CLI.
 type Env struct {
-	Home   string    // user home, absolute
-	TmpDir string    // per-user temp dir, symlinks resolved (/private/var/folders/xx/yyyy/T), see NewEnv
-	Now    time.Time // reference time for ages
+	// ScanLimits is resolved without changing process policy. The invocation
+	// controller carries the effective budgets through the scan context.
+	ScanLimits scanctl.Limits
+	Home       string    // user home, absolute
+	TmpDir     string    // per-user temp dir, symlinks resolved (/private/var/folders/xx/yyyy/T), see NewEnv
+	Now        time.Time // reference time for ages
 
 	// Roots are directories scanned for project artifacts (node_modules, Pods, builds...).
 	Roots []string
@@ -40,6 +44,10 @@ type Env struct {
 	// Protected reports paths the safety guard would never delete; providers
 	// must not propose them. Nil means nothing is protected.
 	Protected func(path string) bool
+	// ProtectedContext uses the consumer's context for guard inventories, so
+	// stopping a picker scan also interrupts glob checks while the invocation
+	// context remains alive (for example during cleaning).
+	ProtectedContext func(context.Context, string) bool
 
 	Runner Runner                           // external command runner (git, xcrun, docker...)
 	Logf   func(format string, args ...any) // debug logging, never nil
@@ -211,9 +219,31 @@ func (e *Env) IsProtected(p string) bool {
 	return e.Protected != nil && e.Protected(p)
 }
 
+func (e *Env) IsProtectedContext(ctx context.Context, p string) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if e.ProtectedContext != nil {
+		return e.ProtectedContext(ctx, p)
+	}
+	return e.IsProtected(p)
+}
+
 // Output is a shortcut for e.Runner.Output.
 func (e *Env) Output(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-	return e.Runner.Output(ctx, dir, name, args...)
+	return OutputTimeout(ctx, e.Runner, 0, dir, name, args...)
+}
+
+// OutputTimeout admits a scan command before starting its execution timeout.
+// A deadline already present on the parent context remains authoritative.
+func OutputTimeout(ctx context.Context, runner Runner, timeout time.Duration, dir, name string, args ...string) ([]byte, error) {
+	return scanctl.Command(ctx, timeout, func(runCtx context.Context) ([]byte, error) {
+		return runner.Output(runCtx, dir, name, args...)
+	})
+}
+
+func (e *Env) OutputTimeout(ctx context.Context, timeout time.Duration, dir, name string, args ...string) ([]byte, error) {
+	return OutputTimeout(ctx, e.Runner, timeout, dir, name, args...)
 }
 
 // Has reports whether binary name is available.

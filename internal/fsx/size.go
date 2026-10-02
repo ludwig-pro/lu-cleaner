@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 
 	"golang.org/x/sys/unix"
 )
@@ -49,17 +50,6 @@ type Options struct {
 	Skip func(path, name string) bool
 	// CrossDevice allows descending into other mounted filesystems.
 	CrossDevice bool
-}
-
-// sem bounds the number of goroutines reading directories across ALL
-// concurrent Size calls, so scanning many items at once stays well behaved.
-var sem = make(chan struct{}, walkers())
-
-func walkers() int {
-	if n, err := strconv.Atoi(os.Getenv("LU_WALKERS")); err == nil && n > 0 {
-		return n
-	}
-	return max(8, runtime.NumCPU()*3)
 }
 
 type hardlink struct {
@@ -138,7 +128,8 @@ type walker struct {
 	links  map[volKey]*hardlink    // regular files with nlink > 1, by inode
 	clones map[volKey]*cloneFamily // cloned files with nlink == 1, by data stream id
 
-	wg sync.WaitGroup
+	wg    sync.WaitGroup
+	spawn chan struct{} // local scheduling only; scanctl admits the actual I/O
 }
 
 // ErrNotExist is returned (wrapped) when the root does not exist.
@@ -149,6 +140,10 @@ var ErrNotExist = os.ErrNotExist
 // opt.CrossDevice. The walk stops early (returning partial stats and
 // ctx.Err()) when ctx is cancelled.
 func Size(ctx context.Context, path string, opt *Options) (st Stats, err error) {
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
+	ctx = scanctl.Ensure(ctx)
 	if c, ok := ctx.Value(cacheKey{}).(*sizeCache); ok && (opt == nil || (opt.Skip == nil && !opt.CrossDevice)) {
 		return c.get(ctx, path)
 	}
@@ -174,19 +169,22 @@ func size(ctx context.Context, path string, opt *Options) (res Stats, err error)
 		return Stats{Errors: 1}, &os.PathError{Op: "size", Path: path, Err: ErrNeedsFullDiskAccess}
 	}
 	var st unix.Stat_t
-	if err := unix.Lstat(path, &st); err != nil {
+	if err := scanctl.DoIO(ctx, func() error { return unix.Lstat(path, &st) }); err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return Stats{}, &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist}
 		}
 		return Stats{}, &os.PathError{Op: "lstat", Path: path, Err: err}
 	}
-	w := &walker{ctx: ctx, dev: st.Dev, links: map[volKey]*hardlink{}, clones: map[volKey]*cloneFamily{}}
+	w := &walker{ctx: ctx, dev: st.Dev, links: map[volKey]*hardlink{}, clones: map[volKey]*cloneFamily{}, spawn: make(chan struct{}, 8)}
 	if opt != nil {
 		w.opt = *opt
 	}
 	var sh fileShare
 	if st.Mode&unix.S_IFMT == unix.S_IFREG && useBulk && useCloneAttrs {
-		sh = shareOf(path)
+		sh, err = shareOfContext(ctx, path)
+		if err != nil {
+			return Stats{}, err
+		}
 	}
 	w.account(&st, sh)
 	if st.Mode&unix.S_IFMT == unix.S_IFDIR {
@@ -196,6 +194,7 @@ func size(ctx context.Context, path string, opt *Options) (res Stats, err error)
 	} else {
 		w.files.Add(1)
 	}
+	scanctl.From(ctx).MarkEntries(w.files.Load(), w.dirs.Load())
 	return w.stats(), ctx.Err()
 }
 
@@ -298,7 +297,7 @@ func (w *walker) accountFile(alloc int64, regular bool, nlink uint32, dev int32,
 // walkBulk lists dir with getattrlistbulk; false means "unsupported here".
 func (w *walker) walkBulk(dir string) bool {
 	var subdirs []string
-	ok, err := readDirBulk(dir, func(e *bulkEntry) {
+	ok, err := readDirBulkContext(w.ctx, dir, func(e *bulkEntry) {
 		if e.hasError || e.name == "" {
 			w.errs.Add(1)
 			return
@@ -335,11 +334,14 @@ func (w *walker) walkBulk(dir string) bool {
 
 func (w *walker) recurse(subdirs []string) {
 	for _, child := range subdirs {
+		if w.ctx.Err() != nil {
+			return
+		}
 		select {
-		case sem <- struct{}{}:
+		case w.spawn <- struct{}{}:
 			w.wg.Add(1)
 			go func(p string) {
-				defer func() { <-sem; w.wg.Done() }()
+				defer func() { <-w.spawn; w.wg.Done() }()
 				w.walk(p)
 			}(child)
 		default:
@@ -359,40 +361,67 @@ func (w *walker) walk(dir string) {
 	if useBulk && w.walkBulk(dir) {
 		return
 	}
-	f, err := os.Open(dir)
+	f, err := openDir(w.ctx, dir)
 	if err != nil {
 		w.errs.Add(1)
 		return
 	}
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		w.errs.Add(1)
-	}
+	defer f.Close()
 	fd := int(f.Fd())
 	var subdirs []string
-	var st unix.Stat_t
-	for _, name := range names {
-		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			w.errs.Add(1)
-			continue
-		}
-		if st.Mode&unix.S_IFMT == unix.S_IFDIR {
-			if !w.opt.CrossDevice && st.Dev != w.dev {
+	type record struct {
+		name string
+		st   unix.Stat_t
+		err  error
+	}
+	for {
+		var records []record
+		err := scanctl.DoIO(w.ctx, func() error {
+			names, readErr := f.Readdirnames(scanBatch)
+			for _, name := range names {
+				if err := w.ctx.Err(); err != nil {
+					return err
+				}
+				r := record{name: name}
+				r.err = unix.Fstatat(fd, name, &r.st, unix.AT_SYMLINK_NOFOLLOW)
+				records = append(records, r)
+			}
+			return readErr
+		})
+		for _, r := range records {
+			if w.ctx.Err() != nil {
+				return
+			}
+			if r.err != nil {
+				w.errs.Add(1)
 				continue
 			}
-			child := filepath.Join(dir, name)
-			if w.opt.Skip != nil && w.opt.Skip(child, name) {
+			name, st := r.name, r.st
+			if st.Mode&unix.S_IFMT == unix.S_IFDIR {
+				if !w.opt.CrossDevice && st.Dev != w.dev {
+					continue
+				}
+				child := filepath.Join(dir, name)
+				if w.opt.Skip != nil && w.opt.Skip(child, name) {
+					continue
+				}
+				w.account(&st, fileShare{})
+				w.dirs.Add(1)
+				subdirs = append(subdirs, child)
 				continue
 			}
 			w.account(&st, fileShare{})
-			w.dirs.Add(1)
-			subdirs = append(subdirs, child)
-			continue
+			w.files.Add(1)
 		}
-		w.account(&st, fileShare{})
-		w.files.Add(1)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				w.errs.Add(1)
+			}
+			break
+		}
 	}
-	f.Close()
+	// Close before recursing: deeply nested trees must not retain open fds.
+	_ = f.Close()
 	w.recurse(subdirs)
 }
 
@@ -448,6 +477,8 @@ type cacheKey struct{}
 
 type sizeCache struct {
 	mu    sync.Mutex
+	ctx   context.Context // invocation owner, not an individual consumer
+	wg    sync.WaitGroup
 	m     map[string]*cacheEntry
 	store *SizeStore // persistent cache (nil: none)
 }
@@ -470,7 +501,16 @@ func WithCache(ctx context.Context) context.Context {
 // without options answer from s when the tree did not change since it was
 // measured, and complete walks are recorded in s. A nil s is WithCache.
 func WithSizeStore(ctx context.Context, s *SizeStore) context.Context {
-	return context.WithValue(ctx, cacheKey{}, &sizeCache{m: map[string]*cacheEntry{}, store: s})
+	ctx = scanctl.Ensure(ctx)
+	return context.WithValue(ctx, cacheKey{}, &sizeCache{ctx: ctx, m: map[string]*cacheEntry{}, store: s})
+}
+
+// WaitCache joins shared measurements after consumers have stopped admitting
+// work. Cancel the invocation first when abandoning the scan.
+func WaitCache(ctx context.Context) {
+	if c, ok := ctx.Value(cacheKey{}).(*sizeCache); ok {
+		c.wg.Wait()
+	}
 }
 
 // measure answers from the persistent cache, or walks and records the walk
@@ -483,7 +523,7 @@ func (c *sizeCache) measure(ctx context.Context, path string) (Stats, error) {
 	if st, ok := s.lookup(ctx, path); ok {
 		return st, nil
 	}
-	id, idOK := identify(path) // before the walk: a change during it shows next time
+	id, idOK := identifyContext(ctx, path) // before the walk: a change during it shows next time
 	start := time.Now()
 	st, err := size(ctx, path, nil)
 	if idOK && err == nil && ctx.Err() == nil {
@@ -495,19 +535,25 @@ func (c *sizeCache) measure(ctx context.Context, path string) (Stats, error) {
 func (c *sizeCache) get(ctx context.Context, path string) (Stats, error) {
 	c.mu.Lock()
 	e, ok := c.m[path]
+	if ctl := scanctl.From(ctx); ctl != nil {
+		ctl.MarkCache(ok)
+	}
 	if !ok {
 		e = &cacheEntry{done: make(chan struct{})}
 		c.m[path] = e
-		c.mu.Unlock()
-		e.st, e.err = c.measure(ctx, path)
-		if ctx.Err() != nil {
-			// partial result: do not keep it
-			c.mu.Lock()
-			delete(c.m, path)
-			c.mu.Unlock()
-		}
-		close(e.done)
-		return e.st, e.err
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			e.st, e.err = c.measure(c.ctx, path)
+			if c.ctx.Err() != nil {
+				// A globally canceled walk is partial. A canceled consumer alone
+				// must not abandon work another consumer is still waiting for.
+				c.mu.Lock()
+				delete(c.m, path)
+				c.mu.Unlock()
+			}
+			close(e.done)
+		}()
 	}
 	c.mu.Unlock()
 	select {

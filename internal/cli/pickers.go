@@ -27,7 +27,7 @@ type pickerSpec struct {
 
 // runPicker opens the TUI picker and prints the summary of what was cleaned.
 func (c *cli) runPicker(ctx context.Context, spec pickerSpec) error {
-	s, err := c.newSetup(spec.roots)
+	s, err := c.newScanSetup(spec.roots, ctx)
 	if err != nil {
 		return err
 	}
@@ -40,6 +40,10 @@ func (c *cli) runPicker(ctx context.Context, spec pickerSpec) error {
 		return errors.New("no scanner handles these categories")
 	}
 	provs = scopeProviders(s, provs)
+	ctx, err = c.startScan(ctx, s)
+	if err != nil {
+		return err
+	}
 	c.propagateNoColor()
 	sum, err := c.Picker(ctx, tui.PickerOptions{
 		Env:        s.env,

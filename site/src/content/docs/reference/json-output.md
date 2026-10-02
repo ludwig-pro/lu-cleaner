@@ -428,7 +428,7 @@ The file itself is JSON Lines with the same entry format, oldest first, so you c
 | Command | Output |
 |---|---|
 | `catalog --json` | Array of catalog entries: `id`, `category`, `name`, `paths`, `risk`, `method`, `mode` (`group` or `each`) and, when set, `exclude`, `command`, `requires`, `process_guard`, `note`, `older_than`, `keep_latest`, `allow_git_repo`, `recommended`, `min_bytes`, `files` |
-| `config show --json` | Effective configuration: `path`, `exists`, `config` (the file's values), resolved `roots` and `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (the `exclude` and `protect` entries that do not exist), `stale_after`, `min_size` (bytes), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
+| `config show --json` | Effective configuration: `path`, `exists`, `config` (the file's values), resolved `roots` and `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (the `exclude` and `protect` entries that do not exist), `stale_after`, `min_size` (bytes), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`), `scan` (`mode`, `io`, `commands`, `prefetch`, `batch_size`, `pause_ms`, `gomaxprocs`, requested `priority`) |
 | `analyze [path] --json` | `root`, `total` and `entries` (every direct child: `name`, `path`, `dir`, `size`, `files`, `unreadable`) |
 | `version --json` | `version`, `go`, `os`, `arch` |
 
@@ -438,7 +438,7 @@ The file itself is JSON Lines with the same entry format, oldest first, so you c
 |---|---|
 | `0` | Success. Items skipped for safety reasons do not change the exit code; check `results[].status`. |
 | `1` | Runtime failure: an invalid configuration file, an I/O error, or at least one item `failed` during a clean. |
-| `2` | Usage error: unknown command or flag, invalid value (`--min-size`, `--older-than`, `--risk` including `never`, `--category` including a tool name such as `cursor`, `--sort`, `--top`, `--limit`, an unknown `artifacts --target` kind), `clean --yes` without `--smart`, `-c` or `-k` (or with only a `-k` naming a scanner that spans several categories), `clean --json` without `--yes`, `clean` without a terminal and without `--yes`, a `--root` that is not a directory or is `/`, a category disabled in the configuration. |
+| `2` | Usage error: unknown command or flag, invalid value (`--scan-mode`, `--min-size`, `--older-than`, `--risk` including `never`, `--category` including a tool name such as `cursor`, `--sort`, `--top`, `--limit`, an unknown `artifacts --target` kind), `clean --yes` without `--smart`, `-c` or `-k` (or with only a `-k` naming a scanner that spans several categories), `clean --json` without `--yes`, `clean` without a terminal and without `--yes`, a `--root` that is not a directory or is `/`, a category disabled in the configuration. |
 | `130` | Interrupted by <kbd>Ctrl</kbd>+<kbd>C</kbd>. |
 | `143` | Interrupted by `SIGTERM`. |
 

@@ -34,6 +34,7 @@ Le fichier est validé à chaque chargement. lu-cleaner refuse d'analyser ou de 
 
 - une clé inconnue, par exemple une faute de frappe comme `stale_afer` ;
 - une taille ou une durée illisible ;
+- un `scan_mode` autre que `eco` ou `fast`, sauf si une option `--scan-mode` valide le remplace ;
 - une `$VARIABLE` non définie dans `exclude` ou `protect`.
 
 Cette rigueur est volontaire : un `protect` ou un `exclude` mal orthographié et ignoré sans prévenir, ou développé en un autre chemin, laisserait sans protection les chemins mêmes que vous vouliez protéger. `config edit` vérifie le fichier à la fermeture de l'éditeur et signale les erreurs de syntaxe TOML et les clés inconnues ; les autres erreurs sont signalées par la commande suivante qui le charge. Un nom inconnu dans `disabled_categories` ne provoque qu'un avertissement, puisque cette clé ne peut que masquer des éléments.
@@ -56,6 +57,9 @@ exclude = ["~/dev/legacy-monorepo"]
 
 # Ne jamais nettoyer ces chemins, ni rien de ce qui les contient.
 protect = ["~/.android/avd/Pixel_8_API_35.avd", "~/Library/Developer/Xcode/Archives"]
+
+# Limiter la charge des analyses sur le processeur et le disque.
+scan_mode = "eco"
 
 # Masquer les petits éléments, et ne considérer comme inactif que ce qui a un mois.
 min_size = "50MB"
@@ -80,6 +84,7 @@ extra_artifacts = ["tmp-build"]
 | [`exclude`](#exclude) | liste de chemins | `[]` | Jamais analysés, jamais nettoyés. |
 | [`protect`](#protect) | liste de chemins | `[]` | Jamais nettoyés, en plus de la liste intégrée. |
 | [`max_depth`](#max_depth) | entier | `8` | Profondeur de la recherche de projets sous chaque racine. |
+| [`scan_mode`](#scan_mode) | `eco` ou `fast` | `"eco"` | Profil de ressources partagé par les scanners et l'analyseur. |
 | [`min_size`](#min_size) | taille | `"1MB"` | Masquer les éléments plus petits dans les listes. |
 | [`stale_after`](#stale_after) | durée | `"14d"` | Délai après lequel un élément inutilisé devient inactif. |
 | [`keep_latest`](#keep_latest) | entier | `1` | Versions les plus récentes des installations versionnées tenues à l'écart de la sélection intelligente. |
@@ -87,7 +92,49 @@ extra_artifacts = ["tmp-build"]
 | [`use_trash`](#use_trash) | booléen | `false` | Déplacer vers la Corbeille au lieu de supprimer. |
 | [`extra_artifacts`](#extra_artifacts) | liste de noms | `[]` | Noms de dossiers d'artefacts de projet supplémentaires. |
 
-Les options de la ligne de commande l'emportent sur le fichier : `--root` remplace `roots` pour l'analyse des artefacts de projet, `--min-size` remplace `min_size`, `--trash` active le mode Corbeille même avec `use_trash = false`, et `--trash=false` le désactive quand `use_trash = true`.
+Les options de la ligne de commande l'emportent sur le fichier : `--scan-mode` remplace `scan_mode`, `--root` remplace `roots` pour l'analyse des artefacts de projet, `--min-size` remplace `min_size`, `--trash` active le mode Corbeille même avec `use_trash = false`, et `--trash=false` le désactive quand `use_trash = true`.
+
+### `scan_mode`
+
+Le profil de ressources des analyses. `eco` est le profil par défaut ; `fast` privilégie le débit. Il s'applique au tableau de bord, à `scan`, aux analyses avant nettoyage, à `analyze` et à `doctor` (y compris `--no-scan`, qui mesure encore la Corbeille).
+
+`eco` laisse davantage de ressources aux autres applications et peut prendre sensiblement plus de temps, surtout au premier scan. Ces réglages limitent la concurrence et changent l'ordonnancement ; ils ne garantissent pas un pourcentage CPU. Les créneaux de commandes comptent les outils lancés directement par lu-cleaner, pas tous les descendants qu'ils peuvent créer. `--dry-run` empêche les suppressions mais effectue les mêmes découvertes et contrôles de sécurité. Le profil de ressources se choisit indépendamment avec `--scan-mode`.
+
+```toml
+scan_mode = "eco"
+```
+
+```bash
+lu-cleaner scan --scan-mode fast       # remplace le fichier pour cette exécution
+lu-cleaner config show --scan-mode eco # montre les limites effectives sans lancer d'analyse
+```
+
+| Limite | `eco` | `fast` |
+| --- | --- | --- |
+| Opérations d'entrée/sortie simultanées, partagées | 2 | 8 |
+| Commandes d'inspection simultanées | 1 | 4 |
+| Mesures anticipées par groupe de workers | 1 | 4 |
+| Entrées par lot de lecture | 256 | 256 |
+| Pause après chaque opération d'entrée/sortie | 5 ms | aucune |
+| Parallélisme CPU de Go | Valeur actuelle, plafonnée à 2 | Hérité |
+| Priorité d'ordonnancement macOS | Arrière-plan pendant l'exécution | Héritée |
+
+Le réglage CPU précédent et la priorité du processus sont rétablis en fin d'exécution. Si macOS ne peut pas changer la priorité, un avertissement s'affiche et les quotas restent actifs. L'aide et les commandes de configuration, d'historique, de version et de catalogue ne changent pas les priorités du processus. `--verbose` affiche les limites résolues et les compteurs de ressources sur stderr ; la progression des scans et de l'analyseur indique le profil actif.
+
+`config show` affiche aussi la valeur résolue de `GOMAXPROCS` et la priorité demandée (`background` ou `inherited`), sans les appliquer. Dans les compteurs verbose, `files` et `dirs` comptent les entrées parcourues pour mesurer les tailles ; `cache_hits` et `cache_misses` décrivent les demandes de taille mémorisées pendant cette invocation. Utilisez `LU_TRACE=1` pour les diagnostics du cache persistant.
+
+Les durées d'attente et de pause suffixées `_cumulative` additionnent le temps de tous les workers et peuvent dépasser la durée réelle de l'exécution. Les durées des providers sont aussi affichées avec `--verbose`. Pour séparer JSON et diagnostics :
+
+```bash
+LU_TRACE=1 lu-cleaner scan --dry-run --scan-mode eco --verbose --json >scan.json 2>scan.log
+LU_WALKERS=1 lu-cleaner config show --json
+```
+
+Le premier scan doit mesurer les arbres absents du cache. Sur les builds macOS compatibles, le cache persistant de tailles réutilise uniquement les mesures complètes dont l'historique du système de fichiers et les vérifications de la racine restent valides. Un historique indisponible, un arbre modifié ou une mesure incomplète impose un nouveau parcours ; `LU_NO_CACHE=1` désactive ce cache pour le diagnostic. Le cache ne dispense pas des découvertes ni des contrôles de processus actifs.
+
+L'annulation est coopérative : Ctrl+C ou SIGTERM arrête les attentes de quota, les pauses et les boucles de parcours, puis rejoint les workers. Les signaux du processus conservent les codes de sortie 130 et 143 ; un second signal provoque une sortie immédiate. Fermer la TUI annule aussi ses travaux de scan et attend leur fin. Ces contrôles logiciels ne peuvent pas interrompre instantanément un appel noyau déjà bloqué.
+
+`LU_WALKERS=<entier positif>` remplace la limite d'entrée/sortie partagée dans les deux profils. Il ne change ni la limite des commandes, ni les mesures anticipées, ni la taille des lots, ni les pauses, ni le réglage CPU. Les valeurs invalides sont ignorées, avec un diagnostic uniquement en mode `--verbose`. Ces réglages pilotent la consommation de ressources ; les deux profils donnent les mêmes éléments et tailles.
 
 ### `roots`
 
@@ -267,7 +314,7 @@ Pour ne nettoyer que ceux-ci : `lu-cleaner clean --yes -k extra-artifact --dry-r
 | `NO_COLOR` | Toute valeur non vide désactive les couleurs, dans la sortie des commandes et dans les écrans interactifs (comme `--no-color`). `TERM=dumb` les désactive aussi dans la sortie des commandes. |
 | `VISUAL`, `EDITOR` | Éditeur utilisé par `lu-cleaner config edit`, `VISUAL` en priorité. Sans l'un ni l'autre, le fichier s'ouvre avec `open -t`. |
 | `TMPDIR` | Votre dossier temporaire utilisateur. Les caches qu'il contient (Metro, Jest, outils Xcode…) sont analysés, et le garde-fou de sécurité n'autorise les suppressions dans votre zone temporaire utilisateur que si `TMPDIR` vous est privé : jamais dans un dossier partagé comme `/tmp`. |
-| `LU_WALKERS` | Nombre maximal de dossiers lus en parallèle pendant la mesure des tailles. Par défaut : 3 × le nombre de cœurs du processeur, au moins 8. Réduisez-le pour alléger la charge sur le disque pendant les analyses. |
+| `LU_WALKERS` | Entier positif remplaçant la limite d'entrée/sortie simultanée partagée entre découverte et mesure. Par défaut : 2 en `eco`, 8 en `fast`. Les valeurs invalides gardent le défaut du profil, avec un diagnostic en mode `--verbose`. |
 | `LU_NO_BULK` | Toute valeur non vide mesure les tailles avec un appel `lstat` par entrée au lieu de l'appel groupé `getattrlistbulk` de macOS. Plus lent : utile uniquement pour diagnostiquer un écart de taille. |
 
 ### Emplacements des outils

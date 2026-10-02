@@ -1,15 +1,17 @@
 package catalog
 
 import (
+	"context"
 	"strings"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 )
 
 // runningGuard returns the running process names among guard (comma separated).
-func runningGuard(guard []string) string {
+func runningGuard(ctx context.Context, guard []string) (string, error) {
 	if len(guard) == 0 {
-		return ""
+		return "", nil
 	}
-	return strings.Join(sysx.Running(guard...), ", ")
+	names, err := sysx.RunningContext(ctx, guard...)
+	return strings.Join(names, ", "), err
 }

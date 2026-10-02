@@ -11,6 +11,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanwalk"
 )
 
 // localModels proposes downloaded local models one by one (caution: they are
@@ -65,7 +66,7 @@ func (s *scanner) ollamaModels() {
 	}
 	var models []model
 	refs := map[string]int{}
-	_ = filepath.WalkDir(mroot, func(p string, d fs.DirEntry, err error) error {
+	_ = scanwalk.WalkDir(s.ctx, mroot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || s.ctx.Err() != nil {
 			return nil
 		}
@@ -80,7 +81,7 @@ func (s *scanner) ollamaModels() {
 		if depth != 4 || strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
-		data, err := os.ReadFile(p)
+		data, err := fsx.ReadFile(s.ctx, p)
 		if err != nil {
 			return nil
 		}
@@ -139,11 +140,11 @@ func (s *scanner) lmStudioModels() {
 		if !s.usable(root) {
 			continue
 		}
-		for _, pub := range list(root, false) {
+		for _, pub := range list(s.ctx, root, false) {
 			if !pub.dir {
 				continue
 			}
-			for _, m := range list(pub.path, false) {
+			for _, m := range list(s.ctx, pub.path, false) {
 				if !m.dir && !isDir(m.path) && !underMissingMount(m.path) { // model dirs may be symlinks to another disk
 					continue
 				}
@@ -171,7 +172,7 @@ func (s *scanner) huggingFaceModels() {
 	if !s.usable(root) {
 		return
 	}
-	for _, e := range list(root, false) {
+	for _, e := range list(s.ctx, root, false) {
 		kind, rest, ok := strings.Cut(e.name, "--")
 		if !e.dir || !ok || (kind != "models" && kind != "datasets" && kind != "spaces") {
 			continue
@@ -201,7 +202,7 @@ func (s *scanner) whisperModels() {
 		if !s.usable(w.dir) {
 			continue
 		}
-		for _, e := range list(w.dir, false) {
+		for _, e := range list(s.ctx, w.dir, false) {
 			name := e.name
 			if !e.dir {
 				ext := filepath.Ext(name)

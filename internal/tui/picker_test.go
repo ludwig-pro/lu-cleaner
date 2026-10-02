@@ -536,7 +536,7 @@ func TestPickerProviderErrorsAndRunningCheck(t *testing.T) {
 	p := &fakeProvider{id: "p", items: []*core.Item{it}}
 	bad := &fakeProvider{id: "bad", err: fmt.Errorf("boom\nstack trace")}
 	m := newTestPicker(t, PickerOptions{Providers: []core.Provider{p, bad}, Flat: true})
-	m.runningFn = func(names ...string) []string { return names }
+	m.runningFn = func(_ context.Context, names ...string) ([]string, error) { return names, nil }
 	d := newDriver(t, m)
 	d.until("scan done", scanDone(m))
 	if len(m.provErrs) != 1 || m.provErrs[0] != "bad: boom" {

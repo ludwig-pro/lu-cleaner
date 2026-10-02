@@ -402,7 +402,12 @@ func TestRealGitDirtyActivity(t *testing.T) {
 	f.file("src/app/src/deep/x/y/Button.tsx", "export {}")
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+		// Fixture timestamps must stay stable after commit returns. Background
+		// maintenance can otherwise remove its lock while touchAll visits it.
+		cmd := exec.Command("git", append([]string{
+			"-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+			"-c", "maintenance.auto=false", "-c", "gc.auto=0",
+		}, args...)...)
 		cmd.Dir = repo
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 		if out, err := cmd.CombinedOutput(); err != nil {

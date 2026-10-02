@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 )
 
 // Checks run by the cleaner right before removing an item (core.Item.Recheck,
@@ -143,28 +143,25 @@ const liveToolsTTL = 30 * time.Second
 
 // liveTools caches the AI tools' session state for rechecks.
 type liveTools struct {
-	mu sync.Mutex
-	at time.Time
-	ts *toolState
+	cache scanmemo.Cache[struct{}, *toolState]
 }
 
 // freshTools reads the Codex, Claude desktop and Conductor state again (at
-// most every liveToolsTTL).
-func (s *scan) freshTools(ctx context.Context) *toolState {
-	s.live.mu.Lock()
-	defer s.live.mu.Unlock()
-	if s.live.ts != nil && time.Since(s.live.at) < liveToolsTTL {
-		return s.live.ts
-	}
-	ts := newToolState()
-	for _, f := range []func(context.Context, *core.Env, string){ts.loadCodex, ts.loadClaudeDesktop, ts.loadConductor} {
-		func() {
-			defer func() { _ = recover() }() // tool state is best effort
-			f(ctx, s.env, s.home)
-		}()
-	}
-	s.live.ts, s.live.at = ts, time.Now()
-	return ts
+// most every liveToolsTTL), sharing an in-flight load without holding a lock.
+func (s *scan) freshTools(ctx context.Context) (*toolState, error) {
+	return s.live.cache.GetTTL(ctx, struct{}{}, liveToolsTTL, func(ctx context.Context) (*toolState, error) {
+		ts := newToolState()
+		for _, f := range []func(context.Context, *core.Env, string){ts.loadCodex, ts.loadClaudeDesktop, ts.loadConductor} {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			func() {
+				defer func() { _ = recover() }() // tool state is best effort
+				f(ctx, s.env, s.home)
+			}()
+		}
+		return ts, ctx.Err()
+	})
 }
 
 // sessionRecheck refuses a worktree that an AI tool started using after the
@@ -178,7 +175,11 @@ func (s *scan) sessionRecheck(w *worktree) func(context.Context) error {
 	path := w.path
 	return func(ctx context.Context) error {
 		probe := &worktree{path: path}
-		s.freshTools(ctx).apply(probe)
+		ts, err := s.freshTools(ctx)
+		if err != nil {
+			return err
+		}
+		ts.apply(probe)
 		if probe.session != "" {
 			return fmt.Errorf("%s since the scan — rescan", probe.session)
 		}

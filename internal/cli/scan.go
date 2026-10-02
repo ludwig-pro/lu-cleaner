@@ -17,6 +17,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/engine"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 )
 
@@ -78,11 +79,15 @@ func (c *cli) runReport(ctx context.Context, spec reportSpec) error {
 	default:
 		return usageErr("--sort must be size, age, name or path")
 	}
-	s, err := c.newSetup(spec.roots)
+	s, err := c.newScanSetup(spec.roots, ctx)
 	if err != nil {
 		return err
 	}
 	f, err := c.buildFilter(s, modeDisplay, spec.cats, spec.kinds)
+	if err != nil {
+		return err
+	}
+	ctx, err = c.startScan(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -125,7 +130,7 @@ func (c *cli) runReport(ctx context.Context, spec reportSpec) error {
 // progress line on stderr.
 func (c *cli) collect(ctx context.Context, s *setup, provs []core.Provider) *engine.Result {
 	provs = scopeProviders(s, provs)
-	st := &scanStats{total: len(provs), sizes: map[string]int64{}}
+	st := &scanStats{total: len(provs), sizes: map[string]int64{}, mode: s.limits.Mode}
 	sp := c.startSpinner(st.line)
 	res := engine.Collect(ctx, s.env, provs, func(ev engine.Event) {
 		st.observe(ev)
@@ -148,6 +153,7 @@ type scanStats struct {
 	total, done int
 	sizes       map[string]int64
 	sum         int64
+	mode        scanctl.Mode
 }
 
 func (s *scanStats) observe(ev engine.Event) {
@@ -164,8 +170,8 @@ func (s *scanStats) observe(ev engine.Event) {
 func (s *scanStats) line() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fmt.Sprintf("scanning… %d/%d providers · %s items · %s",
-		s.done, s.total, formatCount(len(s.sizes)), fsx.Bytes(s.sum))
+	return fmt.Sprintf("scanning… %s · %d/%d providers · %s items · %s",
+		s.mode, s.done, s.total, formatCount(len(s.sizes)), fsx.Bytes(s.sum))
 }
 
 func (c *cli) printProviderErrors(res *engine.Result) {

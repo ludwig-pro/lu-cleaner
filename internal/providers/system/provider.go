@@ -29,6 +29,9 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -64,9 +67,6 @@ func (p *Provider) defaults(env *core.Env) {
 	if p.appDirs == nil {
 		p.appDirs = []string{"/Applications", filepath.Join(env.Home, "Applications"), "/Applications/Setapp"}
 	}
-	if p.running == nil {
-		p.running = sysx.Running
-	}
 	if p.devOf == nil {
 		p.devOf = statDev
 	}
@@ -100,6 +100,7 @@ func statDev(p string) (uint64, error) {
 
 // Scan emits items. It never deletes anything.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	p.defaults(env)
 	s := &scan{
 		p: p, ctx: ctx, env: env, emit: emit,
@@ -181,7 +182,7 @@ type scan struct {
 }
 
 type runResult struct {
-	once sync.Once
+	once scanmemo.Once
 	out  []byte
 	err  error
 }
@@ -216,17 +217,14 @@ func (s *scan) runIn(dir string, timeout time.Duration, name string, args ...str
 		s.runOnce[key] = r
 	}
 	s.runMu.Unlock()
-	r.once.Do(func() {
-		ctx, cancel := context.WithTimeout(s.ctx, timeout)
-		defer cancel()
-		r.out, r.err = s.env.Output(ctx, dir, name, args...)
-		if ctx.Err() != nil {
-			r.err = ctx.Err() // timed out (or scan cancelled): output is partial
-		}
+	if err := r.once.Do(s.ctx, func() {
+		r.out, r.err = s.env.OutputTimeout(s.ctx, timeout, dir, name, args...)
 		if r.err != nil {
 			s.logf("%s %s: %v", name, strings.Join(args, " "), r.err)
 		}
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return r.out, r.err
 }
 
@@ -268,15 +266,28 @@ func (s *scan) appInstalled(bundleID string, names ...string) bool {
 
 // runningOf returns the running processes among patterns (comma separated,
 // "/Visual Studio Code.app/Contents/MacOS/" shown as "Visual Studio Code").
-func (s *scan) runningOf(patterns ...string) string {
+func (s *scan) runningOf(patterns ...string) (string, error) {
 	if len(patterns) == 0 {
-		return ""
+		return "", nil
+	}
+	if err := s.ctx.Err(); err != nil {
+		return "", err
+	}
+	var running []string
+	if s.p.running != nil {
+		running = s.p.running(patterns...)
+	} else {
+		var err error
+		running, err = sysx.RunningContext(s.ctx, patterns...)
+		if err != nil {
+			return "", err
+		}
 	}
 	var names []string
-	for _, r := range s.p.running(patterns...) {
+	for _, r := range running {
 		names = append(names, prettyProc(r))
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, ", "), nil
 }
 
 // prettyProc turns a path pattern into an app name.
@@ -303,7 +314,7 @@ type place struct {
 // home's. Nothing is followed beyond reading links.
 func (s *scan) locate(p string) place {
 	pl := place{Real: p}
-	fi, err := os.Lstat(p)
+	fi, err := fsx.Lstat(s.ctx, p)
 	if err != nil {
 		return pl
 	}
@@ -383,7 +394,7 @@ func (s *scan) allowedTargets(it *core.Item) bool {
 	if !it.Method.Cleanable() || it.Method == core.MethodCommand {
 		return true
 	}
-	ok := func(p string) bool { return !s.env.Excluded(p) && !s.env.IsProtected(p) }
+	ok := func(p string) bool { return !s.env.Excluded(p) && !s.env.IsProtectedContext(s.ctx, p) }
 	if len(it.Paths) > 0 {
 		var keep []string
 		for _, p := range it.Paths {
@@ -410,7 +421,11 @@ func (s *scan) publish(it *core.Item, o pubOpts) {
 		it.ID = itemID(it.Kind, it.Where())
 	}
 	if it.Warn == "" && len(it.ProcessGuard) > 0 {
-		if r := s.runningOf(it.ProcessGuard...); r != "" {
+		r, err := s.runningOf(it.ProcessGuard...)
+		if err != nil {
+			it.Warn = "process state unavailable — rescan before cleaning"
+			it.Recommended = false
+		} else if r != "" {
 			it.Warn = r + " is running — quit it before cleaning"
 		}
 	}
@@ -518,17 +533,25 @@ type entry struct {
 
 // list returns the entries of dir (hidden ones only when hidden is true),
 // sorted by name.
-func list(dir string, hidden bool) []entry {
-	ents, err := os.ReadDir(dir)
+func list(ctx context.Context, dir string, hidden bool) []entry {
+	ents, err := fsx.ReadDir(ctx, dir)
+	if err != nil {
+		return nil
+	}
+	paths := make([]string, len(ents))
+	for i, e := range ents {
+		paths[i] = filepath.Join(dir, e.Name())
+	}
+	infos, err := scanio.Lstats(ctx, paths)
 	if err != nil {
 		return nil
 	}
 	out := make([]entry, 0, len(ents))
-	for _, e := range ents {
+	for i, e := range ents {
 		if !hidden && strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		fi, err := e.Info()
+		fi, err := infos[i].File, infos[i].Err
 		if err != nil {
 			continue
 		}
@@ -584,9 +607,9 @@ func maxTime(ts ...time.Time) time.Time {
 }
 
 // newestShallow returns the newest mtime of dir and its direct children.
-func newestShallow(dir string) time.Time {
+func newestShallow(ctx context.Context, dir string) time.Time {
 	t := fsx.ModTime(dir)
-	for _, e := range list(dir, true) {
+	for _, e := range list(ctx, dir, true) {
 		if e.mtime.After(t) {
 			t = e.mtime
 		}

@@ -1,7 +1,7 @@
 package system
 
 import (
-	"os"
+	"context"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // ------------------------------------------------------------------ Zed
@@ -101,8 +102,8 @@ const jetbrainsLocalHistory = "LocalHistory"
 // one IDE version: the folder itself, or, when it holds a LocalHistory
 // folder, every other entry. ok is false when nothing but the local history
 // is left, or when the folder cannot be listed (it might hold one).
-func jetbrainsCacheTargets(dir string) (paths []string, ok bool) {
-	ents, err := os.ReadDir(dir)
+func jetbrainsCacheTargets(ctx context.Context, dir string) (paths []string, ok bool) {
+	ents, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
 		return nil, false
 	}
@@ -137,7 +138,7 @@ func (s *scan) jetbrains() {
 	dirs := map[string][]jbDir{}      // root kind -> dirs
 	versions := map[string][]string{} // product -> versions with caches or settings
 	for kind, root := range roots {
-		for _, e := range list(root, false) {
+		for _, e := range list(s.ctx, root, false) {
 			if !e.dir {
 				continue
 			}
@@ -201,7 +202,7 @@ func (s *scan) jetbrains() {
 		var labels []string
 		for _, d := range ds {
 			if kind == "jetbrains-old-caches" || kind == "jetbrains-caches" {
-				ps, ok := jetbrainsCacheTargets(d.path)
+				ps, ok := jetbrainsCacheTargets(s.ctx, d.path)
 				if !ok {
 					continue // nothing but the local history
 				}

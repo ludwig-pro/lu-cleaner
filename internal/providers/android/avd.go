@@ -1,7 +1,6 @@
 package android
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // qemuProcesses are the emulator engine binaries (ps comm names).
@@ -99,13 +99,12 @@ var (
 // lines) and whether any emulator engine process is alive.
 func (s *scan) runningAVDs() (map[string]bool, bool) {
 	names := map[string]bool{}
-	alive := len(s.p.running(qemuProcesses...)) > 0
+	procs, err := s.runningNames(qemuProcesses...)
+	alive := err != nil || len(procs) > 0
 	if !alive {
 		return names, false
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-	defer cancel()
-	out, _ := s.env.Output(ctx, "", "pgrep", "-lf", "qemu-system")
+	out, _ := s.env.OutputTimeout(s.ctx, 3*time.Second, "", "pgrep", "-lf", "qemu-system")
 	for _, line := range strings.Split(string(out), "\n") {
 		for _, re := range []*regexp.Regexp{reAvdArg, reAvdAt} {
 			if m := re.FindStringSubmatch(line); m != nil {
@@ -141,7 +140,7 @@ func normImage(v string) string {
 }
 
 func (s *scan) readAVDHome(home string, running map[string]bool, qemuAlive bool, seenDirs map[string]bool) []*avd {
-	ents, err := os.ReadDir(home)
+	ents, err := fsx.ReadDir(s.ctx, home)
 	if err != nil {
 		return nil
 	}
@@ -379,7 +378,7 @@ func (s *scan) emitAVD(a *avd, sdks []*sdkRoot) {
 
 	// Quick Boot / saved snapshots.
 	snapDir := filepath.Join(a.Dir, "snapshots")
-	snaps := dirNames(snapDir)
+	snaps := dirNames(s.ctx, snapDir)
 	if len(snaps) == 0 {
 		return
 	}
@@ -392,7 +391,7 @@ func (s *scan) emitAVD(a *avd, sdks []*sdkRoot) {
 	sn := s.base("android-avd-snapshots", "Quick Boot snapshots · "+a.Display, core.RiskModerate)
 	sn.Path = snapDir
 	sn.ProcessGuard = guard
-	sn.LastUsed = newestMtime(filepath.Join(snapDir, "*", "snapshot.pb"))
+	sn.LastUsed = newestMtime(s.ctx, filepath.Join(snapDir, "*", "snapshot.pb"))
 	sn.Meta = map[string]string{"avd": a.Name, "snapshots": strings.Join(snaps, ", ")}
 	sn.Note = "Saved emulator RAM/device state for fast boot; the next launch cold-boots (30-90 s), apps and data stay (always drop snapshots together with any qcow2/userdata image, never the images alone)."
 	if len(named) > 0 {

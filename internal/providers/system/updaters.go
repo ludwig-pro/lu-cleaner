@@ -38,7 +38,7 @@ func aiOwned(name string) bool {
 // update is still pending.
 func (s *scan) updaters() {
 	var cands []string
-	for _, e := range list(s.appSupport("Caches"), false) {
+	for _, e := range list(s.ctx, s.appSupport("Caches"), false) {
 		if e.dir && strings.HasSuffix(e.name, "-updater") && !aiOwned(e.name) {
 			if p := filepath.Join(e.path, "pending"); isDir(p) {
 				cands = append(cands, p)
@@ -46,7 +46,7 @@ func (s *scan) updaters() {
 		}
 	}
 	caches := s.home("Library/Caches")
-	for _, e := range list(caches, false) {
+	for _, e := range list(s.ctx, caches, false) {
 		if !e.dir || aiOwned(e.name) {
 			continue
 		}
@@ -69,7 +69,7 @@ func (s *scan) updaters() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		if s.env.Excluded(c) || s.env.IsProtected(c) {
+		if s.env.Excluded(c) || s.env.IsProtectedContext(s.ctx, c) {
 			continue
 		}
 		st, _ := fsx.Size(s.ctx, c, nil)

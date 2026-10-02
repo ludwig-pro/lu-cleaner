@@ -184,7 +184,7 @@ func (s *scan) rustup() {
 	for dir, tc := range settings.Overrides {
 		keep[tc] = "override for " + s.env.Pretty(dir)
 	}
-	for _, e := range list(tcDir, false) {
+	for _, e := range list(s.ctx, tcDir, false) {
 		if !e.dir {
 			continue
 		}
@@ -228,7 +228,7 @@ func (s *scan) rbenv() {
 		return
 	}
 	var installed []entry
-	for _, e := range list(vdir, false) {
+	for _, e := range list(s.ctx, vdir, false) {
 		if e.dir {
 			installed = append(installed, e)
 		}
@@ -283,7 +283,7 @@ func (s *scan) rubyVersionsInProjects() map[string]string {
 		if depth >= 3 {
 			return
 		}
-		for _, e := range list(dir, false) {
+		for _, e := range list(s.ctx, dir, false) {
 			if e.dir && !skip[e.name] {
 				walk(e.path, depth+1)
 			}

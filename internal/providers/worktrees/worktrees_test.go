@@ -602,7 +602,7 @@ func TestToolState(t *testing.T) {
 
 func TestClassify(t *testing.T) {
 	home := "/Users/u"
-	s := &scan{home: home, tools: &toolState{claudeWT: map[string]*claudeWT{"/r/app/.claude/worktrees/known": {known: true}}}}
+	s := &scan{ctx: t.Context(), home: home, tools: &toolState{claudeWT: map[string]*claudeWT{"/r/app/.claude/worktrees/known": {known: true}}}}
 	cases := []struct {
 		path, branch, main, want string
 	}{
@@ -631,7 +631,7 @@ func TestClassify(t *testing.T) {
 
 func TestRecommendRules(t *testing.T) {
 	now := time.Now()
-	s := &scan{now: now}
+	s := &scan{ctx: t.Context(), now: now}
 	cases := []struct {
 		name   string
 		merged bool
@@ -764,7 +764,7 @@ func TestCommonDirAndMain(t *testing.T) {
 		{"/u/repo/.git", "", "", false, false},
 	}
 	for _, tc := range cases {
-		c, ok := commonDir(tc.gitdir)
+		c, ok := commonDir(context.Background(), tc.gitdir)
 		if ok != tc.ok || c != tc.common {
 			t.Errorf("%s: common=%q ok=%v", tc.gitdir, c, ok)
 			continue

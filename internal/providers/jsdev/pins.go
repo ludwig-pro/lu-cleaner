@@ -247,7 +247,7 @@ func (w *projectWalk) walk(dir string, depth, rel int) {
 	w.budget[b]--
 	w.mu.Unlock()
 
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(w.ctx, dir)
 	if err != nil {
 		// A folder that vanished meanwhile hides nothing; any other error
 		// (EACCES, EPERM/TCC, I/O) may hide a project.

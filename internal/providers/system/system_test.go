@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -464,7 +465,7 @@ func TestBrewAPIVersionsChecksOffsets(t *testing.T) {
 	f := newFixture(t, "homebrew")
 	brewAPI(f, map[string]string{"aa": `{"stable_version":"1.0"}`, "bb": `{"stable_version":"2.0","revision":3}`})
 	cache := f.abs("Library/Caches/Homebrew")
-	got := brewAPIVersions(cache, []string{"aa", "bb", "zz"})
+	got := brewAPIVersions(context.Background(), cache, []string{"aa", "bb", "zz"})
 	if got["aa"] != "1.0" || got["bb"] != "2.0_3" || len(got) != 2 {
 		t.Fatalf("versions = %v", got)
 	}
@@ -476,13 +477,13 @@ func TestBrewAPIVersionsChecksOffsets(t *testing.T) {
 	fm["aa"], fm["bb"] = fm["bb"], fm["aa"] // swapped: keys no longer match
 	b, _ = json.Marshal(m)
 	os.WriteFile(idx, b, 0o644)
-	if got := brewAPIVersions(cache, []string{"aa", "bb"}); len(got) != 0 {
+	if got := brewAPIVersions(context.Background(), cache, []string{"aa", "bb"}); len(got) != 0 {
 		t.Errorf("swapped index trusted: %v", got)
 	}
 	m["version"] = 2
 	b, _ = json.Marshal(m)
 	os.WriteFile(idx, b, 0o644)
-	if got := brewAPIVersions(cache, []string{"aa"}); len(got) != 0 {
+	if got := brewAPIVersions(context.Background(), cache, []string{"aa"}); len(got) != 0 {
 		t.Errorf("unknown index format trusted: %v", got)
 	}
 }
@@ -534,7 +535,7 @@ func TestBrewLayout(t *testing.T) {
 	f.runner.paths["brew"] = f.abs("usr/local/bin/brew")
 	env := map[string]string{"HOMEBREW_CACHE": f.abs("envcache"), "HOMEBREW_LOGS": "relative/ignored"}
 	f.p.getenv = func(k string) string { return env[k] }
-	s := &scan{p: f.p, env: f.env}
+	s := &scan{ctx: t.Context(), p: f.p, env: f.env}
 	l, ok := s.brewLayout()
 	if !ok || l.prefix != f.abs("usr/local") || l.repository != f.abs("usr/local/Homebrew") || l.cellar != f.abs("usr/local/Cellar") {
 		t.Fatalf("layout = %+v", l)

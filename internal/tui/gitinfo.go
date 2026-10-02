@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // gitKind classifies a directory listed by the analyzer.
@@ -44,8 +46,12 @@ type gitInfo struct {
 // `git worktree remove`); everything else holding git data is refused, since
 // an rm -rf would lose uncommitted work or the history itself.
 func classifyGit(dir string) gitInfo {
+	return classifyGitContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func classifyGitContext(ctx context.Context, dir string) gitInfo {
 	dotgit := filepath.Join(dir, ".git")
-	fi, err := os.Lstat(dotgit)
+	fi, err := fsx.Lstat(ctx, dotgit)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// A directory named .git holds a repository's history even when it
@@ -53,7 +59,7 @@ func classifyGit(dir string) gitInfo {
 		if strings.EqualFold(filepath.Base(dir), ".git") {
 			return refuseRepo("git data", "the git data of a repository")
 		}
-		if isBareRepo(dir) {
+		if isBareRepoContext(ctx, dir) {
 			return refuseRepo("git repo (bare)", "a bare git repository")
 		}
 		return gitInfo{}
@@ -68,16 +74,16 @@ func classifyGit(dir string) gitInfo {
 		return refuseOther("git checkout (.git symlink)", "its .git is a symlink: a checkout that git cannot remove safely")
 	}
 
-	gitdir, ok := readGitdirFile(dotgit)
+	gitdir, ok := readGitdirFileContext(ctx, dotgit)
 	if !ok {
 		return refuseOther("git checkout (.git file)", "its .git file cannot be resolved")
 	}
-	if inside(gitdir, dir) {
+	if insideContext(ctx, gitdir, dir) {
 		// e.g. `git clone --bare url .bare && echo "gitdir: ./.bare" > .git`:
 		// the whole history and every branch live in this directory.
 		return refuseRepo("git repo (bare layout)", "a git repository whose history lives inside it")
 	}
-	gfi, err := os.Stat(gitdir)
+	gfi, err := statFile(ctx, gitdir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return refuseOther("git checkout (orphaned)", "its git dir is gone (orphaned worktree?) — clean it from the Worktrees view (lu-cleaner worktrees)")
@@ -87,12 +93,12 @@ func classifyGit(dir string) gitInfo {
 		return refuseOther("git checkout (.git file)", "its .git file does not point to a git dir")
 	}
 
-	cb, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	cb, err := readFile(ctx, filepath.Join(gitdir, "commondir"))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// A full git dir outside the checkout: a submodule, or the main
 		// working tree of a --separate-git-dir repository.
-		if underModules(gitdir) {
+		if underModulesContext(ctx, gitdir) {
 			return refuseOther("git submodule", "a git submodule checkout (uncommitted work would be lost)")
 		}
 		return refuseRepo("git repo (separate git dir)", "the working tree of a git repository (separate git dir)")
@@ -109,21 +115,21 @@ func classifyGit(dir string) gitInfo {
 	common = filepath.Clean(common)
 
 	// A linked worktree's admin dir is <common>/worktrees/<name>.
-	if filepath.Base(filepath.Dir(gitdir)) != "worktrees" || !samePath(filepath.Dir(filepath.Dir(gitdir)), common) {
+	if filepath.Base(filepath.Dir(gitdir)) != "worktrees" || !samePathContext(ctx, filepath.Dir(filepath.Dir(gitdir)), common) {
 		return refuseOther("git checkout (.git file)", "unrecognised git layout (not a linked worktree)")
 	}
-	if underModules(common) {
+	if underModulesContext(ctx, common) {
 		return refuseOther("git submodule worktree", "a worktree of a git submodule")
 	}
-	if inside(common, dir) {
+	if insideContext(ctx, common, dir) {
 		return refuseRepo("git repo (bare layout)", "a git repository whose history lives inside it")
 	}
-	if !isGitDir(common) {
+	if !isGitDirContext(ctx, common) {
 		return refuseOther("git checkout (orphaned)", "its repository is missing or unreadable — clean it from the Worktrees view (lu-cleaner worktrees)")
 	}
 	// The admin dir must point back here: a copied or moved worktree is not
 	// the one git knows, and `git worktree remove` would act on another path.
-	back, err := os.ReadFile(filepath.Join(gitdir, "gitdir"))
+	back, err := readFile(ctx, filepath.Join(gitdir, "gitdir"))
 	if err != nil {
 		return refuseOther("git checkout (unregistered)", "git has no record of this worktree")
 	}
@@ -131,14 +137,14 @@ func classifyGit(dir string) gitInfo {
 	if b != "" && !filepath.IsAbs(b) {
 		b = filepath.Join(gitdir, b) // worktree.useRelativePaths
 	}
-	if b == "" || !samePath(filepath.Clean(b), dotgit) {
+	if b == "" || !samePathContext(ctx, filepath.Clean(b), dotgit) {
 		return refuseOther("git checkout (copy)", "git registers this worktree elsewhere: a copy or a moved worktree")
 	}
 	info := gitInfo{kind: gitWorktree, common: common, main: common, label: "🌳 linked worktree"}
 	if filepath.Base(common) == ".git" {
 		info.main = filepath.Dir(common)
 	}
-	if _, err := os.Lstat(filepath.Join(gitdir, "locked")); err == nil {
+	if _, err := fsx.Lstat(ctx, filepath.Join(gitdir, "locked")); err == nil {
 		info.locked = true
 		info.label += " · locked"
 	}
@@ -162,8 +168,12 @@ func (e *anEntry) refusal() string {
 // objects/, refs/), whose content is a repository's history and state. It
 // returns "" otherwise.
 func gitDataRefusal(dir string) string {
+	return gitDataRefusalContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func gitDataRefusalContext(ctx context.Context, dir string) string {
 	for a := filepath.Clean(dir); ; a = filepath.Dir(a) {
-		if strings.EqualFold(filepath.Base(a), ".git") || isBareRepo(a) {
+		if strings.EqualFold(filepath.Base(a), ".git") || isBareRepoContext(ctx, a) {
 			return "part of the git data of the repository " + a
 		}
 		if a == filepath.Dir(a) {
@@ -185,13 +195,17 @@ func dotGitFileRefusal(p string) string {
 // gitDataEntryRefusal is the refusal of an entry about to be deleted: a .git
 // file or symlink, anything inside a git dir, and (isDir) a git dir itself.
 func gitDataEntryRefusal(path string, isDir bool) string {
+	return gitDataEntryRefusalContext(scanctl.Ensure(context.Background()), path, isDir)
+}
+
+func gitDataEntryRefusalContext(ctx context.Context, path string, isDir bool) string {
 	if !isDir {
 		if why := dotGitFileRefusal(path); why != "" {
 			return why
 		}
-		return gitDataRefusal(filepath.Dir(path))
+		return gitDataRefusalContext(ctx, filepath.Dir(path))
 	}
-	return gitDataRefusal(path)
+	return gitDataRefusalContext(ctx, path)
 }
 
 // nestedRepoMaxDepth bounds the search for repositories inside a folder the
@@ -209,8 +223,12 @@ var nestedSkip = map[string]bool{"node_modules": true, "Pods": true, ".gradle": 
 // inspect or another app's container (it cannot be read without Full Disk
 // Access, and reading it would raise a macOS prompt) is an error.
 func nestedRepoIn(dir string) (string, error) {
+	return nestedRepoInContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func nestedRepoInContext(ctx context.Context, dir string) (string, error) {
 	var blocked string
-	found, err := safety.FindNestedRepo(dir, nestedRepoMaxDepth, 0, func(p, name string) bool {
+	found, err := safety.FindNestedRepoContext(ctx, dir, nestedRepoMaxDepth, 0, func(p, name string) bool {
 		if fsx.AppDataProtected(p) {
 			if blocked == "" {
 				blocked = p
@@ -234,22 +252,32 @@ func nestedRepoIn(dir string) (string, error) {
 // when it cannot be fully inspected it is refused unless force. nested is
 // the search (nestedRepoIn when nil).
 func recheckPlain(path string, dir, force bool, nested func(string) (string, error)) error {
-	if why := gitDataEntryRefusal(path, dir); why != "" {
+	return recheckPlainContext(scanctl.Ensure(context.Background()), path, dir, force, nested)
+}
+
+func recheckPlainContext(ctx context.Context, path string, dir, force bool, nested func(string) (string, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if why := gitDataEntryRefusalContext(ctx, path, dir); why != "" {
 		return fmt.Errorf("%s — the analyzer never deletes git data", why)
 	}
 	if !dir {
 		return nil
 	}
-	switch g := classifyGit(path); g.kind {
+	switch g := classifyGitContext(ctx, path); g.kind {
 	case gitRepo, gitOther:
 		return fmt.Errorf("%s — the analyzer never deletes it", g.why)
 	case gitWorktree:
 		return errors.New("became a linked worktree since it was listed — rescan (worktrees are removed through git)")
 	}
 	if nested == nil {
-		nested = nestedRepoIn
+		nested = func(path string) (string, error) { return nestedRepoInContext(ctx, path) }
 	}
 	found, err := nested(path)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	switch {
 	case found != "":
 		return fmt.Errorf("contains the git repository or worktree %s — the analyzer never deletes git repositories; move or delete it first", found)
@@ -287,15 +315,29 @@ func readGitdirFile(p string) (string, bool) {
 	return filepath.Clean(g), true
 }
 
+func readGitdirFileContext(ctx context.Context, p string) (string, bool) {
+	var dir string
+	var ok bool
+	_ = scanctl.DoIO(ctx, func() error {
+		dir, ok = readGitdirFile(p)
+		return nil
+	})
+	return dir, ok
+}
+
 // isBareRepo reports a bare repository layout: HEAD file, objects/ and refs/
 // (the same test as the safety guard).
 func isBareRepo(dir string) bool {
-	h, err := os.Lstat(filepath.Join(dir, "HEAD"))
+	return isBareRepoContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func isBareRepoContext(ctx context.Context, dir string) bool {
+	h, err := fsx.Lstat(ctx, filepath.Join(dir, "HEAD"))
 	if err != nil || !h.Mode().IsRegular() {
 		return false
 	}
 	for _, sub := range []string{"objects", "refs"} {
-		if fi, err := os.Lstat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
+		if fi, err := fsx.Lstat(ctx, filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
 			return false
 		}
 	}
@@ -304,11 +346,15 @@ func isBareRepo(dir string) bool {
 
 // isGitDir reports whether dir looks like a usable git dir (HEAD, objects/, refs/).
 func isGitDir(dir string) bool {
-	if fi, err := os.Stat(filepath.Join(dir, "HEAD")); err != nil || !fi.Mode().IsRegular() {
+	return isGitDirContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func isGitDirContext(ctx context.Context, dir string) bool {
+	if fi, err := statFile(ctx, filepath.Join(dir, "HEAD")); err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
 	for _, sub := range []string{"objects", "refs"} {
-		if fi, err := os.Stat(filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
+		if fi, err := statFile(ctx, filepath.Join(dir, sub)); err != nil || !fi.IsDir() {
 			return false
 		}
 	}
@@ -321,12 +367,16 @@ func isGitDir(dir string) bool {
 // submodule checked out in a worktree). A plain folder named "modules" (e.g.
 // ~/code/modules/api) does not count: its worktrees stay deletable.
 func underModules(p string) bool {
+	return underModulesContext(scanctl.Ensure(context.Background()), p)
+}
+
+func underModulesContext(ctx context.Context, p string) bool {
 	for a := filepath.Clean(p); ; {
 		parent := filepath.Dir(a)
 		if parent == a {
 			return false
 		}
-		if strings.EqualFold(filepath.Base(a), "modules") && gitAdminDir(parent) {
+		if strings.EqualFold(filepath.Base(a), "modules") && gitAdminDirContext(ctx, parent) {
 			return true
 		}
 		a = parent
@@ -336,37 +386,79 @@ func underModules(p string) bool {
 // gitAdminDir reports a git dir (HEAD, objects/, refs/) or a linked
 // worktree's admin dir (HEAD and a commondir file).
 func gitAdminDir(dir string) bool {
-	if isGitDir(dir) {
+	return gitAdminDirContext(scanctl.Ensure(context.Background()), dir)
+}
+
+func gitAdminDirContext(ctx context.Context, dir string) bool {
+	if isGitDirContext(ctx, dir) {
 		return true
 	}
-	h, err := os.Stat(filepath.Join(dir, "HEAD"))
+	h, err := statFile(ctx, filepath.Join(dir, "HEAD"))
 	if err != nil || !h.Mode().IsRegular() {
 		return false
 	}
-	c, err := os.Stat(filepath.Join(dir, "commondir"))
+	c, err := statFile(ctx, filepath.Join(dir, "commondir"))
 	return err == nil && c.Mode().IsRegular()
 }
 
 // samePath compares two paths the way APFS does (case and Unicode
 // normalization insensitive), also after resolving symlinks.
 func samePath(a, b string) bool {
+	return samePathContext(scanctl.Ensure(context.Background()), a, b)
+}
+
+func samePathContext(ctx context.Context, a, b string) bool {
 	if safety.Key(a) == safety.Key(b) {
 		return true
 	}
-	return safety.Key(resolved(a)) == safety.Key(resolved(b))
+	return safety.Key(resolvedContext(ctx, a)) == safety.Key(resolvedContext(ctx, b))
 }
 
 // inside reports whether p is dir or below it, as given or with symlinks
 // resolved (so a git dir reached through a symlink still counts).
 func inside(p, dir string) bool {
-	return safety.Within(p, dir) || safety.Within(resolved(p), resolved(dir))
+	return insideContext(scanctl.Ensure(context.Background()), p, dir)
+}
+
+func insideContext(ctx context.Context, p, dir string) bool {
+	return safety.Within(p, dir) || safety.Within(resolvedContext(ctx, p), resolvedContext(ctx, dir))
 }
 
 func resolved(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	return resolvedContext(scanctl.Ensure(context.Background()), p)
+}
+
+func resolvedContext(ctx context.Context, p string) string {
+	var r string
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		r, err = filepath.EvalSymlinks(p)
+		return err
+	})
+	if err == nil {
 		return r
 	}
 	return p
+}
+
+func statFile(ctx context.Context, p string) (os.FileInfo, error) {
+	var fi os.FileInfo
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		fi, err = os.Stat(p)
+		return err
+	})
+	return fi, err
+}
+
+func readFile(ctx context.Context, p string) ([]byte, error) {
+	var data []byte
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		data, err = os.ReadFile(p)
+		return err
+	})
+	return data, err
 }
 
 func errText(err error) string {

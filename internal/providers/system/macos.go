@@ -60,7 +60,7 @@ func (s *scan) macosInfo() {
 	}
 	if s.p.updatesDir != "-" && isDir(s.p.updatesDir) {
 		var paths []string
-		for _, e := range list(s.p.updatesDir, false) {
+		for _, e := range list(s.ctx, s.p.updatesDir, false) {
 			if e.dir {
 				paths = append(paths, e.path)
 			}

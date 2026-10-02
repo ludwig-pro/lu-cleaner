@@ -1,10 +1,8 @@
 package aitools
 
 import (
-	"context"
 	"encoding/json"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // ---------------------------------------------------------------- Codex rollouts
@@ -31,11 +30,11 @@ func (s *scanner) codexSessions() {
 	}
 	pinned := s.codexPinnedRollouts()
 	cutoff := s.now.Add(-codexSessionAge)
-	for _, y := range list(root, false) {
+	for _, y := range list(s.ctx, root, false) {
 		if !y.dir || !reYear.MatchString(y.name) {
 			continue
 		}
-		for _, m := range list(y.path, false) {
+		for _, m := range list(s.ctx, y.path, false) {
 			if s.ctx.Err() != nil {
 				return
 			}
@@ -46,11 +45,11 @@ func (s *scanner) codexSessions() {
 			it.ID = itemID(it.Kind, m.path)
 			it.ProcessGuard = procCodex
 			skipped := 0
-			for _, d := range list(m.path, false) {
+			for _, d := range list(s.ctx, m.path, false) {
 				if !d.dir {
 					continue
 				}
-				for _, f := range list(d.path, false) {
+				for _, f := range list(s.ctx, d.path, false) {
 					if f.dir || !strings.HasSuffix(f.name, ".jsonl") || !f.mtime.Before(cutoff) {
 						continue
 					}
@@ -86,7 +85,7 @@ func (s *scanner) codexArchived() {
 	}
 	pinned := s.codexPinnedRollouts()
 	groups := map[string]*core.Item{}
-	for _, f := range list(root, false) {
+	for _, f := range list(s.ctx, root, false) {
 		if f.dir || !strings.HasSuffix(f.name, ".jsonl") || s.now.Sub(f.mtime) < day || pinned[f.path] {
 			continue
 		}
@@ -114,13 +113,15 @@ func (s *scanner) codexArchived() {
 // codexPinnedRollouts reads the rollout paths of pinned threads from the
 // newest ~/.codex/state_*.sqlite (read-only). Empty when sqlite3 is absent.
 func (s *scanner) codexPinnedRollouts() map[string]bool {
-	s.pinnedOnce.Do(func() { s.pinned = s.readCodexPinned() })
+	if err := s.pinnedOnce.Do(s.ctx, func() { s.pinned = s.readCodexPinned() }); err != nil {
+		return nil
+	}
 	return s.pinned
 }
 
 func (s *scanner) readCodexPinned() map[string]bool {
 	out := map[string]bool{}
-	dbs, _ := filepath.Glob(s.home(".codex/state_*.sqlite"))
+	dbs, _ := fsx.Glob(s.ctx, s.home(".codex/state_*.sqlite"))
 	if len(dbs) == 0 || !s.env.Has("sqlite3") {
 		return out
 	}
@@ -148,9 +149,7 @@ func dbNumber(p string) int {
 func (s *scanner) sqliteQuery(db, query string) ([]string, bool) {
 	u := (&url.URL{Scheme: "file", Path: db}).String()
 	for _, mode := range []string{"?mode=ro", "?immutable=1"} {
-		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-		out, err := s.env.Output(ctx, "", "sqlite3", "-readonly", u+mode, query)
-		cancel()
+		out, err := s.env.OutputTimeout(s.ctx, 5*time.Second, "", "sqlite3", "-readonly", u+mode, query)
 		if err == nil {
 			return strings.Split(strings.TrimSpace(string(out)), "\n"), true
 		}
@@ -164,12 +163,12 @@ func (s *scanner) sqliteQuery(db, query string) ([]string, bool) {
 // and the stale logs copies left in ~/.codex/sqlite. Other DBs are live state
 // and are only reported by the catalog.
 func (s *scanner) codexDatabases() {
-	dbs, _ := filepath.Glob(s.home(".codex/logs_*.sqlite"))
+	dbs, _ := fsx.Glob(s.ctx, s.home(".codex/logs_*.sqlite"))
 	for _, db := range dbs {
 		if s.ctx.Err() != nil {
 			return
 		}
-		fi, err := os.Lstat(db)
+		fi, err := fsx.Lstat(s.ctx, db)
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
@@ -195,13 +194,13 @@ func (s *scanner) codexDatabases() {
 
 	// ~/.codex/sqlite/logs_*.sqlite: an old sqlite_home copy, stale when the
 	// same DB in ~/.codex is newer.
-	stale, _ := filepath.Glob(s.home(".codex/sqlite/logs_*.sqlite"))
+	stale, _ := fsx.Glob(s.ctx, s.home(".codex/sqlite/logs_*.sqlite"))
 	for _, db := range stale {
-		fi, err := os.Lstat(db)
+		fi, err := fsx.Lstat(s.ctx, db)
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
-		live, err := os.Lstat(s.home(".codex/" + filepath.Base(db)))
+		live, err := fsx.Lstat(s.ctx, s.home(".codex/"+filepath.Base(db)))
 		if err != nil || !live.ModTime().After(fi.ModTime()) {
 			continue
 		}
@@ -237,18 +236,18 @@ func (s *scanner) codexVisualizations() {
 	if !s.usable(root) {
 		return
 	}
-	for _, y := range list(root, false) {
+	for _, y := range list(s.ctx, root, false) {
 		if !y.dir || !reYear.MatchString(y.name) {
 			continue
 		}
-		for _, m := range list(y.path, false) {
+		for _, m := range list(s.ctx, y.path, false) {
 			if !m.dir || !reMonth.MatchString(m.name) {
 				continue
 			}
 			it := s.newItem("codex-visualizations", core.CatAI, "", core.RiskCaution)
 			it.ID = itemID(it.Kind, m.path)
-			for _, d := range list(m.path, false) {
-				t := newestShallow(d.path)
+			for _, d := range list(s.ctx, m.path, false) {
+				t := newestShallow(s.ctx, d.path)
 				if s.now.Sub(t) < visualizationAge {
 					continue
 				}
@@ -272,15 +271,15 @@ func (s *scanner) codexVisualizations() {
 // ~/multica_workspaces_*/<workspace>/<task>/codex-home once the task is
 // completed. Task workdirs (repository checkouts) are never touched.
 func (s *scanner) multicaTaskHomes() {
-	metas, _ := filepath.Glob(s.home("multica_workspaces_*/*/*/.gc_meta.json"))
+	metas, _ := fsx.Glob(s.ctx, s.home("multica_workspaces_*/*/*/.gc_meta.json"))
 	groups := map[string]*core.Item{}
 	for _, meta := range metas {
 		task := filepath.Dir(meta)
 		home := filepath.Join(task, "codex-home")
-		if fi, err := os.Lstat(home); err != nil || !fi.IsDir() {
+		if fi, err := fsx.Lstat(s.ctx, home); err != nil || !fi.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(meta)
+		data, err := fsx.ReadFile(s.ctx, meta)
 		if err != nil {
 			continue
 		}

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
@@ -61,4 +63,45 @@ func TestPrefetcherCancelled(t *testing.T) {
 	cancel()
 	p.Add("/nonexistent/a")
 	p.Close() // must not hang
+}
+
+// Queue pressure may drop speculative work, but never records a dropped path
+// as measured or prevents it from being accepted when a slot becomes free.
+func TestPrefetchQueueIsBoundedAndDroppedPathsMayRetry(t *testing.T) {
+	p := &Prefetcher{ctx: context.Background(), seen: map[string]bool{}}
+	p.cond = sync.NewCond(&p.mu)
+	for i := range maxPending {
+		p.Add(strconv.Itoa(i))
+	}
+	p.Add("overflow")
+	if len(p.queue) != maxPending || p.seen["overflow"] {
+		t.Fatalf("pending=%d, overflow accepted=%v", len(p.queue), p.seen["overflow"])
+	}
+	p.queue = p.queue[1:]
+	p.Add("overflow")
+	p.Add("overflow")
+	if len(p.queue) != maxPending || !p.seen["overflow"] {
+		t.Fatalf("pending=%d, retry accepted=%v", len(p.queue), p.seen["overflow"])
+	}
+}
+
+func TestCancelledCloseJoinsWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := NewPrefetcher(ctx, 4)
+	root := t.TempDir()
+	for i := range 1000 {
+		p.Add(filepath.Join(root, strconv.Itoa(i)))
+	}
+	cancel()
+	p.Close()
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("Close returned with workers still running")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.queue) != 0 {
+		t.Fatal("cancelled Close left pending measurements")
+	}
 }

@@ -38,7 +38,7 @@ func newAnFixture(t *testing.T) *anFixture {
 func newTestAnalyzer(t *testing.T, root, home string) *analyzeModel {
 	t.Helper()
 	m := newAnalyzer(context.Background(), AnalyzeOptions{Env: testEnv(home), Root: root, Clean: testCleanOpts(home)})
-	t.Cleanup(m.cancel)
+	t.Cleanup(m.close)
 	m.diskFn = fakeDisk
 	m.revealFn = func(string) error { return nil }
 	m.w, m.h = 120, 40
@@ -148,7 +148,7 @@ func TestAnalyzerNavigationUsesCache(t *testing.T) {
 	f := newAnFixture(t)
 	m := newTestAnalyzer(t, f.root, f.home)
 	var lists atomic.Int32
-	m.listFn = func(p string) tea.Msg { lists.Add(1); return listDir(p) }
+	m.listFn = func(ctx context.Context, p string) tea.Msg { lists.Add(1); return listDirContext(ctx, p) }
 	d := newDriver(t, m)
 	d.until("sizes", settled(m))
 
@@ -197,7 +197,7 @@ func TestAnalyzerNavigationUsesCache(t *testing.T) {
 func TestAnalyzerNotAboveRoot(t *testing.T) {
 	m := newTestAnalyzer(t, "/", t.TempDir())
 	// never touch the real filesystem here
-	m.listFn = func(p string) tea.Msg {
+	m.listFn = func(_ context.Context, p string) tea.Msg {
 		return dirListedMsg{path: p, entries: []*anEntry{{name: "Users", path: "/Users", isDir: true}, {name: "f", path: "/f", sized: true, size: 10}}}
 	}
 	m.pool.sizeFn = func(context.Context, string) (fsx.Stats, error) {

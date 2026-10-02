@@ -125,7 +125,10 @@ func TestOpenForWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fr.Close()
-	paths, ok := openForWriting()
+	paths, ok, err := openForWriting(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatal("process table unreadable")
 	}
@@ -136,7 +139,7 @@ func TestOpenForWriting(t *testing.T) {
 		t.Errorf("%s (open read-only) listed", r)
 	}
 	start := time.Now()
-	openForWriting()
+	openForWriting(context.Background())
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("listing the files open for writing took %v", d)
 	}
@@ -169,7 +172,7 @@ func TestStoreWritersUnavailable(t *testing.T) {
 	tree(t, root, 40, 1000)
 	storeRun(t, root)
 	old := listWriters
-	listWriters = func() ([]string, bool) { return nil, false }
+	listWriters = func(context.Context) ([]string, bool, error) { return nil, false, nil }
 	t.Cleanup(func() { listWriters = old })
 	s := openRun(t)
 	defer s.Close()

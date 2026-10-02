@@ -79,7 +79,9 @@ Two techniques keep a full scan fast:
 - A **per-scan shared cache** deduplicates work: when two scanners measure the same directory (the worktrees scanner and the artifacts scanner both measure a worktree's `node_modules`), the directory is walked once and both get the result. The cache lives only for the duration of one scan, so the next scan always measures fresh data.
 
 :::note
-Two environment variables exist for troubleshooting: `LU_NO_BULK=1` forces the classic one-`lstat`-per-entry walk, and `LU_WALKERS=<n>` changes the number of concurrent directory readers (default: 3 × CPU cores, at least 8).
+Scans use the [`eco` resource profile](/lu-cleaner/reference/configuration/#scan_mode) by default: 2 shared concurrent I/O operations, 1 inspection command, bounded batches and short cancellable pauses. `--scan-mode fast` allows 8 I/O operations and 4 commands without pauses. Both profiles measure the same entries and sizes.
+
+Two environment variables exist for troubleshooting: `LU_NO_BULK=1` forces the classic one-`lstat`-per-entry walk, and `LU_WALKERS=<positive integer>` overrides the shared concurrent I/O limit for discovery and sizing. Invalid values keep the profile default and are reported with `--verbose`.
 :::
 
 ## What an item tells you

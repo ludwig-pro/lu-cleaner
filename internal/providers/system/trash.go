@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // trash proposes to empty ~/.Trash: moving things to the Trash frees nothing
@@ -16,11 +17,11 @@ import (
 // size stays unknown).
 func (s *scan) trash() {
 	dir := s.home(".Trash")
-	fi, err := os.Lstat(dir)
+	fi, err := fsx.Lstat(s.ctx, dir)
 	if err != nil || !fi.IsDir() {
 		return
 	}
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(s.ctx, dir)
 	if err != nil {
 		if !permissionDenied(err) {
 			return

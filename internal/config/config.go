@@ -25,6 +25,8 @@ type Config struct {
 	Protect []string `toml:"protect" json:"protect"`
 	// MaxDepth for the artifact scan below each root (default 8).
 	MaxDepth int `toml:"max_depth" json:"max_depth"`
+	// ScanMode controls resource use during scans: eco (default) or fast.
+	ScanMode string `toml:"scan_mode" json:"scan_mode"`
 	// MinSize hides items smaller than this in lists (default "1MB").
 	MinSize string `toml:"min_size" json:"min_size"`
 	// StaleAfter: items unused for longer are "stale" and preselected by smart select (default "14d").
@@ -115,6 +117,9 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) fill() {
+	if c.ScanMode == "" {
+		c.ScanMode = "eco"
+	}
 	if c.MaxDepth <= 0 {
 		c.MaxDepth = 8
 	}
@@ -147,6 +152,10 @@ exclude = []
 # Never cleaned (nor anything containing them), in addition to the built-in list
 # (ssh keys, credentials, AI tool configs, keystores...).
 protect = []
+
+# Scan profile: "eco" keeps disk and CPU pressure low; "fast" favours throughput.
+# --scan-mode overrides this value for one invocation.
+scan_mode = "eco"
 
 # Hide items smaller than this in lists.
 min_size = "1MB"

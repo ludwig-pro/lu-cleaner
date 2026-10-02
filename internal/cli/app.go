@@ -21,6 +21,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/catalog"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"github.com/ludwig-pro/lu-cleaner/internal/tui"
 )
@@ -61,33 +62,37 @@ type App struct {
 
 	Disk      func(path string) (sysx.Disk, error)
 	Snapshots func(context.Context) []string
-	Running   func(names ...string) []string
+	Running   func(context.Context, ...string) ([]string, error)
 	History   func() ([]clean.HistoryEntry, error)
+	// ActivateScan applies process priorities only when a scan starts. Its
+	// restore function runs once when this invocation returns.
+	ActivateScan func(scanctl.Limits) (func() error, error)
 }
 
 // NewApp returns an App wired to the real system.
 func NewApp(version string) *App {
 	return &App{
-		Version:    version,
-		Stdin:      os.Stdin,
-		Stdout:     os.Stdout,
-		Stderr:     os.Stderr,
-		StdinTTY:   isTerminal(os.Stdin),
-		StdoutTTY:  isTerminal(os.Stdout),
-		StderrTTY:  isTerminal(os.Stderr),
-		Width:      terminalWidth,
-		Getenv:     os.Getenv,
-		LoadConfig: config.Load,
-		NewEnv:     core.NewEnv,
-		Providers:  providers.All,
-		Catalog:    catalog.Entries,
-		Picker:     tui.RunPicker,
-		Analyze:    tui.RunAnalyze,
-		Clean:      clean.Run,
-		Disk:       sysx.DiskOf,
-		Snapshots:  sysx.LocalSnapshots,
-		Running:    sysx.Running,
-		History:    clean.ReadHistory,
+		Version:      version,
+		Stdin:        os.Stdin,
+		Stdout:       os.Stdout,
+		Stderr:       os.Stderr,
+		StdinTTY:     isTerminal(os.Stdin),
+		StdoutTTY:    isTerminal(os.Stdout),
+		StderrTTY:    isTerminal(os.Stderr),
+		Width:        terminalWidth,
+		Getenv:       os.Getenv,
+		LoadConfig:   config.Load,
+		NewEnv:       core.NewEnv,
+		Providers:    providers.All,
+		Catalog:      catalog.Entries,
+		Picker:       tui.RunPicker,
+		Analyze:      tui.RunAnalyze,
+		Clean:        clean.Run,
+		Disk:         sysx.DiskOf,
+		Snapshots:    sysx.LocalSnapshots,
+		Running:      sysx.RunningContext,
+		History:      clean.ReadHistory,
+		ActivateScan: scanctl.Activate,
 	}
 }
 
@@ -129,6 +134,11 @@ func runWithSignals(fn func(context.Context) int) int {
 // Run executes the command line args and returns the exit code.
 func (a *App) Run(ctx context.Context, args []string) int {
 	c := newCLI(a)
+	defer func() {
+		if err := c.finishScan(); err != nil {
+			fmt.Fprintf(a.Stderr, "warning: restore scan priorities: %s\n", sanitizeLines(err.Error(), "  "))
+		}
+	}()
 	root := c.rootCmd()
 	root.SetArgs(args)
 	root.SetIn(a.Stdin)

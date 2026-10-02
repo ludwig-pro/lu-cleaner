@@ -32,9 +32,7 @@ type procSnapshot struct {
 // output runs a read-only command with a timeout. Partial stdout is returned
 // even when the command exits non-zero (lsof does that routinely).
 func output(ctx context.Context, env *core.Env, dir string, timeout time.Duration, name string, args ...string) ([]byte, error) {
-	c, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return env.Output(c, dir, name, args...)
+	return env.OutputTimeout(ctx, timeout, dir, name, args...)
 }
 
 func loadProcs(ctx context.Context, env *core.Env) *procSnapshot {

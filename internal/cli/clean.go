@@ -123,11 +123,15 @@ func (c *cli) runCleanYes(ctx context.Context, spec cleanSpec) error {
 			return usageErr(errBroadKind, p.ID(), joinCats(p.Categories()), p.Categories()[0])
 		}
 	}
-	s, err := c.newSetup(spec.roots)
+	s, err := c.newScanSetup(spec.roots, ctx)
 	if err != nil {
 		return err
 	}
 	f, err := c.buildFilter(s, modeCleanYes, spec.cats, spec.kinds)
+	if err != nil {
+		return err
+	}
+	ctx, err = c.startScan(ctx, s)
 	if err != nil {
 		return err
 	}

@@ -1,16 +1,17 @@
 package artifacts
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
-	"golang.org/x/sys/unix"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 )
 
 // projectMarkers identify the root of a (non-git) project.
@@ -29,13 +30,13 @@ var appMarkers = []string{"package.json", "app.json", "app.config.*", "pubspec.y
 
 // climbPlatform goes from a native folder (android/app, ios...) to the app
 // that owns it when there is one.
-func climbPlatform(d string) string {
+func climbPlatform(ctx context.Context, d string) string {
 	if filepath.Base(d) == "app" && filepath.Base(filepath.Dir(d)) == "android" {
 		d = filepath.Dir(d)
 	}
 	if platformDirs[filepath.Base(d)] {
 		up := filepath.Dir(d)
-		if _, ok := matchAny(appMarkers, dirNames(up)); ok {
+		if _, ok := matchAny(appMarkers, dirNames(ctx, up)); ok {
 			return up
 		}
 	}
@@ -50,7 +51,7 @@ func (s *scan) projectOf(c *cand) (project, pkg string) {
 	if len(c.rule.Markers) == 0 {
 		pkg = s.nearestProject(c.parent, c.root.path)
 	} else {
-		pkg = climbPlatform(pkg)
+		pkg = climbPlatform(s.ctx, pkg)
 	}
 	if c.git != nil && fsx.Within(pkg, c.git.path) {
 		return c.git.path, pkg
@@ -65,7 +66,7 @@ func (s *scan) projectOf(c *cand) (project, pkg string) {
 // directory holding a project marker; when none, dir itself.
 func (s *scan) nearestProject(dir, stop string) string {
 	for d := dir; fsx.Within(d, stop); d = filepath.Dir(d) {
-		if _, ok := matchAny(projectMarkers, dirNames(d)); ok {
+		if _, ok := matchAny(projectMarkers, dirNames(s.ctx, d)); ok {
 			return d
 		}
 		if d == stop {
@@ -81,7 +82,7 @@ type projInfo struct {
 	pkg      *packageJSON
 	names    map[string]bool
 
-	srcOnce sync.Once
+	srcOnce scanmemo.Once
 	src     time.Time // newest source file of a bounded walk (sourceActivity)
 }
 
@@ -128,19 +129,18 @@ func (s *scan) info(d string) *projInfo {
 	s.projMu.Unlock()
 
 	pi := &projInfo{names: map[string]bool{}}
-	if ents, err := os.ReadDir(d); err == nil {
+	if ents, err := fsx.ReadDir(s.ctx, d); err == nil {
+		var paths []string
 		for _, e := range ents {
-			n := e.Name()
-			pi.names[n] = true
-			// Files only: a folder's mtime moves whenever an entry inside it
-			// is added or removed — deleting android/.gradle bumps android/,
-			// deleting apps/app/node_modules bumps apps/app — and would make
-			// the project look active right after a partial clean.
-			if e.IsDir() || skipActivity(n) {
-				continue
+			pi.names[e.Name()] = true
+			if !e.IsDir() && !skipActivity(e.Name()) {
+				paths = append(paths, filepath.Join(d, e.Name()))
 			}
-			if fi, err := e.Info(); err == nil && fi.ModTime().After(pi.activity) {
-				pi.activity = fi.ModTime()
+		}
+		infos, _ := scanio.Lstats(s.ctx, paths)
+		for _, info := range infos {
+			if info.Err == nil && info.File.ModTime().After(pi.activity) {
+				pi.activity = info.File.ModTime()
 			}
 		}
 	}
@@ -203,7 +203,9 @@ func (s *scan) deepActivity(c *cand) time.Time {
 				continue
 			}
 			pi := s.info(d)
-			pi.srcOnce.Do(func() { pi.src = s.sourceActivity(d, activityBudget) })
+			if err := pi.srcOnce.Do(s.ctx, func() { pi.src = s.sourceActivity(d, activityBudget) }); err != nil {
+				return s.now // incomplete activity never proves this project stale
+			}
 			if pi.src.After(t) {
 				t = pi.src
 			}
@@ -227,20 +229,32 @@ func (s *scan) sourceActivity(root string, budget int) time.Time {
 	var newest int64 // ns
 	queue := []dir{{root, 0}}
 	seen := 0
-	var st unix.Stat_t
 	for len(queue) > 0 && seen < budget && s.ctx.Err() == nil {
 		d := queue[0]
 		queue = queue[1:]
-		f, err := os.Open(d.path)
+		ents, err := fsx.ReadDir(s.ctx, d.path)
 		if err != nil {
 			continue
 		}
-		ents, _ := f.ReadDir(-1)
 		if d.path != root && slices.ContainsFunc(ents, func(e os.DirEntry) bool { return e.Name() == ".git" }) {
-			f.Close()
 			continue // a nested checkout: another project
 		}
-		fd := int(f.Fd())
+		ents = ents[:min(len(ents), budget-seen)]
+		var files []string
+		for _, e := range ents {
+			if e.Type().IsRegular() && !skipActivity(e.Name()) {
+				files = append(files, filepath.Join(d.path, e.Name()))
+			}
+		}
+		infos, err := scanio.Lstats(s.ctx, files)
+		if err != nil {
+			break
+		}
+		for _, info := range infos {
+			if info.Err == nil && info.File.Mode().IsRegular() {
+				newest = max(newest, info.File.ModTime().UnixNano())
+			}
+		}
 		for _, e := range ents {
 			if seen++; seen > budget {
 				break
@@ -253,14 +267,8 @@ func (s *scan) sourceActivity(root string, budget int) time.Time {
 				if d.depth+1 < activityDepth && !strings.HasPrefix(n, ".") && !s.rs.names[n] && !pruneNames[n] && !s.env.Excluded(child) {
 					queue = append(queue, dir{child, d.depth + 1})
 				}
-			case e.Type().IsRegular():
-				// fstatat relative to the open folder: no path resolution.
-				if unix.Fstatat(fd, n, &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
-					newest = max(newest, st.Mtim.Nano())
-				}
 			}
 		}
-		f.Close()
 	}
 	if newest == 0 {
 		return time.Time{}

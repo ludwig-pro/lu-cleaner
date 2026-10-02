@@ -22,23 +22,25 @@ import (
 
 // confirmState backs the "Clean N items — X GB?" modal.
 type confirmState struct {
-	items    []*core.Item // top-level selected items (what clean.Run will process)
-	all      []*core.Item // the whole selection, handed to clean.Run (it plans nested items itself)
-	total    int64
-	byRisk   [4]riskCount
-	commands []string
-	guards   []string
-	running  []string
-	checking bool
-	caution  int          // caution items selected or inside a selected item: "type yes" needed
-	nested   []*core.Item // caution items inside a selected item (not selected themselves)
-	selected int          // selected items (top-level ones plus those nested in them)
-	hidden   int          // selected items hidden by the text filter
-	trashN   int          // items skipped because Trash mode cannot handle them
-	forced   []*core.Item // items that need --force (RequireForce), cleaned because of --force or Trash mode
-	largest  []*core.Item
-	input    lineInput
-	hint     string
+	items       []*core.Item // top-level selected items (what clean.Run will process)
+	all         []*core.Item // the whole selection, handed to clean.Run (it plans nested items itself)
+	total       int64
+	byRisk      [4]riskCount
+	commands    []string
+	guards      []string
+	running     []string
+	runningErr  error
+	cancelCheck context.CancelFunc
+	checking    bool
+	caution     int          // caution items selected or inside a selected item: "type yes" needed
+	nested      []*core.Item // caution items inside a selected item (not selected themselves)
+	selected    int          // selected items (top-level ones plus those nested in them)
+	hidden      int          // selected items hidden by the text filter
+	trashN      int          // items skipped because Trash mode cannot handle them
+	forced      []*core.Item // items that need --force (RequireForce), cleaned because of --force or Trash mode
+	largest     []*core.Item
+	input       lineInput
+	hint        string
 	// sig identifies what the dialog promised to clean; startClean refuses to
 	// run when the selection no longer matches it (scan upserts, rejections).
 	sig string
@@ -125,7 +127,13 @@ func (m *pickerModel) openConfirm() tea.Cmd {
 	}
 	c.checking = true
 	guards, fn := append([]string(nil), c.guards...), m.runningFn
-	return func() tea.Msg { return runningMsg{names: fn(guards...)} }
+	ctx, cancel := context.WithCancel(m.ctx)
+	c.cancelCheck = cancel
+	return m.tasks.run(func() tea.Msg {
+		defer cancel()
+		names, err := fn(ctx, guards...)
+		return runningMsg{confirm: c, names: names, err: err}
+	})
 }
 
 // buildConfirm computes the confirmation dialog for the current selection
@@ -294,9 +302,16 @@ func (m *pickerModel) confirmKey(k tea.KeyMsg) tea.Cmd {
 }
 
 func (m *pickerModel) cancelConfirm() {
+	m.cancelConfirmCheck()
 	m.confirm = nil
 	m.mode = modeBrowse
 	m.setStatus(stInfo, "Cancelled — nothing was touched")
+}
+
+func (m *pickerModel) cancelConfirmCheck() {
+	if m.confirm != nil && m.confirm.cancelCheck != nil {
+		m.confirm.cancelCheck()
+	}
 }
 
 func (m *pickerModel) cleanOptions() clean.Options {
@@ -306,6 +321,7 @@ func (m *pickerModel) cleanOptions() clean.Options {
 }
 
 func (m *pickerModel) startClean() tea.Cmd {
+	m.cancelConfirmCheck()
 	// The scan keeps running behind the dialog: an item may have been
 	// rejected, re-classified or removed since it opened. Rebuild the dialog
 	// from the current items and only clean what the user saw.

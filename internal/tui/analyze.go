@@ -19,6 +19,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 )
 
@@ -44,6 +45,7 @@ type anEntry struct {
 // anDir is a listed directory with its own cursor, so going back is instant.
 type anDir struct {
 	path    string
+	cancel  context.CancelFunc // the listing request, canceled when forgotten
 	entries []*anEntry
 	byName  map[string]*anEntry
 	loaded  bool
@@ -77,6 +79,7 @@ const (
 
 type dirListedMsg struct {
 	path    string
+	dir     *anDir // the listing request; a rescan replaces it
 	entries []*anEntry
 	err     error
 }
@@ -103,6 +106,7 @@ type analyzeModel struct {
 	sizes   map[string]fsx.Stats
 	pending map[string]bool
 	pool    *sizePool
+	tasks   *scanTaskGroup
 
 	sort        anSort
 	showHidden  bool
@@ -137,7 +141,7 @@ type analyzeModel struct {
 	diskFn   func(string) (sysx.Disk, error)
 	revealFn func(string) error
 	cleanFn  func(context.Context, []*core.Item, clean.Options, func(clean.Result)) *clean.Summary
-	listFn   func(string) tea.Msg
+	listFn   func(context.Context, string) tea.Msg
 	nestedFn func(string) (string, error) // nestedRepoIn, replaced in tests
 }
 
@@ -146,6 +150,7 @@ func newAnalyzer(ctx context.Context, opt AnalyzeOptions) *analyzeModel {
 		opt.Env = core.NewEnv()
 	}
 	env := opt.Env
+	ctx = scanContext(ctx, env)
 	if opt.Clean.Home == "" {
 		opt.Clean.Home = env.Home
 	}
@@ -171,6 +176,7 @@ func newAnalyzer(ctx context.Context, opt AnalyzeOptions) *analyzeModel {
 		dirs:       map[string]*anDir{},
 		sizes:      map[string]fsx.Stats{},
 		pending:    map[string]bool{},
+		tasks:      newScanTaskGroup(cctx),
 		showHidden: true,
 		marked:     map[string]*anEntry{},
 		w:          100,
@@ -179,17 +185,17 @@ func newAnalyzer(ctx context.Context, opt AnalyzeOptions) *analyzeModel {
 		diskFn:     sysx.DiskOf,
 		revealFn:   revealInFinder,
 		cleanFn:    clean.Run,
-		listFn:     listDir,
-		nestedFn:   nestedRepoIn,
+		listFn:     listDirContext,
+		nestedFn:   func(path string) (string, error) { return nestedRepoInContext(cctx, path) },
 	}
-	m.pool = newSizePool(cctx, 4)
+	m.pool = newSizePool(cctx, scanctl.From(cctx).Limits().Prefetch)
 	return m
 }
 
 func (m *analyzeModel) Init() tea.Cmd {
 	m.refreshDisk()
 	m.spinning = true
-	return tea.Batch(m.enter(m.cwd, ""), waitSizes(m.ctx, m.pool.out), m.spin.Tick)
+	return tea.Batch(m.enter(m.cwd, ""), waitSizes(m.ctx, m.pool), m.spin.Tick)
 }
 
 func (m *analyzeModel) needsSpin() bool {
@@ -214,10 +220,23 @@ func (m *analyzeModel) enter(path, focus string) tea.Cmd {
 	m.cwd = path
 	d := m.dirs[path]
 	if d == nil {
-		d = &anDir{path: path, curName: focus}
+		ctx, cancel := context.WithCancel(m.ctx)
+		d = &anDir{path: path, curName: focus, cancel: cancel}
 		m.dirs[path] = d
 		fn := m.listFn
-		return func() tea.Msg { return fn(path) }
+		cmd := m.tasks.run(func() tea.Msg {
+			defer cancel()
+			msg := fn(ctx, path)
+			if listed, ok := msg.(dirListedMsg); ok {
+				listed.dir = d
+				return listed
+			}
+			return msg
+		})
+		if cmd == nil {
+			cancel()
+		}
+		return cmd
 	}
 	if focus != "" {
 		d.curName = focus
@@ -232,24 +251,34 @@ func (m *analyzeModel) cur() *anDir { return m.dirs[m.cwd] }
 
 // listDir reads a directory (in a background command).
 func listDir(path string) tea.Msg {
+	return listDirContext(scanctl.Ensure(context.Background()), path)
+}
+
+func listDirContext(ctx context.Context, path string) tea.Msg {
+	if err := ctx.Err(); err != nil {
+		return dirListedMsg{path: path, err: err}
+	}
 	if fsx.AppDataProtected(path) {
 		// another app's container: opening it would block on a macOS permission prompt
 		return dirListedMsg{path: path, err: fsx.ErrNeedsFullDiskAccess}
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return dirListedMsg{path: path, err: err}
-	}
-	names, err := f.Readdirnames(-1)
-	f.Close()
+	names, err := fsx.ReadNames(ctx, path)
 	msg := dirListedMsg{path: path, err: err}
 	if err != nil && len(names) == 0 {
 		return msg
 	}
+	if ctx.Err() != nil {
+		msg.err = ctx.Err()
+		return msg
+	}
 	msg.err = nil
 	// everything inside a .git directory or a bare repository is git data
-	inGit := gitDataRefusal(path)
+	inGit := gitDataRefusalContext(ctx, path)
 	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			msg.err = err
+			return msg
+		}
 		p := filepath.Join(path, name)
 		if fsx.AppDataProtected(p) {
 			// never stat another app's container without Full Disk Access
@@ -257,7 +286,7 @@ func listDir(path string) tea.Msg {
 			msg.entries = append(msg.entries, e)
 			continue
 		}
-		fi, err := os.Lstat(p)
+		fi, err := fsx.Lstat(ctx, p)
 		if err != nil {
 			continue
 		}
@@ -272,7 +301,7 @@ func listDir(path string) tea.Msg {
 			e.size = allocated(fi)
 		case fi.IsDir():
 			e.isDir = true
-			e.git = classifyGit(p)
+			e.git = classifyGitContext(ctx, p)
 		default:
 			e.sized = true
 			e.size = allocated(fi)
@@ -513,8 +542,10 @@ func (m *analyzeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dirListedMsg:
 		m.applyListing(msg)
 	case sizeBatchMsg:
-		m.applySizes(msg.results)
-		cmds = append(cmds, waitSizes(m.ctx, m.pool.out))
+		if msg.pool == m.pool {
+			m.applySizes(msg.results)
+			cmds = append(cmds, waitSizes(m.ctx, m.pool))
+		}
 	case spinner.TickMsg:
 		if m.needsSpin() {
 			var c tea.Cmd
@@ -546,6 +577,9 @@ func (m *analyzeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *analyzeModel) applyListing(msg dirListedMsg) {
 	d := m.dirs[msg.path]
+	if msg.dir != nil && msg.dir != d {
+		return // a forgotten directory's old listing must not replace a rescan
+	}
 	if d == nil {
 		d = &anDir{path: msg.path}
 		m.dirs[msg.path] = d
@@ -714,9 +748,14 @@ func (m *analyzeModel) forget(path string) {
 			delete(m.sizes, p)
 		}
 	}
-	for p := range m.dirs {
-		if fsx.Within(p, path) && p != m.cwd {
-			delete(m.dirs, p)
+	for p, d := range m.dirs {
+		if fsx.Within(p, path) {
+			if d.cancel != nil {
+				d.cancel()
+			}
+			if p != m.cwd {
+				delete(m.dirs, p)
+			}
 		}
 	}
 }
@@ -726,12 +765,22 @@ func (m *analyzeModel) rescan() tea.Cmd {
 	focus := ""
 	if d := m.cur(); d != nil {
 		focus = d.curName
+		if d.cancel != nil {
+			d.cancel()
+		}
 	}
+	// Cancel and join the old pool before replacing it. Its consumer context
+	// leaves invocation-owned cache measurements available to other callers.
+	old := m.pool
+	old.close()
+	m.pool = newSizePool(m.ctx, scanctl.From(m.ctx).Limits().Prefetch)
+	m.pool.sizeFn = old.sizeFn
+	m.pending = map[string]bool{}
 	m.forget(path)
 	delete(m.dirs, path)
 	m.setStatus(stInfo, "Rescanning "+m.env.Pretty(path)+"…")
 	m.refreshDisk()
-	return m.enter(path, focus)
+	return tea.Batch(m.enter(path, focus), waitSizes(m.ctx, m.pool))
 }
 
 // ------------------------------------------------------------------ delete
@@ -741,7 +790,7 @@ func (m *analyzeModel) openConfirm() tea.Cmd {
 	if len(m.marked) > 0 {
 		for p, e := range m.marked {
 			// a mark inside a directory deleted since then is stale
-			if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
+			if _, err := fsx.Lstat(m.ctx, p); errors.Is(err, fs.ErrNotExist) {
 				delete(m.marked, p)
 				continue
 			}
@@ -764,9 +813,9 @@ func (m *analyzeModel) openConfirm() tea.Cmd {
 	var ok, refused []*anEntry
 	for _, e := range targets {
 		if e.isDir && !e.isLink {
-			e.git = classifyGit(e.path)
+			e.git = classifyGitContext(m.ctx, e.path)
 		}
-		e.inGit = gitDataEntryRefusal(e.path, e.isDir && !e.isLink)
+		e.inGit = gitDataEntryRefusalContext(m.ctx, e.path, e.isDir && !e.isLink)
 		e.tag = annotate(e)
 		if e.refusal() != "" {
 			refused = append(refused, e)
@@ -812,9 +861,13 @@ func (m *analyzeModel) openConfirm() tea.Cmd {
 	}
 	m.confChecking = true
 	seq, fn := m.confSeq, m.nestedFn
-	return func() tea.Msg {
+	return m.tasks.run(func() tea.Msg {
 		msg := nestedCheckMsg{seq: seq, found: map[string]string{}, errs: map[string]error{}}
 		for _, d := range dirs {
+			if err := m.ctx.Err(); err != nil {
+				msg.errs[d] = err
+				break
+			}
 			found, err := fn(d)
 			switch {
 			case found != "":
@@ -824,7 +877,15 @@ func (m *analyzeModel) openConfirm() tea.Cmd {
 			}
 		}
 		return msg
-	}
+	})
+}
+
+// close joins all owned work, including scan tasks whose Cmd was never run.
+func (m *analyzeModel) close() {
+	m.cancel()
+	m.tasks.close()
+	m.pool.close()
+	m.waitDelete()
 }
 
 func (m *analyzeModel) updateConfTotal() {
@@ -929,7 +990,7 @@ func (m *analyzeModel) itemsFor(es []*anEntry) []*core.Item {
 			// the dialog, is refused
 			path, dir, force := e.path, e.isDir && !e.isLink, m.opt.Clean.Force
 			fn := m.nestedFn
-			it.Recheck = func(context.Context) error { return recheckPlain(path, dir, force, fn) }
+			it.Recheck = func(ctx context.Context) error { return recheckPlainContext(ctx, path, dir, force, fn) }
 		}
 		items = append(items, it)
 	}

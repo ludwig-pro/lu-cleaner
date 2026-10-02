@@ -111,8 +111,9 @@ func newTestPicker(t *testing.T, opt PickerOptions) *pickerModel {
 		opt.Filter.MaxRisk = core.RiskNever
 	}
 	m := newPicker(context.Background(), opt)
+	t.Cleanup(m.close)
 	m.diskFn = fakeDisk
-	m.runningFn = func(...string) []string { return nil }
+	m.runningFn = func(context.Context, ...string) ([]string, error) { return nil, nil }
 	m.revealFn = func(string) error { return nil }
 	m.w, m.h = 120, 40
 	return m

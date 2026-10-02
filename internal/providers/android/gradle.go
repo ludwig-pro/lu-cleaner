@@ -2,7 +2,6 @@ package android
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 const daemonWarn = "Gradle daemon running — stop it first (./gradlew --stop or pkill -f GradleDaemon)"
@@ -32,9 +32,7 @@ var reDaemonVer = []*regexp.Regexp{
 
 func (s *scan) gradleDaemons() daemons {
 	d := daemons{versions: map[string]bool{}}
-	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-	defer cancel()
-	out, _ := s.env.Output(ctx, "", "pgrep", "-lf", "GradleDaemon")
+	out, _ := s.env.OutputTimeout(s.ctx, 3*time.Second, "", "pgrep", "-lf", "GradleDaemon")
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.TrimSpace(line) == "" || !strings.Contains(line, "GradleDaemon") {
 			continue
@@ -77,7 +75,7 @@ func (s *scan) installedGradles() map[string][]string {
 		{"/usr/local/Cellar/gradle", "Homebrew gradle"},
 		{filepath.Join(s.env.Home, ".sdkman", "candidates", "gradle"), "SDKMAN gradle"},
 	} {
-		for _, v := range dirNames(g.dir) {
+		for _, v := range dirNames(s.ctx, g.dir) {
 			if v == "current" {
 				continue
 			}
@@ -119,36 +117,36 @@ func (s *scan) gradle(pi *projectInfo) {
 	s.gradleMisc(gh, d)
 }
 
-func daemonLogTime(gh, ver string) time.Time {
-	return newestMtime(filepath.Join(gh, "daemon", ver, "daemon-*.out.log"))
+func daemonLogTime(ctx context.Context, gh, ver string) time.Time {
+	return newestMtime(ctx, filepath.Join(gh, "daemon", ver, "daemon-*.out.log"))
 }
 
 func (s *scan) gradleDists(gh string, pi *projectInfo, d daemons) {
 	dists := filepath.Join(gh, "wrapper", "dists")
-	for _, name := range dirNames(dists) {
+	for _, name := range dirNames(s.ctx, dists) {
 		m := reDistName.FindStringSubmatch(name)
 		if m == nil {
 			continue
 		}
 		ver, flavor := m[1], m[2]
 		p := filepath.Join(dists, name)
-		oks, _ := filepath.Glob(filepath.Join(p, "*", name+".zip.ok"))
+		oks, _ := fsx.Glob(s.ctx, filepath.Join(p, "*", name+".zip.ok"))
 		it := s.base("android-gradle-dist", "Gradle "+ver+" distribution ("+flavor+")", core.RiskModerate)
 		it.Path = p
 		// Daemon logs are the real usage signal; the download date is only a
 		// fallback for distributions no project uses.
-		it.LastUsed = daemonLogTime(gh, ver)
+		it.LastUsed = daemonLogTime(s.ctx, gh, ver)
 		it.Meta["version"] = ver
 		it.Note = "Gradle wrapper distribution; ./gradlew re-downloads it (~130-200 MB) on the next build of a project that needs it."
 		users := pi.wrappers[name]
 		switch {
 		case len(oks) == 0:
-			it.LastUsed = maxTime(it.LastUsed, newestMtime(filepath.Join(p, "*", "*.part")), mtime(p))
+			it.LastUsed = maxTime(it.LastUsed, newestMtime(s.ctx, filepath.Join(p, "*", "*.part")), mtime(p))
 			it.Risk = core.RiskSafe
 			it.Name += " — interrupted download"
 			it.Note = "Incomplete wrapper download (no .ok marker); ./gradlew starts the download over anyway."
 			it.Recommended = true
-			if part := newestMtime(filepath.Join(p, "*", "*.part")); !part.IsZero() && s.now().Sub(part) < time.Hour {
+			if part := newestMtime(s.ctx, filepath.Join(p, "*", "*.part")); !part.IsZero() && s.now().Sub(part) < time.Hour {
 				it.Warn = "download may still be in progress"
 				it.Recommended = false
 			}
@@ -158,7 +156,7 @@ func (s *scan) gradleDists(gh string, pi *projectInfo, d daemons) {
 			it.Note += " Used by " + plural(len(list), "project", "projects") + "."
 		case pi.known():
 			it.Recommended = true
-			it.LastUsed = maxTime(it.LastUsed, newestMtime(filepath.Join(p, "*", name+".zip.ok")))
+			it.LastUsed = maxTime(it.LastUsed, newestMtime(s.ctx, filepath.Join(p, "*", name+".zip.ok")))
 		default:
 			it.Meta["note"] = "no project roots scanned — usage unknown"
 		}
@@ -176,7 +174,7 @@ var (
 
 func (s *scan) gradleCaches(gh string, pi *projectInfo, d daemons, used map[string][]string) {
 	caches := filepath.Join(gh, "caches")
-	names := dirNames(caches)
+	names := dirNames(s.ctx, caches)
 	if len(names) == 0 {
 		return
 	}
@@ -195,7 +193,7 @@ func (s *scan) gradleCaches(gh string, pi *projectInfo, d daemons, used map[stri
 		case reCacheVer.MatchString(n):
 			it := s.base("android-gradle-version-cache", "Gradle "+n+" caches", core.RiskModerate)
 			it.Path = p
-			it.LastUsed = maxTime(daemonLogTime(gh, n), mtime(p))
+			it.LastUsed = maxTime(daemonLogTime(s.ctx, gh, n), mtime(p))
 			it.Meta["version"] = n
 			it.Note = "Per-version Gradle caches (Kotlin DSL accessors, file hashes, transforms); rebuilt the first time Gradle " + n + " runs again."
 			if who := used[n]; len(who) > 0 {
@@ -268,9 +266,9 @@ func (s *scan) gradleCaches(gh string, pi *projectInfo, d daemons, used map[stri
 
 func (s *scan) gradleDaemonLogs(gh string, d daemons) {
 	dir := filepath.Join(gh, "daemon")
-	for _, ver := range dirNames(dir) {
+	for _, ver := range dirNames(s.ctx, dir) {
 		p := filepath.Join(dir, ver)
-		logs, _ := filepath.Glob(filepath.Join(p, "daemon-*.out.log"))
+		logs, _ := fsx.Glob(s.ctx, filepath.Join(p, "daemon-*.out.log"))
 		it := s.base("android-gradle-daemon-logs", "Gradle "+ver+" daemon logs", core.RiskSafe)
 		it.LastUsed = maxTime(maxTime(mtimes(logs)...), mtime(p))
 		it.Meta["version"] = ver
@@ -299,7 +297,7 @@ func (s *scan) gradleDaemonLogs(gh string, d daemons) {
 
 func (s *scan) gradleTmp(gh string) {
 	dir := filepath.Join(gh, ".tmp")
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(s.ctx, dir)
 	if err != nil {
 		return
 	}
@@ -333,7 +331,7 @@ func (s *scan) gradleTmp(gh string) {
 
 func (s *scan) gradleJDKs(gh string, d daemons) {
 	dir := filepath.Join(gh, "jdks")
-	for _, n := range dirNames(dir) {
+	for _, n := range dirNames(s.ctx, dir) {
 		p := filepath.Join(dir, n)
 		it := s.base("android-gradle-jdk", "Gradle toolchain JDK · "+n, core.RiskModerate)
 		it.Path = p
@@ -350,7 +348,7 @@ func (s *scan) gradleMisc(gh string, d daemons) {
 	var ps []string
 	for _, n := range []string{"native", "kotlin-profile", "notifications", "workers", "build-scan-data"} {
 		p := filepath.Join(gh, n)
-		if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+		if fi, err := fsx.Lstat(s.ctx, p); err == nil && fi.IsDir() {
 			ps = append(ps, p)
 		}
 	}

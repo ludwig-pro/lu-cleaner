@@ -10,6 +10,7 @@ internal/
   safety/                Guard: the last line of defence before any deletion
   config/                ~/.config/lu-cleaner/config.toml
   engine/                runs providers concurrently, streams item upserts
+  scanctl/               per-invocation I/O and command budgets, profiles and process priorities
   clean/                 executor: delete / trash / command / git worktree removal, history
   providers/
     registry.go          providers.All()
@@ -36,6 +37,37 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
 ```
 
 ## Contracts
+
+* Scan limits resolve without process effects: `--scan-mode` > `config.scan_mode` > `eco`.
+  `LU_WALKERS` overrides only the shared I/O budget when it is a positive integer; invalid
+  values keep the profile default and are logged only in verbose mode. The CLI creates one
+  `scanctl.Controller` per invocation and attaches it to the context for the engine,
+  providers, size cache and TUI. `Env.ScanLimits` carries the resolved limits to direct callers.
+* `eco` admits 2 simultaneous I/O operations, 1 command and 1 prefetch per sizing pool, with
+  batches of 256 entries and a cancellable 5 ms cooldown after each I/O operation. `fast`
+  admits 8 I/O operations, 4 commands and 4 prefetch jobs, with the same batch size and no
+  cooldown. An I/O permit covers a bounded read or metadata operation; it is released before
+  recursion, waiting for cached sizes or executing a command. Command execution timeouts start
+  after admission; cancellation and a parent deadline also stop queued work.
+* Process policy activates after validating scan limits and before scan setup's root
+  inventories, only on scan paths (including `analyze`, the picker and
+  `doctor --no-scan`, which measures the Trash). `eco` sets `GOMAXPROCS` to the smaller of its
+  current value and 2 and requests macOS background priority; `fast` keeps inherited runtime
+  and OS priorities. A priority failure is a warning: resource quotas still apply. The CLI
+  restores the previous runtime and priority at the end of `App.Run`, after TUI sizing workers,
+  directory listings, repository checks and provider streams have stopped. Rescans cancel and
+  join the previous sizing pool, cancel replaced listings and ignore obsolete results while
+  keeping the invocation controller. Configuration, help, version, history and catalog commands
+  do not activate process policy. Standalone internal scans without a controller use `fast`
+  without process effects.
+* Directory listings are complete and sorted despite bounded reads. Cancellation is checked
+  between batches and metadata operations. Sizing accounting remains allocated-block based,
+  with the same hardlink and APFS clone rules. Scan/clean/analyze JSON contracts stay unchanged;
+  only `config show --json` gains effective scan limits. Verbose stderr includes limits and
+  resource counters at invocation completion. `files`/`dirs` count entries walked for sizing;
+  `cache_hits`/`cache_misses` describe the invocation's memoized size requests. `LU_TRACE=1`
+  reports the persistent cache separately. Configuration output includes the resolved
+  `GOMAXPROCS` value and requested background/inherited priority without applying either.
 
 * A provider never deletes anything. It only emits `*core.Item`.
 * Emitting the same `Item.ID` again replaces the previous value (use it to show an item with

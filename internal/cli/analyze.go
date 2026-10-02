@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/tui"
 )
 
@@ -31,7 +32,7 @@ Without a terminal (or with --json), prints the size of the direct children.`,
   lu-cleaner analyze . --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := c.newSetup(nil)
+			s, err := c.newScanSetup(nil, cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -46,14 +47,18 @@ Without a terminal (or with --json), prints the size of the direct children.`,
 			if err != nil || !fi.IsDir() {
 				return usageErr("%s is not a directory", root)
 			}
+			ctx, err := c.startScan(cmd.Context(), s)
+			if err != nil {
+				return err
+			}
 			if c.interactive() && !c.f.json {
 				c.propagateNoColor()
-				return c.Analyze(cmd.Context(), tui.AnalyzeOptions{Env: s.env, Root: root, Clean: s.clean})
+				return c.Analyze(ctx, tui.AnalyzeOptions{Env: s.env, Root: root, Clean: s.clean})
 			}
 			if all {
 				top = 0
 			}
-			return c.analyzeReport(cmd.Context(), s, root, top)
+			return c.analyzeReport(ctx, s, root, top)
 		},
 	}
 	cmd.Flags().IntVar(&top, "top", 25, "entries listed without a terminal (0 = all)")
@@ -72,7 +77,9 @@ type dirEntry struct {
 
 // analyzeReport prints the direct children of root sorted by size.
 func (c *cli) analyzeReport(ctx context.Context, s *setup, root string, top int) error {
-	des, err := os.ReadDir(root)
+	ctx = scanctl.Ensure(ctx)
+	limits := scanctl.From(ctx).Limits()
+	des, err := fsx.ReadDir(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -80,22 +87,35 @@ func (c *cli) analyzeReport(ctx context.Context, s *setup, root string, top int)
 	var done atomic.Int64
 	var total atomic.Int64
 	sp := c.startSpinner(func() string {
-		return fmt.Sprintf("analyzing… %d/%d entries · %s", done.Load(), len(des), fsx.Bytes(total.Load()))
+		return fmt.Sprintf("analyzing… %s · %d/%d entries · %s", limits.Mode, done.Load(), len(des), fsx.Bytes(total.Load()))
 	})
+	defer sp.stop()
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for i, de := range des {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, de os.DirEntry) {
-			defer func() { <-sem; wg.Done() }()
-			p := filepath.Join(root, de.Name())
-			st, _ := fsx.Size(ctx, p, nil)
-			entries[i] = dirEntry{Name: de.Name(), Path: p, Dir: de.IsDir(), Size: st.Bytes, Files: st.Files, Unreadable: st.Errors}
-			done.Add(1)
-			total.Add(st.Bytes)
-		}(i, de)
+	jobs := make(chan int)
+	for range min(limits.Prefetch, len(des)) {
+		wg.Go(func() {
+			for i := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				de := des[i]
+				p := filepath.Join(root, de.Name())
+				st, _ := fsx.Size(ctx, p, nil)
+				entries[i] = dirEntry{Name: de.Name(), Path: p, Dir: de.IsDir(), Size: st.Bytes, Files: st.Files, Unreadable: st.Errors}
+				done.Add(1)
+				total.Add(st.Bytes)
+			}
+		})
 	}
+queue:
+	for i := range des {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break queue
+		}
+	}
+	close(jobs)
 	wg.Wait()
 	sp.stop()
 	if ctx.Err() != nil {

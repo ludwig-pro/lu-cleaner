@@ -53,7 +53,7 @@ func (m *pickerModel) viewHeader(w int) string {
 	title := sTitle.Render("🧹 " + m.opt.Title)
 	var st string
 	if m.scanning {
-		st = m.spin.View() + " " + sAccent.Render(fmt.Sprintf("scanning %d/%d providers", len(m.provDone), len(m.opt.Providers)))
+		st = m.spin.View() + " " + sAccent.Render(fmt.Sprintf("scanning %d/%d providers", len(m.provDone), len(m.opt.Providers))) + sDim.Render(" · "+scanMode(m.ctx))
 	} else {
 		st = sGreen.Render("✓") + sSubtle.Render(fmt.Sprintf(" scan done in %.1fs", m.scanTook.Seconds()))
 	}
@@ -758,6 +758,8 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 	switch {
 	case c.checking:
 		lines = append(lines, label("Running")+sDim.Render("checking "+safeText(strings.Join(c.guards, ", "))+"…"))
+	case c.runningErr != nil:
+		lines = append(lines, label("Running")+sOrange.Render("unknown — process inspection incomplete: "+safeText(firstLine(c.runningErr.Error()))))
 	case len(c.running) > 0:
 		msg := " — items guarded by them will be skipped"
 		if m.opt.Clean.Force {

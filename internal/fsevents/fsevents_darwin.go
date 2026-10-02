@@ -251,15 +251,9 @@ func replay(ctx context.Context, roots []string, since uint64, timeout time.Dura
 	cancel := (*C.int)(C.malloc(C.size_t(unsafe.Sizeof(C.int(0)))))
 	*cancel = 0
 	defer C.free(unsafe.Pointer(cancel))
-	finished := make(chan struct{})
-	defer close(finished)
-	go func() {
-		select {
-		case <-ctx.Done():
-			*cancel = 1
-		case <-finished:
-		}
-	}()
+	stop := watchCancellation(ctx, func() { *cancel = 1 })
+	// Registered after free: the watcher must finish before its C flag is freed.
+	defer stop()
 	// Under a heavy load fseventsd coalesces the events it cannot deliver in
 	// time into a "must rescan everything" (UserDropped): the history itself
 	// is complete, so replay it again a few times before giving up.

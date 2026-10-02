@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -47,10 +46,7 @@ func RunPicker(ctx context.Context, opt PickerOptions) (*clean.Summary, error) {
 	warmTerminal()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := p.Run()
-	if m.scanCancel != nil {
-		m.scanCancel()
-	}
-	m.waitCleanFinished()
+	m.close()
 	return m.lastSummary, runErr(ctx, err)
 }
 
@@ -63,6 +59,7 @@ type AnalyzeOptions struct {
 
 // RunAnalyze runs the interactive disk analyzer.
 func RunAnalyze(ctx context.Context, opt AnalyzeOptions) error {
+	ctx = scanContext(ctx, opt.Env)
 	root := opt.Root
 	if !filepath.IsAbs(root) {
 		abs, err := filepath.Abs(root)
@@ -72,7 +69,7 @@ func RunAnalyze(ctx context.Context, opt AnalyzeOptions) error {
 		root = abs
 	}
 	root = filepath.Clean(root)
-	fi, err := os.Stat(root)
+	fi, err := statFile(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -81,11 +78,10 @@ func RunAnalyze(ctx context.Context, opt AnalyzeOptions) error {
 	}
 	opt.Root = root
 	m := newAnalyzer(ctx, opt)
+	defer m.close()
 	warmTerminal()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err = p.Run()
-	m.waitDelete()
-	m.cancel()
 	return runErr(ctx, err)
 }
 

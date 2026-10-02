@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // ------------------------------------------------------------------ Expo Go
@@ -31,7 +31,7 @@ const expoMinSDK = 40
 func (s *scanner) warmExpoGo() {
 	root := s.home(".expo", "ios-simulator-app-cache")
 	var paths []string
-	for _, e := range listDir(root) {
+	for _, e := range listDir(s.ctx, root) {
 		if p := filepath.Join(root, e.Name()); e.IsDir() && expoGoName.MatchString(e.Name()) && s.allowed(p) {
 			paths = append(paths, p)
 		}
@@ -46,7 +46,7 @@ func (s *scanner) expoGo() {
 		ver  version
 	}
 	byMajor := map[int][]build{}
-	for _, e := range listDir(root) {
+	for _, e := range listDir(s.ctx, root) {
 		m := expoGoName.FindStringSubmatch(e.Name())
 		if m == nil || !e.IsDir() {
 			continue
@@ -99,14 +99,14 @@ func (s *scanner) playwright() {
 		roots = append([]string{s.envDir("PLAYWRIGHT_BROWSERS_PATH")}, roots...)
 	}
 	for _, root := range uniqDirs(roots...) {
-		needed, links, haveLinks := playwrightNeeded(root)
+		needed, links, haveLinks := playwrightNeeded(s.ctx, root)
 		type rev struct {
 			path, family string
 			n            int
 		}
 		var revs []rev
 		newest := map[string]int{}
-		for _, e := range listDir(root) {
+		for _, e := range listDir(s.ctx, root) {
 			m := playwrightRev.FindStringSubmatch(e.Name())
 			if m == nil || !e.IsDir() {
 				continue
@@ -156,9 +156,9 @@ func (s *scanner) playwright() {
 // playwright-core install whose browsers.json lists the revisions it needs.
 // It returns dir name -> installs needing it, the number of live installs,
 // and whether the .links information is usable.
-func playwrightNeeded(root string) (map[string][]string, int, bool) {
+func playwrightNeeded(ctx context.Context, root string) (map[string][]string, int, bool) {
 	linksDir := filepath.Join(root, ".links")
-	ents, err := os.ReadDir(linksDir)
+	ents, err := fsx.ReadDir(ctx, linksDir)
 	if err != nil {
 		return nil, 0, false
 	}
@@ -223,7 +223,7 @@ func (s *scanner) tmpSignatures() {
 	}
 	var codegen, vitest []string
 	var codegenNewest, vitestNewest time.Time
-	for _, e := range listDir(tmp) {
+	for _, e := range listDir(s.ctx, tmp) {
 		if s.ctx.Err() != nil {
 			return
 		}
@@ -232,8 +232,8 @@ func (s *scanner) tmpSignatures() {
 		}
 		name := e.Name()
 		p := filepath.Join(tmp, name)
-		isCodegen := codegenName.MatchString(name) && isCodegenDir(p, name)
-		if !isCodegen && !(nanoidName.MatchString(name) && isVitestDir(p)) {
+		isCodegen := codegenName.MatchString(name) && isCodegenDir(s.ctx, p, name)
+		if !isCodegen && !(nanoidName.MatchString(name) && isVitestDir(s.ctx, p)) {
 			continue
 		}
 		mt := newestMtime(p)
@@ -275,22 +275,22 @@ func (s *scanner) tmpSignatures() {
 }
 
 // isCodegenDir: <lib><6 random chars>/out containing <lib>JSI.h or react/renderer.
-func isCodegenDir(p, name string) bool {
-	ents := listDir(p)
+func isCodegenDir(ctx context.Context, p, name string) bool {
+	ents := listDir(ctx, p)
 	if len(ents) != 1 || ents[0].Name() != "out" || !ents[0].IsDir() {
 		return false
 	}
 	lib := name[:len(name)-6]
 	out := filepath.Join(p, "out")
-	if fi, err := os.Lstat(filepath.Join(out, lib+"JSI.h")); err == nil && fi.Mode().IsRegular() {
+	if fi, err := fsx.Lstat(ctx, filepath.Join(out, lib+"JSI.h")); err == nil && fi.Mode().IsRegular() {
 		return true
 	}
 	return isRealDir(filepath.Join(out, "react", "renderer"))
 }
 
 // isVitestDir: 21-char nanoid dir whose only children are client/ and/or ssr/.
-func isVitestDir(p string) bool {
-	ents := listDir(p)
+func isVitestDir(ctx context.Context, p string) bool {
+	ents := listDir(ctx, p)
 	if len(ents) == 0 || len(ents) > 2 {
 		return false
 	}
