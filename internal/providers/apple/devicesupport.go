@@ -1,13 +1,13 @@
 package apple
 
 import (
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // DeviceSupport folders hold debug symbols copied from physical devices, one
@@ -42,7 +42,7 @@ func (s *scan) deviceSupport() {
 	byPlatform := map[string][]dsVersion{}
 	for _, d := range deviceSupportDirs {
 		root := s.lib("Developer", "Xcode", d.dir)
-		ents, err := os.ReadDir(root)
+		ents, err := fsx.ReadDir(s.ctx, root)
 		if err != nil {
 			continue
 		}
@@ -71,7 +71,7 @@ func (s *scan) deviceSupport() {
 				continue
 			}
 			c := compareVersions(v.version, vs[newest].version)
-			if c > 0 || (c == 0 && childrenNewest(v.path).After(childrenNewest(vs[newest].path))) {
+			if c > 0 || (c == 0 && childrenNewest(s.ctx, v.path).After(childrenNewest(s.ctx, vs[newest].path))) {
 				newest = i
 			}
 		}
@@ -95,7 +95,7 @@ func (s *scan) deviceSupportItem(v dsVersion, newest bool) {
 	it.Risk = core.RiskModerate
 	it.Method = core.MethodDelete
 	it.ProcessGuard = []string{"Xcode"}
-	it.LastUsed = childrenNewest(v.path)
+	it.LastUsed = childrenNewest(s.ctx, v.path)
 	it.Note = "Debug symbols copied from a device running " + v.platform + " " + v.version +
 		"; Xcode copies them again (several minutes, 2-6 GB) the next time such a device is used for debugging."
 	setMeta(it, "platform", v.platform)

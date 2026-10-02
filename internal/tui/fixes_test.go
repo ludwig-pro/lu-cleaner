@@ -429,7 +429,7 @@ func TestAnalyzerTrashMode(t *testing.T) {
 	opts := testCleanOpts(home)
 	opts.Trash = true
 	m := newAnalyzer(context.Background(), AnalyzeOptions{Env: testEnv(home), Root: home, Clean: opts})
-	t.Cleanup(m.cancel)
+	t.Cleanup(m.close)
 	m.diskFn = fakeDisk
 	m.w, m.h = 120, 40
 	d := newDriver(t, m)

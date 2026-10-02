@@ -16,9 +16,8 @@ import (
 // result, or wait for the walk in flight. Without a run cache
 // (fsx.WithCache) it only wastes walks.
 //
-// Walks are never cancelled early (a cancelled walk would hand its partial
-// result to every provider waiting on the same path): Close drops the paths
-// not started yet and waits for the walks in flight.
+// Close drops pending work and waits for the walks in flight. Cancelling the
+// scan also stops those walks; fsx never caches their partial results.
 type Prefetcher struct {
 	ctx    context.Context
 	mu     sync.Mutex
@@ -27,24 +26,36 @@ type Prefetcher struct {
 	seen   map[string]bool
 	closed bool
 	wg     sync.WaitGroup
+	done   chan struct{}
 }
+
+const maxPending = 128
 
 // NewPrefetcher starts workers walking the paths given to Add, in order.
 func NewPrefetcher(ctx context.Context, workers int) *Prefetcher {
-	p := &Prefetcher{ctx: ctx, seen: map[string]bool{}}
+	p := &Prefetcher{ctx: ctx, seen: map[string]bool{}, done: make(chan struct{})}
 	p.cond = sync.NewCond(&p.mu)
 	for range max(workers, 1) {
 		p.wg.Add(1)
 		go p.work()
 	}
+	go func() { p.wg.Wait(); close(p.done) }()
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.stop()
+		case <-p.done:
+		}
+	}()
 	return p
 }
 
-// Add queues path (once).
+// Add queues a path once when space is available. Dropping speculative
+// work never prevents the provider from measuring that path later.
 func (p *Prefetcher) Add(path string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed || p.seen[path] {
+	if p.closed || p.ctx.Err() != nil || p.seen[path] || len(p.queue) >= maxPending {
 		return
 	}
 	p.seen[path] = true
@@ -55,22 +66,26 @@ func (p *Prefetcher) Add(path string) {
 // Close drops the paths not started yet and waits for the walks in flight.
 // It may be called more than once.
 func (p *Prefetcher) Close() {
+	p.stop()
+	<-p.done
+}
+
+func (p *Prefetcher) stop() {
 	p.mu.Lock()
 	p.closed = true
 	p.queue = nil
 	p.cond.Broadcast()
 	p.mu.Unlock()
-	p.wg.Wait()
 }
 
 func (p *Prefetcher) work() {
 	defer p.wg.Done()
 	for {
 		p.mu.Lock()
-		for len(p.queue) == 0 && !p.closed {
+		for len(p.queue) == 0 && !p.closed && p.ctx.Err() == nil {
 			p.cond.Wait()
 		}
-		if p.closed {
+		if p.closed || p.ctx.Err() != nil {
 			p.mu.Unlock()
 			return
 		}

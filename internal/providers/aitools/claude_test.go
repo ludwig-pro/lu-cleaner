@@ -224,7 +224,7 @@ func TestResolver(t *testing.T) {
 		r.root = base
 		for _, d := range []string{"a/.codex/worktrees/x1/app", "a/foo-bar/baz", "a/foo/bar", "a/local_sources/my.site", "a"} {
 			want := filepath.Join(base, d)
-			got, ex := r.resolve(enc(want))
+			got, ex := r.resolve(context.Background(), enc(want))
 			if ex != existYes {
 				t.Errorf("resolve(%q) = %v, want existYes", enc(want), ex)
 			}
@@ -234,22 +234,22 @@ func TestResolver(t *testing.T) {
 			}
 		}
 		for _, d := range []string{"a/.codex/worktrees/x2/app", "a/nope"} {
-			if _, ex := r.resolve(enc(filepath.Join(base, d))); ex != existNo {
+			if _, ex := r.resolve(context.Background(), enc(filepath.Join(base, d))); ex != existNo {
 				t.Errorf("resolve(missing %s) = %v, want existNo", d, ex)
 			}
 		}
 		// Nothing of the name matches below the root: it may not be a path
 		// at all (Cursor's "empty-window", a chat id...).
 		for _, name := range []string{enc(filepath.Join(base, "b")), "empty-window"} {
-			if _, ex := r.resolve(name); ex != existUnknown {
+			if _, ex := r.resolve(context.Background(), name); ex != existUnknown {
 				t.Errorf("resolve(%s) = %v, want existUnknown", name, ex)
 			}
 		}
 		// APFS is case-insensitive: a folder opened with another case exists.
-		if got, ex := r.resolve(enc(filepath.Join(base, "A/FOO/Bar"))); ex != existYes || !strings.EqualFold(enc(got), enc(filepath.Join(base, "a/foo/bar"))) {
+		if got, ex := r.resolve(context.Background(), enc(filepath.Join(base, "A/FOO/Bar"))); ex != existYes || !strings.EqualFold(enc(got), enc(filepath.Join(base, "a/foo/bar"))) {
 			t.Errorf("case-insensitive resolve = %q %v", got, ex)
 		}
-		if _, ex := r.resolve(strings.Repeat("x", 300)); ex != existUnknown {
+		if _, ex := r.resolve(context.Background(), strings.Repeat("x", 300)); ex != existUnknown {
 			t.Errorf("over-long (truncated) names must be unknown")
 		}
 	}
@@ -259,7 +259,7 @@ func TestResolver(t *testing.T) {
 	}
 	r := newResolver(claudeEncode)
 	r.root = base
-	if _, ex := r.resolve(claudeEncode(filepath.Join(base, "u", "Cafe-x"))); ex != existUnknown {
+	if _, ex := r.resolve(context.Background(), claudeEncode(filepath.Join(base, "u", "Cafe-x"))); ex != existUnknown {
 		t.Errorf("non-ASCII sibling: want unknown, got %v", ex)
 	}
 }

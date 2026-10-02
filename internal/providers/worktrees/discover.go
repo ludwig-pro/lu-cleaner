@@ -2,6 +2,7 @@ package worktrees
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,10 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 	"golang.org/x/sys/unix"
 	"golang.org/x/text/unicode/norm"
 )
@@ -86,7 +87,7 @@ type repo struct {
 	entries  []listEntry // linked worktrees listed by `git worktree list`
 	prunable []listEntry
 
-	info       sync.Once // guards the fields below (resolved by repoInfo)
+	info       scanmemo.Once // guards the fields below (resolved by repoInfo)
 	hasRemotes bool
 	defRef     string // full ref of the default branch (refs/remotes/origin/main...)
 	defName    string // short name (origin/main)
@@ -219,14 +220,17 @@ func readGitFile(dir string) (string, bool) {
 // dir derived from the path, and it must then look like a git dir. ok is false
 // for submodules (and their worktrees) and anything that is not a linked
 // worktree.
-func commonDir(gitdir string) (string, bool) {
+func commonDir(ctx context.Context, gitdir string) (string, bool) {
 	if strings.Contains(gitdir+"/", "/.git/modules/") {
 		return "", false // submodule, or a worktree of a submodule: out of scope
 	}
 	if filepath.Base(filepath.Dir(gitdir)) != "worktrees" {
 		return "", false
 	}
-	b, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	b, err := fsx.ReadFile(ctx, filepath.Join(gitdir, "commondir"))
+	if ctx.Err() != nil {
+		return "", false
+	}
 	if err == nil {
 		c := strings.TrimSpace(string(b))
 		if c == "" {
@@ -241,7 +245,11 @@ func commonDir(gitdir string) (string, bool) {
 		}
 		return c, true
 	}
-	if fi, lerr := os.Lstat(gitdir); lerr == nil && fi.IsDir() && errors.Is(err, fs.ErrNotExist) {
+	fi, lerr := fsx.Lstat(ctx, gitdir)
+	if ctx.Err() != nil {
+		return "", false
+	}
+	if lerr == nil && fi.IsDir() && errors.Is(err, fs.ErrNotExist) {
 		return "", false // live admin dir without commondir: not a linked worktree
 	}
 	// The admin dir is gone (or unreadable): derive the common dir from the
@@ -351,7 +359,7 @@ func (s *scan) walk(root string, maxDepth int, skipHidden bool, visit func(strin
 		if n.depth >= maxDepth {
 			continue
 		}
-		entries, err := os.ReadDir(n.path)
+		entries, err := fsx.ReadDir(s.ctx, n.path)
 		if err != nil {
 			continue
 		}
@@ -391,7 +399,7 @@ func (s *scan) scanNested(dir string) {
 		if !fsx.IsDir(d) {
 			continue
 		}
-		entries, err := os.ReadDir(d)
+		entries, err := fsx.ReadDir(s.ctx, d)
 		if err != nil {
 			continue
 		}
@@ -435,7 +443,7 @@ func (s *scan) addCandidate(dir string) {
 		return
 	}
 	path := realPath(dir)
-	if s.env.Excluded(dir) || s.env.Excluded(path) || s.env.IsProtected(path) || s.env.IsProtected(dir) {
+	if s.env.Excluded(dir) || s.env.Excluded(path) || s.env.IsProtectedContext(s.ctx, path) || s.env.IsProtectedContext(s.ctx, dir) {
 		return
 	}
 	if gitKind(path) != gitFile {
@@ -445,7 +453,7 @@ func (s *scan) addCandidate(dir string) {
 	if !ok {
 		return
 	}
-	common, ok := commonDir(gitdir)
+	common, ok := commonDir(s.ctx, gitdir)
 	if !ok {
 		return // submodule or separate git dir: not a linked worktree
 	}
@@ -544,39 +552,57 @@ func (s *scan) resolve(w *worktree) {
 // `git worktree repair`, and are reported only. Runs once every main
 // repository has been listed.
 func (s *scan) reconcile() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	repos := make([]*repo, 0, len(s.repos))
-	for _, r := range s.repos {
-		repos = append(repos, r)
+	type listedRepo struct {
+		repo    *repo
+		entries []listEntry
 	}
-	sort.Slice(repos, func(i, j int) bool { return repos[i].path < repos[j].path })
-	for _, r := range repos {
+	s.mu.Lock()
+	repos := make([]listedRepo, 0, len(s.repos))
+	for _, r := range s.repos {
+		repos = append(repos, listedRepo{r, append([]listEntry(nil), r.entries...)})
+	}
+	s.mu.Unlock()
+	sort.Slice(repos, func(i, j int) bool { return repos[i].repo.path < repos[j].repo.path })
+	for _, listed := range repos {
+		r := listed.repo
 		var admins map[string]string
-		for _, e := range r.entries {
+		for _, e := range listed.entries {
+			if s.ctx.Err() != nil {
+				return
+			}
 			k, ok := keyOf(e.path)
 			if !ok {
 				continue
 			}
+			s.mu.Lock()
 			w := s.byKey[k]
-			if w == nil || w.orphan == "" {
+			eligible := w != nil && w.orphan != ""
+			s.mu.Unlock()
+			if !eligible {
 				continue
 			}
 			if admins == nil {
-				admins = adminDirs(r.common)
+				admins = adminDirs(s.ctx, r.common)
 			}
-			w.repairAt = r.path
-			w.orphan, w.copyOf = "", ""
-			w.repo, w.main, w.common, w.bare = r, r.path, r.common, r.bare
-			if a := admins[e.path]; a != "" {
-				w.gitdir = a // its lock file is read from here by inspect
+			if s.ctx.Err() != nil {
+				return
 			}
-			if e.locked {
-				w.locked = true
-				if w.lockReason == "" {
-					w.lockReason = firstLine(e.reason)
+			s.mu.Lock()
+			if w.orphan != "" {
+				w.repairAt = r.path
+				w.orphan, w.copyOf = "", ""
+				w.repo, w.main, w.common, w.bare = r, r.path, r.common, r.bare
+				if a := admins[e.path]; a != "" {
+					w.gitdir = a
+				}
+				if e.locked {
+					w.locked = true
+					if w.lockReason == "" {
+						w.lockReason = firstLine(e.reason)
+					}
 				}
 			}
+			s.mu.Unlock()
 		}
 	}
 }

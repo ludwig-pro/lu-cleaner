@@ -1,6 +1,7 @@
 package jsdev
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -28,7 +29,7 @@ func (s *scanner) npmCacheDirs() []string {
 func (s *scanner) npx() {
 	for _, cache := range s.npmCacheDirs() {
 		root := filepath.Join(cache, "_npx")
-		for _, e := range listDir(root) {
+		for _, e := range listDir(s.ctx, root) {
 			if s.ctx.Err() != nil {
 				return
 			}
@@ -119,7 +120,7 @@ func (s *scanner) pnpm() {
 		stores = append(stores, p)
 	}
 	for _, parent := range uniqDirs(parents...) {
-		for _, e := range listDir(parent) {
+		for _, e := range listDir(s.ctx, parent) {
 			if storeMajor.MatchString(e.Name()) {
 				addStore(filepath.Join(parent, e.Name()))
 			}
@@ -145,7 +146,7 @@ func (s *scanner) pnpm() {
 		it.LastUsed = newestMtime(st, filepath.Join(st, "index"), filepath.Join(st, "index.db"), filepath.Join(st, "files"),
 			filepath.Join(st, "links"), filepath.Join(st, "projects"))
 		it.Note = "pnpm content-addressable store; the next `pnpm install` re-downloads what it needs. Installed node_modules keep working (APFS clones or hardlinks)."
-		gvs := pnpmGlobalVirtualStore(st)
+		gvs := pnpmGlobalVirtualStore(s.ctx, st)
 		if gvs.used {
 			// Project node_modules are symlinks into <store>/links: deleting
 			// the store leaves them dangling.
@@ -181,9 +182,9 @@ type pnpmGVS struct {
 
 // pnpmGlobalVirtualStore inspects st/links and st/projects. Anything it
 // cannot read counts as used (fail closed).
-func pnpmGlobalVirtualStore(st string) pnpmGVS {
+func pnpmGlobalVirtualStore(ctx context.Context, st string) pnpmGVS {
 	var g pnpmGVS
-	ents, err := os.ReadDir(filepath.Join(st, "links"))
+	ents, err := fsx.ReadDir(ctx, filepath.Join(st, "links"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		g.used = true
 	}
@@ -194,7 +195,7 @@ func pnpmGlobalVirtualStore(st string) pnpmGVS {
 		}
 	}
 	projDir := filepath.Join(st, "projects")
-	ents, err = os.ReadDir(projDir)
+	ents, err = fsx.ReadDir(ctx, projDir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		g.used = true
 	}

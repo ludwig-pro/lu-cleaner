@@ -2,7 +2,6 @@ package artifacts
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -65,7 +64,7 @@ func (s *scan) addGitRoot(dir string, wc walkCtx) *gitRoot {
 	s.mu.Unlock()
 	g := &gitRoot{path: dir, root: wc.root, depth: wc.depth}
 	dotgit := filepath.Join(dir, ".git")
-	fi, err := os.Lstat(dotgit)
+	fi, err := fsx.Lstat(s.ctx, dotgit)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -127,7 +126,7 @@ func readGitFile(p string) string {
 // inside a repository). The home itself (dotfile repos) never counts.
 func (s *scan) findGitAbove(r *scanRoot) *gitRoot {
 	for d := filepath.Dir(r.path); d != "/" && d != "." && fsx.Within(d, s.home) && d != s.home; d = filepath.Dir(d) {
-		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+		if _, err := fsx.Lstat(s.ctx, filepath.Join(d, ".git")); err == nil {
 			return s.addGitRoot(d, walkCtx{root: r, tool: r.tool})
 		}
 	}
@@ -159,9 +158,7 @@ func (g *gitRoot) isIgnored(rel string) int8 {
 // ignored directories decide the ignore state of every candidate and feed
 // the "heavy ignored directories" discovery.
 func (s *scan) listIgnored(g *gitRoot) {
-	ctx, cancel := context.WithTimeout(s.ctx, gitListTimeout)
-	defer cancel()
-	out, err := s.env.Output(ctx, g.path, "git", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false",
+	out, err := s.env.OutputTimeout(s.ctx, gitListTimeout, g.path, "git", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false",
 		"ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
 	if err != nil {
 		s.logf("artifacts: git ls-files --ignored in %s: %v", g.path, err)
@@ -198,10 +195,8 @@ func (s *scan) checkIgnore(g *gitRoot, rels []string) {
 	g.ignored = map[string]bool{}
 	for i := 0; i < len(rels); i += gitBatch {
 		batch := rels[i:min(i+gitBatch, len(rels))]
-		ctx, cancel := context.WithTimeout(s.ctx, gitCheckTimeout)
 		args := append([]string{"-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "check-ignore", "--"}, batch...)
-		out, err := s.env.Output(ctx, g.path, "git", args...)
-		cancel()
+		out, err := s.env.OutputTimeout(s.ctx, gitCheckTimeout, g.path, "git", args...)
 		if err != nil && !exitCode(err, 1) { // 1 = nothing ignored
 			s.logf("artifacts: git check-ignore in %s: %v", g.path, err)
 			return
@@ -231,10 +226,8 @@ func (s *scan) trackedCands(g *gitRoot, cs []*cand) {
 	sort.Strings(rels)
 	for i := 0; i < len(rels); i += gitBatch {
 		batch := rels[i:min(i+gitBatch, len(rels))]
-		ctx, cancel := context.WithTimeout(s.ctx, gitCheckTimeout)
 		args := append([]string{"--literal-pathspecs", "-c", "core.fsmonitor=false", "ls-files", "-z", "--"}, batch...)
-		out, err := s.env.Output(ctx, g.path, "git", args...)
-		cancel()
+		out, err := s.env.OutputTimeout(s.ctx, gitCheckTimeout, g.path, "git", args...)
 		if err != nil {
 			s.logf("artifacts: git ls-files in %s: %v", g.path, err)
 			return
@@ -349,17 +342,24 @@ func (g *gitRoot) commonDir() string {
 // from there.
 func (s *scan) linkedWorktrees() []string {
 	s.mu.Lock()
-	commons := map[string]bool{}
+	gits := make([]*gitRoot, 0, len(s.gits))
 	for _, g := range s.gits {
+		gits = append(gits, g)
+	}
+	s.mu.Unlock()
+	commons := map[string]bool{}
+	for _, g := range gits {
+		if s.ctx.Err() != nil {
+			return nil
+		}
 		if cd := g.commonDir(); cd != "" {
 			commons[cd] = true
 		}
 	}
-	s.mu.Unlock()
 	var out []string
 	for cd := range commons {
 		admin := filepath.Join(cd, "worktrees")
-		ents, _ := os.ReadDir(admin)
+		ents, _ := fsx.ReadDir(s.ctx, admin)
 		for _, e := range ents {
 			b, err := readSmall(filepath.Join(admin, e.Name(), "gitdir"), 4096)
 			gd := strings.TrimSpace(string(b))
@@ -428,9 +428,7 @@ func readSmall(p string, max int64) ([]byte, error) {
 // (untracked folders collapsed, walked with a small budget).
 func (s *scan) dirtyActivity(g *gitRoot) {
 	run := func(args ...string) ([]byte, bool) {
-		ctx, cancel := context.WithTimeout(s.ctx, gitCheckTimeout)
-		defer cancel()
-		out, err := s.env.Output(ctx, g.path, "git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.quotePath=false"}, args...)...)
+		out, err := s.env.OutputTimeout(s.ctx, gitCheckTimeout, g.path, "git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.quotePath=false"}, args...)...)
 		if err != nil {
 			s.logf("artifacts: git %s in %s: %v", args[0], g.path, err)
 			return nil, false

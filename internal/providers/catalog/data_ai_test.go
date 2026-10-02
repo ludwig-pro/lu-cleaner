@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,7 @@ func TestCursorStateBackupsNotRecommended(t *testing.T) {
 	if e.Risk < core.RiskCaution || e.Recommended {
 		t.Fatalf("ai-cursor-state-db-backups = %v rec %v, want caution and not recommended", e.Risk, e.Recommended)
 	}
-	it := (&Provider{}).baseItem(core.NewEnv(), e)
+	it := (&Provider{}).baseItem(context.Background(), core.NewEnv(), e)
 	it.Size, it.LastUsed = 500<<20, time.Now().Add(-90*24*time.Hour)
 	it.Warn = "" // Cursor may be running on this machine: judge the entry itself
 	if core.Recommend(it, time.Now(), 14*24*time.Hour) {

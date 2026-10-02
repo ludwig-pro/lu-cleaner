@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // rule describes one kind of project artifact.
@@ -508,7 +510,7 @@ func (r *rule) kindFor(path string) string {
 // strongOutput reports whether the entries of an artifact (dir) prove that a
 // generator wrote it: one of r.Strong, or bundles with content-hashed names
 // at the top or in the usual asset folders.
-func (r *rule) strongOutput(dir string, content map[string]bool) bool {
+func (r *rule) strongOutput(ctx context.Context, dir string, content map[string]bool) bool {
 	if _, ok := matchAny(r.Strong, content); ok {
 		return true
 	}
@@ -519,7 +521,7 @@ func (r *rule) strongOutput(dir string, content map[string]bool) bool {
 		if first, _, _ := strings.Cut(sub, "/"); !content[first] {
 			continue
 		}
-		if hashedAssetIn(dirNames(filepath.Join(dir, sub))) {
+		if hashedAssetIn(dirNames(ctx, filepath.Join(dir, sub))) {
 			return true
 		}
 	}
@@ -603,13 +605,11 @@ func isBareRepo(dir string) bool {
 }
 
 // dirNames lists the entries of dir as a set (nil on error).
-func dirNames(dir string) map[string]bool {
-	f, err := os.Open(dir)
+func dirNames(ctx context.Context, dir string) map[string]bool {
+	names, err := fsx.ReadNames(ctx, dir)
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
-	names, _ := f.Readdirnames(-1)
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
 		set[n] = true

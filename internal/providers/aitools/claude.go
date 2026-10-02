@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"golang.org/x/sys/unix"
 	"golang.org/x/text/unicode/norm"
 )
@@ -48,11 +48,11 @@ func pathKey(p string) string { return strings.ToLower(norm.NFC.String(filepath.
 
 func (s *scanner) claudeLiveSessions() claudeLive {
 	live := claudeLive{ids: map[string]bool{}, cwds: map[string]bool{}}
-	for _, e := range list(s.home(".claude/sessions"), false) {
+	for _, e := range list(s.ctx, s.home(".claude/sessions"), false) {
 		if e.dir || !strings.HasSuffix(e.name, ".json") {
 			continue
 		}
-		data, err := os.ReadFile(e.path)
+		data, err := fsx.ReadFile(s.ctx, e.path)
 		if err != nil || len(data) > 1<<20 {
 			continue
 		}
@@ -108,7 +108,7 @@ func (cs *claudeSession) paths() []string {
 // claudeProjects scans ~/.claude/projects/<encoded-cwd>/.
 func (s *scanner) claudeProjects() {
 	root := s.home(".claude/projects")
-	entries := list(root, true)
+	entries := list(s.ctx, root, true)
 	if len(entries) == 0 {
 		return
 	}
@@ -138,7 +138,7 @@ func (s *scanner) claudeProject(proj entry, live claudeLive) {
 	}
 	var others []string // files next to the sessions (sessions-index.json...)
 	hasMemory := false
-	for _, c := range list(proj.path, true) {
+	for _, c := range list(s.ctx, proj.path, true) {
 		switch {
 		case c.name == "memory":
 			hasMemory = true
@@ -151,7 +151,7 @@ func (s *scanner) claudeProject(proj entry, live claudeLive) {
 		case c.dir:
 			cs := get(c.name)
 			cs.dir = c.path
-			cs.mtime = maxTime(cs.mtime, newestShallow(c.path))
+			cs.mtime = maxTime(cs.mtime, newestShallow(s.ctx, c.path))
 		default:
 			others = append(others, c.path)
 		}
@@ -172,7 +172,7 @@ func (s *scanner) claudeProject(proj entry, live claudeLive) {
 
 	// Each session's own folder: the "cwd" of its transcript, else its
 	// sessions-index.json entry.
-	idx := readClaudeSessionsIndex(proj.path)
+	idx := readClaudeSessionsIndex(s.ctx, proj.path)
 	anyCwd := false
 	for _, cs := range ordered {
 		if cs.jsonl != "" {
@@ -197,7 +197,7 @@ func (s *scanner) claudeProject(proj entry, live claudeLive) {
 		if filepath.IsAbs(idx.originalPath) {
 			cwd, src = filepath.Clean(idx.originalPath), "sessions-index"
 		} else {
-			cwd, dirNameEx = s.claudeRes.resolve(proj.name)
+			cwd, dirNameEx = s.claudeRes.resolve(s.ctx, proj.name)
 		}
 		for _, cs := range ordered {
 			cs.cwd, cs.src = cwd, src
@@ -403,7 +403,7 @@ type claudeOrphanCheck struct {
 func (s *scanner) claudeOrphanRecheck(c claudeOrphanCheck) func(context.Context) error {
 	root := s.claudeRes.root
 	projDir, cwds, ids, whole := c.projDir, c.cwds, c.ids, c.whole
-	return func(context.Context) error {
+	return func(ctx context.Context) error {
 		for _, cwd := range cwds {
 			if pathExistence(cwd) != existNo {
 				return fmt.Errorf("%s exists again (or cannot be checked): rescan", cwd)
@@ -412,11 +412,11 @@ func (s *scanner) claudeOrphanRecheck(c claudeOrphanCheck) func(context.Context)
 		if c.dirName {
 			r := newResolver(claudeEncode)
 			r.root = root
-			if _, ex := r.resolve(filepath.Base(projDir)); ex != existNo {
+			if _, ex := r.resolve(ctx, filepath.Base(projDir)); ex != existNo {
 				return fmt.Errorf("a folder encoded as %s may exist: rescan", filepath.Base(projDir))
 			}
 		}
-		for _, e := range list(projDir, true) {
+		for _, e := range list(ctx, projDir, true) {
 			id := e.name
 			switch {
 			case e.name == "memory":
@@ -437,7 +437,7 @@ func (s *scanner) claudeOrphanRecheck(c claudeOrphanCheck) func(context.Context)
 			}
 			t := e.mtime
 			if e.dir {
-				t = newestShallow(e.path)
+				t = newestShallow(ctx, e.path)
 			}
 			if time.Since(t) < liveGrace {
 				return fmt.Errorf("a Claude Code session wrote %s recently", e.name)
@@ -467,9 +467,9 @@ type claudeIndex struct {
 	byID         map[string]string // sessionId -> projectPath
 }
 
-func readClaudeSessionsIndex(projDir string) claudeIndex {
+func readClaudeSessionsIndex(ctx context.Context, projDir string) claudeIndex {
 	idx := claudeIndex{byID: map[string]string{}}
-	data, err := os.ReadFile(filepath.Join(projDir, "sessions-index.json"))
+	data, err := fsx.ReadFile(ctx, filepath.Join(projDir, "sessions-index.json"))
 	if err != nil || len(data) > 16<<20 {
 		return idx
 	}
@@ -502,9 +502,9 @@ func (s *scanner) claudeConfigBackups() {
 		s.home(".claude/backups/.claude.json.backup.*"),
 		s.home(".claude.json.backup.*"),
 	} {
-		matches, _ := filepath.Glob(pat)
+		matches, _ := fsx.Glob(s.ctx, pat)
 		for _, m := range matches {
-			fi, err := os.Lstat(m)
+			fi, err := fsx.Lstat(s.ctx, m)
 			if err != nil || !fi.Mode().IsRegular() {
 				continue
 			}

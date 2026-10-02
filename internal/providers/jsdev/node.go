@@ -1,6 +1,7 @@
 package jsdev
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func (s *scanner) managerRoots() map[string][]string {
 }
 
 // loadInstalls lists installed Node versions for one manager root.
-func loadInstalls(manager, root string) []*nodeInstall {
+func loadInstalls(ctx context.Context, manager, root string) []*nodeInstall {
 	var out []*nodeInstall
 	add := func(dir, name string, inst string) {
 		v, ok := parseVersion(name)
@@ -67,7 +68,7 @@ func loadInstalls(manager, root string) []*nodeInstall {
 		})
 	}
 	scanDir := func(parent string, installation string) {
-		for _, e := range listDir(parent) {
+		for _, e := range listDir(ctx, parent) {
 			dir := filepath.Join(parent, e.Name())
 			inst := dir
 			if installation != "" {
@@ -91,7 +92,7 @@ func loadInstalls(manager, root string) []*nodeInstall {
 			before := len(out)
 			scanDir(parent, "")
 			// mise keeps alias symlinks ("20", "lts", "latest") next to versions.
-			for _, e := range listDir(parent) {
+			for _, e := range listDir(ctx, parent) {
 				if e.Type()&os.ModeSymlink == 0 {
 					continue
 				}
@@ -248,7 +249,7 @@ func (s *scanner) classify(byRoot map[string][]*nodeInstall) {
 			if sp := resolveNvmAlias(root, "default"); sp.kind != specNone {
 				addDefault(sp, "nvm default ("+sp.raw+")")
 			}
-			for _, e := range listDir(filepath.Join(root, "alias")) {
+			for _, e := range listDir(s.ctx, filepath.Join(root, "alias")) {
 				name := e.Name()
 				if e.IsDir() || name == "default" || strings.HasPrefix(name, ".") {
 					continue
@@ -257,7 +258,7 @@ func (s *scanner) classify(byRoot map[string][]*nodeInstall) {
 				mark(sp, func(n *nodeInstall) { n.aliases = append(n.aliases, "nvm alias "+name) })
 			}
 		case "fnm":
-			for _, e := range listDir(filepath.Join(root, "aliases")) {
+			for _, e := range listDir(s.ctx, filepath.Join(root, "aliases")) {
 				real, err := filepath.EvalSymlinks(filepath.Join(root, "aliases", e.Name()))
 				if err != nil {
 					continue
@@ -307,7 +308,7 @@ func (s *scanner) classify(byRoot map[string][]*nodeInstall) {
 			if real != n.dir {
 				n.running += s.procs.usesDir(real)
 			}
-			n.globals = globalPackages(n.lib)
+			n.globals = globalPackages(s.ctx, n.lib)
 		}
 	}
 }
@@ -329,7 +330,7 @@ func (s *scanner) nodeVersions() {
 		}
 	}
 	for _, lib := range s.prefixLibs(true) {
-		for _, g := range globalPackages(lib) {
+		for _, g := range globalPackages(s.ctx, lib) {
 			elsewhere[g] = true
 		}
 	}
@@ -355,7 +356,7 @@ func (s *scanner) nodeInstalls() (byRoot map[string][]*nodeInstall, all []*nodeI
 	roots := s.managerRoots()
 	for _, manager := range []string{"nvm", "fnm", "mise", "asdf", "volta"} {
 		for _, root := range roots[manager] {
-			list := loadInstalls(manager, root)
+			list := loadInstalls(s.ctx, manager, root)
 			var keep []*nodeInstall
 			for _, n := range list {
 				if s.allowed(n.dir) {
@@ -548,13 +549,13 @@ func (s *scanner) npmLeftovers(installs []*nodeInstall) {
 	}
 	for _, l := range libs {
 		dirs := []string{l.dir}
-		for _, e := range listDir(l.dir) {
+		for _, e := range listDir(s.ctx, l.dir) {
 			if e.IsDir() && strings.HasPrefix(e.Name(), "@") {
 				dirs = append(dirs, filepath.Join(l.dir, e.Name()))
 			}
 		}
 		for _, d := range dirs {
-			for _, e := range listDir(d) {
+			for _, e := range listDir(s.ctx, d) {
 				if s.ctx.Err() != nil {
 					return
 				}

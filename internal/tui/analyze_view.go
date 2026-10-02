@@ -57,7 +57,7 @@ func (m *analyzeModel) View() string {
 
 func (m *analyzeModel) viewTotal(d *anDir, w int) string {
 	if d == nil || !d.loaded {
-		return m.spin.View() + sSubtle.Render(" reading directory…")
+		return m.spin.View() + sSubtle.Render(" reading directory… · "+scanMode(m.ctx))
 	}
 	if d.err != nil {
 		return sRed.Render("✗ " + safeText(d.err.Error()))
@@ -70,6 +70,7 @@ func (m *analyzeModel) viewTotal(d *anDir, w int) string {
 	s += sSubtle.Render(fmt.Sprintf(" · %s files · %s", thousands(files), plural(len(d.entries), "entry")))
 	if !complete {
 		s += "  " + m.spin.View() + sAccent.Render(fmt.Sprintf(" sizing %d/%d", sized, len(d.entries)))
+		s += sDim.Render(" · " + scanMode(m.ctx))
 	}
 	s += sDim.Render(" · sort: " + m.sort.String())
 	if !m.showHidden {

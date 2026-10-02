@@ -2,6 +2,7 @@ package aitools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"unicode/utf8"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 )
 
 type sysStat = syscall.Stat_t
@@ -130,8 +133,7 @@ type resolver struct {
 	enc  func(string) string
 	root string // "/" (tests may use another root)
 
-	mu    sync.Mutex
-	lists map[string]*dirListing
+	lists scanmemo.Cache[string, *dirListing]
 }
 
 type dirListing struct {
@@ -141,30 +143,28 @@ type dirListing struct {
 }
 
 func newResolver(enc func(string) string) *resolver {
-	return &resolver{enc: enc, root: "/", lists: map[string]*dirListing{}}
+	return &resolver{enc: enc, root: "/"}
 }
 
-func (r *resolver) list(dir string) *dirListing {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if l, ok := r.lists[dir]; ok {
-		return l
-	}
-	l := &dirListing{}
-	des, err := os.ReadDir(dir)
-	if err != nil {
+func (r *resolver) list(ctx context.Context, dir string) *dirListing {
+	l, err := r.lists.Get(ctx, dir, func(ctx context.Context) (*dirListing, error) {
+		l := &dirListing{}
+		des, err := fsx.ReadDir(ctx, dir)
 		l.err = err
-	}
-	for _, d := range des {
-		n := d.Name()
-		if !utf8.ValidString(n) || strings.IndexFunc(n, func(r rune) bool { return r >= utf8.RuneSelf }) >= 0 {
-			l.nonASCII = true
+		for _, d := range des {
+			n := d.Name()
+			if !utf8.ValidString(n) || strings.IndexFunc(n, func(r rune) bool { return r >= utf8.RuneSelf }) >= 0 {
+				l.nonASCII = true
+			}
+			if d.IsDir() || d.Type()&fs.ModeSymlink != 0 {
+				l.names = append(l.names, n)
+			}
 		}
-		if d.IsDir() || d.Type()&fs.ModeSymlink != 0 {
-			l.names = append(l.names, n)
-		}
+		return l, nil
+	})
+	if err != nil {
+		return &dirListing{err: err}
 	}
-	r.lists[dir] = l
 	return l
 }
 
@@ -182,8 +182,8 @@ const maxEncodedName = 200
 // root (at least its first component matched a child of root) and no
 // candidate exists; a name that does not look like a path at all ("empty-window",
 // a chat id...) is unknown.
-func (r *resolver) resolve(encoded string) (string, existence) {
-	if encoded == "" || len(encoded) > maxEncodedName {
+func (r *resolver) resolve(ctx context.Context, encoded string) (string, existence) {
+	if ctx.Err() != nil || encoded == "" || len(encoded) > maxEncodedName {
 		return "", existUnknown
 	}
 	if strings.EqualFold(r.enc(r.root), encoded) {
@@ -196,11 +196,11 @@ func (r *resolver) resolve(encoded string) (string, existence) {
 	var walk func(dir string, depth int) bool
 	walk = func(dir string, depth int) bool {
 		budget--
-		if depth > 64 || budget < 0 {
+		if ctx.Err() != nil || depth > 64 || budget < 0 {
 			unknown = true
 			return false
 		}
-		l := r.list(dir)
+		l := r.list(ctx, dir)
 		if l.err != nil {
 			unknown = true
 			return false

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -55,6 +56,7 @@ func (p *Provider) Categories() []core.Category {
 // symlink reads, small config files and read-only commands (ps, lsof,
 // `pnpm store path`, `watchman --no-spawn watch-list`).
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	s := &scanner{ctx: ctx, env: env, emit: emit, p: p}
 	if dev, ok := s.devOf(env.Home); ok {
 		s.homeDev, s.homeDevOK = dev, true

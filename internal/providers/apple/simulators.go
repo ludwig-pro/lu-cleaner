@@ -2,6 +2,7 @@ package apple
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,8 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
-	"golang.org/x/sys/unix"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 )
 
 // ---------------------------------------------------------------- simctl JSON
@@ -150,7 +152,7 @@ type simScan struct {
 	imgs      map[string]runtimeImage
 	imgsKnown bool
 
-	bundlesOnce sync.Once
+	bundlesOnce scanmemo.Once
 	bundles     map[string]string // runtime identifier -> .simruntime bundle on disk
 }
 
@@ -309,9 +311,9 @@ func (ss *simScan) lastUsed(dv simDev) (t time.Time, never bool) {
 }
 
 // simApps lists the bundle ids installed in a simulator.
-func simApps(dir string) []string {
+func simApps(ctx context.Context, dir string) []string {
 	base := filepath.Join(dir, "data", "Containers", "Bundle", "Application")
-	ents, err := os.ReadDir(base)
+	ents, err := fsx.ReadDir(ctx, base)
 	if err != nil {
 		return nil
 	}
@@ -327,7 +329,7 @@ func simApps(dir string) []string {
 			id = pString(meta, "MCMMetadataIdentifier")
 		}
 		if id == "" { // fall back to the .app name
-			if apps, _ := filepath.Glob(filepath.Join(c, "*.app")); len(apps) > 0 {
+			if apps, _ := fsx.Glob(ctx, filepath.Join(c, "*.app")); len(apps) > 0 {
 				id = strings.TrimSuffix(filepath.Base(apps[0]), ".app")
 			}
 		}
@@ -361,7 +363,7 @@ func splitApps(apps []string) (userApps, runners []string) {
 
 func (ss *simScan) deviceItem(dv simDev, recordings bool) {
 	lu, never := ss.lastUsed(dv)
-	apps := simApps(dv.dir)
+	apps := simApps(ss.ctx, dv.dir)
 	userApps, runners := splitApps(apps)
 	rtName := ss.runtimeName(dv.runtime)
 	typeName := ss.typeNames[dv.DeviceType]
@@ -470,7 +472,7 @@ func shortList(xs []string, n int) string {
 // available again (or changed) since the scan.
 func (ss *simScan) unavailableItem(dv simDev, recordings bool) {
 	lu, _ := ss.lastUsed(dv)
-	apps := simApps(dv.dir)
+	apps := simApps(ss.ctx, dv.dir)
 	userApps, _ := splitApps(apps)
 	rtName := ss.runtimeName(dv.runtime)
 
@@ -581,7 +583,7 @@ func (ss *simScan) mayComeBack(dv simDev) string {
 //     com_apple_MobileAsset_*SimulatorRuntime/*.asset), in case the image
 //     database lost them (e.g. after a macOS update).
 func (ss *simScan) runtimeOnDisk(rid string) string {
-	ss.bundlesOnce.Do(func() {
+	if err := ss.bundlesOnce.Do(ss.ctx, func() {
 		ss.bundles = map[string]string{}
 		const rel = "Library/Developer/CoreSimulator/Profiles/Runtimes/*.simruntime"
 		pats := []string{
@@ -592,7 +594,7 @@ func (ss *simScan) runtimeOnDisk(rid string) string {
 			pats = append(pats, filepath.Join(apps, "Contents/Developer/Platforms/*.platform", rel))
 		}
 		for _, pat := range pats {
-			matches, _ := filepath.Glob(pat)
+			matches, _ := fsx.Glob(ss.ctx, pat)
 			for _, b := range matches {
 				info, err := readPlistDict(filepath.Join(b, "Contents", "Info.plist"))
 				id := pString(info, "CFBundleIdentifier")
@@ -609,7 +611,9 @@ func (ss *simScan) runtimeOnDisk(rid string) string {
 		// After the bundles, whose "bundled with Xcode-14.3.app" says more.
 		ss.registeredImages()
 		ss.runtimeAssets()
-	})
+	}); err != nil {
+		return ""
+	}
 	if b := ss.bundles[rid]; b != "" {
 		return b
 	}
@@ -653,13 +657,13 @@ func (ss *simScan) registeredImages() {
 // runtimeAssets adds the downloaded simulator runtime assets, keyed by
 // display name ("iOS 26.5": the asset only knows platform and version).
 func (ss *simScan) runtimeAssets() {
-	colls, _ := filepath.Glob(ss.sys("/System/Library/AssetsV2/com_apple_MobileAsset_*SimulatorRuntime"))
+	colls, _ := fsx.Glob(ss.ctx, ss.sys("/System/Library/AssetsV2/com_apple_MobileAsset_*SimulatorRuntime"))
 	for _, coll := range colls {
 		plat := assetPlatform(filepath.Base(coll))
 		if plat == "" {
 			continue
 		}
-		assets, _ := filepath.Glob(filepath.Join(coll, "*.asset"))
+		assets, _ := fsx.Glob(ss.ctx, filepath.Join(coll, "*.asset"))
 		for _, a := range assets {
 			info, err := readPlistDict(filepath.Join(a, "Info.plist"))
 			if err != nil {
@@ -712,7 +716,7 @@ func majorMinor(v string) string {
 // (agent-device, Maestro, argent, xcodebuild test). Nothing ever cleans them.
 func (ss *simScan) attachments(dv simDev) (found bool) {
 	base := filepath.Join(dv.dir, "data", "Containers", "Data", "InternalDaemon")
-	ents, err := os.ReadDir(base)
+	ents, err := fsx.ReadDir(ss.ctx, base)
 	if err != nil {
 		return false
 	}
@@ -722,7 +726,7 @@ func (ss *simScan) attachments(dv simDev) (found bool) {
 		}
 		container := filepath.Join(base, e.Name())
 		att := filepath.Join(container, "tmp", "Attachments")
-		files, err := os.ReadDir(att)
+		files, err := fsx.ReadDir(ss.ctx, att)
 		if err != nil || len(files) == 0 {
 			continue
 		}
@@ -770,7 +774,7 @@ func (ss *simScan) attachments(dv simDev) (found bool) {
 		}
 		found = true
 		ss.guardWarn(it)
-		it.LastUsed = childrenNewest(att)
+		it.LastUsed = childrenNewest(ss.ctx, att)
 		ss.sizeLaterWith(it, func() measured { return ss.measureFiles(paths...) },
 			func(it *core.Item, m measured) { it.LastUsed = maxTime(it.LastUsed, m.newest) })
 	}
@@ -787,22 +791,28 @@ func (ss *simScan) deviceLogs(devs []simDev) {
 	var size, files int64
 	var newest time.Time
 	n := 0
-	var st unix.Stat_t
 	for _, dv := range devs {
 		diag := filepath.Join(dv.dir, "data", "var", "db", "diagnostics")
 		got := false
 		for _, sub := range unifiedLogDirs {
 			dir := filepath.Join(diag, sub)
-			ents, err := os.ReadDir(dir)
+			ents, err := fsx.ReadDir(ss.ctx, dir)
 			if err != nil {
 				continue
 			}
+			var candidates []string
 			for _, e := range ents {
-				if !e.Type().IsRegular() {
-					continue
+				if e.Type().IsRegular() {
+					candidates = append(candidates, filepath.Join(dir, e.Name()))
 				}
-				p := filepath.Join(dir, e.Name())
-				if unix.Lstat(p, &st) != nil || ss.skipPath(p) {
+			}
+			stats, err := scanio.UnixLstats(ss.ctx, candidates)
+			if err != nil {
+				return
+			}
+			for i, p := range candidates {
+				st := stats[i].File
+				if stats[i].Err != nil || ss.skipPath(p) {
 					continue
 				}
 				paths = append(paths, p)
@@ -892,7 +902,7 @@ func (ss *simScan) deviceCaches(devs []simDev) {
 // orphans reports device folders simctl does not know about (no or broken
 // device.plist): unreachable, and `simctl delete unavailable` misses them.
 func (ss *simScan) orphans(known map[string]bool) {
-	ents, err := os.ReadDir(ss.root)
+	ents, err := fsx.ReadDir(ss.ctx, ss.root)
 	if err != nil {
 		return
 	}
@@ -940,7 +950,7 @@ func (ss *simScan) orphans(known map[string]bool) {
 		setMeta(it, "udid", name)
 		setMeta(it, "reason", why)
 		it.Note = "Simulator folder unknown to simctl (" + why + "): it cannot be booted or listed, and `simctl delete unavailable` does not remove it."
-		if apps := simApps(p); len(apps) > 0 {
+		if apps := simApps(ss.ctx, p); len(apps) > 0 {
 			setMeta(it, "apps", strings.Join(apps, ", "))
 			it.Note += " Leftover app data: " + shortList(apps, 3) + "."
 		}
@@ -1102,7 +1112,7 @@ func firstNonEmpty(xs ...string) string {
 // report only.
 func (ss *simScan) dyldCaches(imgs map[string]runtimeImage, haveImgs bool) {
 	root := ss.sys("/Library/Developer/CoreSimulator/Caches/dyld")
-	ents, err := os.ReadDir(root)
+	ents, err := fsx.ReadDir(ss.ctx, root)
 	if err != nil {
 		return
 	}
@@ -1131,7 +1141,7 @@ func (ss *simScan) dyldCaches(imgs map[string]runtimeImage, haveImgs bool) {
 		if !haveImgs {
 			continue
 		}
-		subs, err := os.ReadDir(p)
+		subs, err := fsx.ReadDir(ss.ctx, p)
 		if err != nil {
 			continue
 		}

@@ -38,7 +38,7 @@ var reStudioSDK = regexp.MustCompile(`androidSdkAbsolutePath"\s+value="([^"]+)"`
 // settings directory.
 func (s *scan) studioSDKPaths() []string {
 	var out []string
-	ms, _ := filepath.Glob(filepath.Join(s.env.Home, "Library", "Application Support", "Google", "AndroidStudio*", "options", "android.sdk.path.xml"))
+	ms, _ := fsx.Glob(s.ctx, filepath.Join(s.env.Home, "Library", "Application Support", "Google", "AndroidStudio*", "options", "android.sdk.path.xml"))
 	for _, m := range ms {
 		for _, sm := range reStudioSDK.FindAllStringSubmatch(readSmall(m), -1) {
 			v := strings.ReplaceAll(sm[1], "$USER_HOME$", s.env.Home)
@@ -159,9 +159,9 @@ var imageTags = map[string]string{
 }
 
 func (s *scan) systemImages(root string, avds *avdSet) {
-	ms, _ := filepath.Glob(filepath.Join(root, "system-images", "*", "*", "*"))
+	ms, _ := fsx.Glob(s.ctx, filepath.Join(root, "system-images", "*", "*", "*"))
 	for _, dir := range ms {
-		fi, err := os.Lstat(dir)
+		fi, err := fsx.Lstat(s.ctx, dir)
 		if err != nil || (!fi.IsDir() && fi.Mode()&os.ModeSymlink == 0) {
 			continue
 		}
@@ -200,7 +200,7 @@ func (s *scan) systemImages(root string, avds *avdSet) {
 
 func (s *scan) ndks(root string, pi *projectInfo) {
 	dir := filepath.Join(root, "ndk")
-	vers := dirNames(dir)
+	vers := dirNames(s.ctx, dir)
 	keep := newest(vers, s.keepLatest())
 	for _, v := range vers {
 		it := s.base("android-ndk", "NDK "+v, core.RiskModerate)
@@ -251,7 +251,7 @@ var reLeftover = regexp.MustCompile(`^\d+(\.\d+)*(-rc\d+)?-\d+$`)
 // sources/android-<N>: keep what projects use and the newest, propose the rest.
 func (s *scan) versioned(root string, pi *projectInfo, kind string) {
 	dir := filepath.Join(root, kind)
-	names := dirNames(dir)
+	names := dirNames(s.ctx, dir)
 	if len(names) == 0 {
 		return
 	}
@@ -327,7 +327,7 @@ func (s *scan) sdkLegacy(root string, pi *projectInfo) {
 		it.Note = "Leftovers of interrupted SDK updates; nothing uses them."
 		it.LastUsed = maxTime(mtimes(tmp)...)
 		if s.isStudioRunning() {
-			it.Warn = "Android Studio is running (may be updating the SDK) — quit it first"
+			it.Warn = s.studioWarn("Android Studio is running (may be updating the SDK) — quit it first")
 		}
 		s.add(it, nil, sizeOpt{})
 	}
@@ -340,7 +340,7 @@ func (s *scan) sdkLegacy(root string, pi *projectInfo) {
 		s.emitPkg(it, sizeOpt{})
 	}
 	if latest {
-		for _, n := range dirNames(filepath.Join(root, "cmdline-tools")) {
+		for _, n := range dirNames(s.ctx, filepath.Join(root, "cmdline-tools")) {
 			if n == "latest" {
 				continue
 			}

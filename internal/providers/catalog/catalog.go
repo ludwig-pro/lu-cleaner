@@ -16,6 +16,8 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -105,6 +107,7 @@ func (p *Provider) Categories() []core.Category {
 
 // Scan expands every entry concurrently and emits one item per group/match.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for _, e := range p.entries {
@@ -133,20 +136,31 @@ type match struct {
 
 // Expand resolves the entry globs to existing, allowed paths.
 func (e *Entry) Expand(env *core.Env) []match {
+	return e.expand(context.Background(), env)
+}
+
+func (e *Entry) expand(ctx context.Context, env *core.Env) []match {
 	seen := map[string]bool{}
 	var out []match
 	for _, pat := range e.Paths {
+		if ctx.Err() != nil {
+			return nil
+		}
 		pat = env.Expand(pat)
-		found, _ := filepath.Glob(pat)
-		for _, m := range found {
+		found, _ := fsx.Glob(ctx, pat)
+		infos, err := scanio.Lstats(ctx, found)
+		if err != nil {
+			return nil
+		}
+		for i, m := range found {
 			m = filepath.Clean(m)
-			if seen[m] || env.Excluded(m) || (e.Method != core.MethodReport && env.IsProtected(m)) {
+			if seen[m] || env.Excluded(m) || (e.Method != core.MethodReport && env.IsProtectedContext(ctx, m)) {
 				continue
 			}
 			if excludedName(filepath.Base(m), e.Exclude) {
 				continue
 			}
-			fi, err := os.Lstat(m)
+			fi, err := infos[i].File, infos[i].Err
 			if err != nil {
 				continue
 			}
@@ -157,7 +171,7 @@ func (e *Entry) Expand(env *core.Env) []match {
 			if e.OlderThan > 0 && env.Now.Sub(fi.ModTime()) < e.OlderThan {
 				continue
 			}
-			ext, ok := onOtherVolume(env.Home, m)
+			ext, ok := onOtherVolumeContext(ctx, env.Home, m)
 			if !ok {
 				continue // dangling symlink somewhere in the path: never proposed
 			}
@@ -201,6 +215,16 @@ func onOtherVolume(home, p string) (external, ok bool) {
 	return hd != pd, true
 }
 
+// onOtherVolumeContext admits the bounded path resolution and two device
+// probes without holding a permit while classifying a catalog match.
+func onOtherVolumeContext(ctx context.Context, home, p string) (external, ok bool) {
+	err := scanctl.DoIO(ctx, func() error {
+		external, ok = onOtherVolume(home, p)
+		return nil
+	})
+	return external, ok && err == nil
+}
+
 // devOf returns the device of a path, following symlinks (test seam).
 var devOf = func(p string) (uint64, error) {
 	var st unix.Stat_t
@@ -231,7 +255,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 		}
 	}
 	if len(blocked) > 0 {
-		it := p.baseItem(env, e)
+		it := p.baseItem(ctx, env, e)
 		it.ID = "catalog:" + e.ID + ":needs-fda"
 		it.Location = env.Expand(blocked[0])
 		it.Method = core.MethodReport
@@ -244,14 +268,14 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 			return
 		}
 	}
-	all := e.Expand(env)
+	all := e.expand(ctx, env)
 	var ms []match
 	for _, m := range all {
 		if !m.external {
 			ms = append(ms, m)
 			continue
 		}
-		it := p.baseItem(env, e)
+		it := p.baseItem(ctx, env, e)
 		it.ID = "catalog:" + e.ID + ":" + m.path
 		it.Name = e.Name + " · " + filepath.Base(m.path)
 		it.Location = m.path
@@ -287,7 +311,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 			if ctx.Err() != nil {
 				return
 			}
-			it := p.baseItem(env, e)
+			it := p.baseItem(ctx, env, e)
 			it.ID = "catalog:" + e.ID + ":" + m.path
 			it.Name = e.Name + " · " + filepath.Base(m.path)
 			if e.Method == core.MethodCommand {
@@ -315,7 +339,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 			}
 		}
 	default:
-		it := p.baseItem(env, e)
+		it := p.baseItem(ctx, env, e)
 		it.ID = "catalog:" + e.ID
 		paths := make([]string, len(ms))
 		for i, m := range ms {
@@ -359,7 +383,7 @@ func (p *Provider) scanEntry(ctx context.Context, env *core.Env, e Entry, emit c
 	}
 }
 
-func (p *Provider) baseItem(env *core.Env, e Entry) *core.Item {
+func (p *Provider) baseItem(ctx context.Context, env *core.Env, e Entry) *core.Item {
 	it := &core.Item{
 		Provider:     p.ID(),
 		Category:     e.Category,
@@ -374,7 +398,11 @@ func (p *Provider) baseItem(env *core.Env, e Entry) *core.Item {
 		AllowGitRepo: e.AllowGitRepo,
 		Recommended:  e.Recommended,
 	}
-	if running := runningGuard(e.ProcessGuard); running != "" {
+	running, err := runningGuard(ctx, e.ProcessGuard)
+	if err != nil {
+		it.Warn = "process state unavailable — rescan before cleaning"
+		it.Recommended = false
+	} else if running != "" {
 		it.Warn = running + " is running — quit it before cleaning"
 	}
 	return it

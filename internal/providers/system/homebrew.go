@@ -2,6 +2,7 @@ package system
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // brewCacheKeep are cache entries never deleted directly: wiping the API
@@ -53,7 +55,7 @@ func (s *scan) brewLayout() (l brewLayout, ok bool) {
 	file := filepath.Join(dir, filepath.Base(exe))
 	l.prefix = filepath.Dir(dir)
 	l.repository = l.prefix
-	if fi, err := os.Lstat(file); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+	if fi, err := fsx.Lstat(s.ctx, file); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if r, err := filepath.EvalSymlinks(file); err == nil {
 			l.repository = filepath.Dir(filepath.Dir(r))
 		}
@@ -153,7 +155,7 @@ func (s *scan) homebrewCache(cacheDir string) {
 	}
 	pl := s.locate(cacheDir)
 	var paths []string
-	for _, e := range list(cacheDir, false) {
+	for _, e := range list(s.ctx, cacheDir, false) {
 		if brewCacheKeep[e.name] {
 			continue
 		}
@@ -204,7 +206,7 @@ const (
 // brewAPIVersions); for other taps (or without that cache) it is unknown.
 // Formulae without an opt link are skipped: nobody can tell which version is
 // in use.
-func oldKegs(l brewLayout) []keg {
+func oldKegs(ctx context.Context, l brewLayout) []keg {
 	if !isDir(l.cellar) {
 		return nil
 	}
@@ -219,11 +221,11 @@ func oldKegs(l brewLayout) []keg {
 	}
 	var racks []rack
 	var core []string
-	for _, f := range list(l.cellar, false) {
+	for _, f := range list(ctx, l.cellar, false) {
 		if !f.dir {
 			continue
 		}
-		vers := list(f.path, false)
+		vers := list(ctx, f.path, false)
 		if len(vers) < 2 {
 			continue
 		}
@@ -235,13 +237,13 @@ func oldKegs(l brewLayout) []keg {
 		if t, err := os.Readlink(filepath.Join(linkedDir, f.name)); err == nil {
 			r.inUse[filepath.Base(t)] = true
 		}
-		r.core = kegTap(filepath.Join(f.path, r.current)) == "homebrew/core"
+		r.core = kegTap(ctx, filepath.Join(f.path, r.current)) == "homebrew/core"
 		if r.core {
 			core = append(core, f.name)
 		}
 		racks = append(racks, r)
 	}
-	latest := brewAPIVersions(l.cache, core)
+	latest := brewAPIVersions(ctx, l.cache, core)
 	var out []keg
 	for _, r := range racks {
 		formulaKeep := ""
@@ -278,8 +280,8 @@ func oldKegs(l brewLayout) []keg {
 
 // kegTap returns the tap a keg was installed from (INSTALL_RECEIPT.json
 // source.tap; "" when unknown).
-func kegTap(keg string) string {
-	b, err := os.ReadFile(filepath.Join(keg, "INSTALL_RECEIPT.json"))
+func kegTap(ctx context.Context, keg string) string {
+	b, err := fsx.ReadFile(ctx, filepath.Join(keg, "INSTALL_RECEIPT.json"))
 	if err != nil {
 		return ""
 	}
@@ -301,12 +303,12 @@ func kegTap(keg string) string {
 // byte-offset index (.payload.index, format 1), so only the entries needed
 // are parsed. Formulae it does not list are absent from the result, as
 // everything is when the cache is missing or in another format.
-func brewAPIVersions(cache string, names []string) map[string]string {
+func brewAPIVersions(ctx context.Context, cache string, names []string) map[string]string {
 	out := map[string]string{}
 	if len(names) == 0 {
 		return out
 	}
-	matches, _ := filepath.Glob(filepath.Join(cache, "api", "internal", "packages.*.jws.json.payload"))
+	matches, _ := fsx.Glob(ctx, filepath.Join(cache, "api", "internal", "packages.*.jws.json.payload"))
 	payload := ""
 	var newest time.Time
 	for _, m := range matches {
@@ -322,7 +324,7 @@ func brewAPIVersions(cache string, names []string) map[string]string {
 		PayloadBytesize int64               `json:"payload_bytesize"`
 		Formulae        map[string][2]int64 `json:"formulae"`
 	}
-	b, err := os.ReadFile(payload + ".index")
+	b, err := fsx.ReadFile(ctx, payload+".index")
 	if err != nil || json.Unmarshal(b, &idx) != nil || idx.Version != 1 {
 		return out
 	}
@@ -468,7 +470,7 @@ func cmpInt(a, b int) int {
 // old kegs it keeps (or may keep).
 func (s *scan) homebrewCleanup(l brewLayout) {
 	var removed, kept, unknown []keg
-	for _, k := range oldKegs(l) {
+	for _, k := range oldKegs(s.ctx, l) {
 		switch k.keep {
 		case "":
 			removed = append(removed, k)
@@ -483,12 +485,12 @@ func (s *scan) homebrewCleanup(l brewLayout) {
 		measure = append(measure, k.path)
 	}
 	// `--prune=all` removes every log folder (HOMEBREW_LOGS/<formula>).
-	for _, e := range list(l.logs, false) {
+	for _, e := range list(s.ctx, l.logs, false) {
 		if e.dir {
 			measure = append(measure, e.path)
 		}
 	}
-	measure = append(measure, oldPortableRubies(l.repository)...)
+	measure = append(measure, oldPortableRubies(s.ctx, l.repository)...)
 	if len(measure) > 0 || len(unknown) > 0 {
 		it := s.newItem("homebrew-cleanup", core.CatLangs, "Homebrew old versions (brew cleanup)", core.RiskModerate)
 		it.ID = itemID(it.Kind, "brew cleanup")
@@ -589,15 +591,15 @@ func kegList(kegs []keg) string {
 // removes: every <repository>/Library/Homebrew/vendor/portable-ruby/<x.y.z>
 // folder but the one named in vendor/portable-ruby-version (none when that
 // file is unreadable).
-func oldPortableRubies(repository string) []string {
+func oldPortableRubies(ctx context.Context, repository string) []string {
 	vendor := filepath.Join(repository, "Library", "Homebrew", "vendor")
-	b, err := os.ReadFile(filepath.Join(vendor, "portable-ruby-version"))
+	b, err := fsx.ReadFile(ctx, filepath.Join(vendor, "portable-ruby-version"))
 	if err != nil {
 		return nil
 	}
 	latest := strings.TrimSpace(string(b))
 	var out []string
-	for _, e := range list(filepath.Join(vendor, "portable-ruby"), false) {
+	for _, e := range list(ctx, filepath.Join(vendor, "portable-ruby"), false) {
 		if e.dir && strings.Contains(e.name, ".") && e.name != latest {
 			out = append(out, e.path)
 		}

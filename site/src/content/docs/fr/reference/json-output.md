@@ -428,7 +428,7 @@ Le fichier lui-même est au format JSON Lines, avec le même format d'entrée et
 | Commande | Sortie |
 |---|---|
 | `catalog --json` | Tableau des entrées du catalogue : `id`, `category`, `name`, `paths`, `risk`, `method`, `mode` (`group` ou `each`) et, quand ils sont définis, `exclude`, `command`, `requires`, `process_guard`, `note`, `older_than`, `keep_latest`, `allow_git_repo`, `recommended`, `min_bytes`, `files` |
-| `config show --json` | Configuration effective : `path`, `exists`, `config` (les valeurs du fichier), `roots` résolues et `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (les entrées `exclude` et `protect` qui n'existent pas), `stale_after`, `min_size` (en octets), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`) |
+| `config show --json` | Configuration effective : `path`, `exists`, `config` (les valeurs du fichier), `roots` résolues et `roots_source`, `worktree_roots`, `exclude`, `protect`, `missing` (les entrées `exclude` et `protect` qui n'existent pas), `stale_after`, `min_size` (en octets), `disabled_categories`, `state_dir`, `history_file`, `clean` (`trash`, `force`), `scan` (`mode`, `io`, `commands`, `prefetch`, `batch_size`, `pause_ms`, `gomaxprocs`, `priority` demandée) |
 | `analyze [path] --json` | `root`, `total` et `entries` (chaque enfant direct : `name`, `path`, `dir`, `size`, `files`, `unreadable`) |
 | `version --json` | `version`, `go`, `os`, `arch` |
 
@@ -438,7 +438,7 @@ Le fichier lui-même est au format JSON Lines, avec le même format d'entrée et
 |---|---|
 | `0` | Succès. Les éléments ignorés pour des raisons de sécurité ne changent pas le code de sortie ; consultez `results[].status`. |
 | `1` | Échec à l'exécution : fichier de configuration invalide, erreur d'entrée/sortie, ou au moins un élément `failed` pendant un nettoyage. |
-| `2` | Erreur d'utilisation : commande ou option inconnue, valeur invalide (`--min-size`, `--older-than`, `--risk` y compris `never`, `--category` y compris un nom d'outil comme `cursor`, `--sort`, `--top`, `--limit`, un type inconnu pour `artifacts --target`), `clean --yes` sans `--smart`, `-c` ni `-k` (ou avec seulement un `-k` qui nomme un scanner couvrant plusieurs catégories), `clean --json` sans `--yes`, `clean` sans terminal et sans `--yes`, un `--root` qui n'est pas un dossier ou qui vaut `/`, catégorie désactivée dans la configuration. |
+| `2` | Erreur d'utilisation : commande ou option inconnue, valeur invalide (`--scan-mode`, `--min-size`, `--older-than`, `--risk` y compris `never`, `--category` y compris un nom d'outil comme `cursor`, `--sort`, `--top`, `--limit`, un type inconnu pour `artifacts --target`), `clean --yes` sans `--smart`, `-c` ni `-k` (ou avec seulement un `-k` qui nomme un scanner couvrant plusieurs catégories), `clean --json` sans `--yes`, `clean` sans terminal et sans `--yes`, un `--root` qui n'est pas un dossier ou qui vaut `/`, catégorie désactivée dans la configuration. |
 | `130` | Interrompu par <kbd>Ctrl</kbd>+<kbd>C</kbd>. |
 | `143` | Interrompu par `SIGTERM`. |
 

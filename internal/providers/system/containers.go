@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -321,7 +321,7 @@ func (s *scan) colima() {
 		return
 	}
 	statuses := s.colimaList()
-	for _, e := range list(lima, false) {
+	for _, e := range list(s.ctx, lima, false) {
 		if !e.dir || strings.HasPrefix(e.name, "_") {
 			continue
 		}
@@ -356,7 +356,7 @@ func (s *scan) limaInstances() {
 	if !isDir(root) {
 		return
 	}
-	for _, e := range list(root, false) {
+	for _, e := range list(s.ctx, root, false) {
 		if !e.dir || strings.HasPrefix(e.name, "_") {
 			continue
 		}
@@ -377,13 +377,13 @@ func (s *scan) limaInstances() {
 func (s *scan) vmDisks(instDir string, extra ...string) []vmDisk {
 	var out []vmDisk
 	for _, p := range append([]string{filepath.Join(instDir, "basedisk"), filepath.Join(instDir, "diffdisk")}, extra...) {
-		if _, err := os.Lstat(p); err != nil {
+		if _, err := fsx.Lstat(s.ctx, p); err != nil {
 			continue
 		}
 		d := vmDisk{path: p, place: s.locate(p)}
 		if d.place.Exists {
 			var st unix.Stat_t
-			if unix.Stat(d.place.Real, &st) == nil {
+			if scanctl.DoIO(s.ctx, func() error { return unix.Stat(d.place.Real, &st) }) == nil {
 				d.apparent = st.Size
 			}
 		}
@@ -441,7 +441,7 @@ func (s *scan) dockerDesktop() {
 	if fsx.AppDataProtected(raw) {
 		return // would block on the macOS app-data permission prompt (no Full Disk Access)
 	}
-	if _, err := os.Lstat(raw); err != nil {
+	if _, err := fsx.Lstat(s.ctx, raw); err != nil {
 		return
 	}
 	it := s.newItem("docker-desktop-disk", core.CatContainers, "Docker Desktop disk image (Docker.raw)", core.RiskCaution)
@@ -449,7 +449,7 @@ func (s *scan) dockerDesktop() {
 	pl := s.locate(raw)
 	it.Meta = map[string]string{}
 	var st unix.Stat_t
-	if pl.Exists && unix.Stat(pl.Real, &st) == nil {
+	if pl.Exists && scanctl.DoIO(s.ctx, func() error { return unix.Stat(pl.Real, &st) }) == nil {
 		it.Meta["apparent"] = fsx.Bytes(st.Size)
 	}
 	if pl.External || pl.Dangling {
@@ -465,12 +465,12 @@ func (s *scan) orbstack() {
 	if fsx.GlobPrefixProtected(pattern) {
 		return // would block on the macOS app-data permission prompt (no Full Disk Access)
 	}
-	imgs, _ := filepath.Glob(pattern)
+	imgs, _ := fsx.Glob(s.ctx, pattern)
 	for _, img := range imgs {
 		it := s.newItem("orbstack-data", core.CatContainers, "OrbStack data image", core.RiskCaution)
 		it.Path = img
 		var st unix.Stat_t
-		if unix.Stat(img, &st) == nil {
+		if scanctl.DoIO(s.ctx, func() error { return unix.Stat(img, &st) }) == nil {
 			it.Meta = map[string]string{"apparent": fsx.Bytes(st.Size)}
 		}
 		it.Note = "OrbStack's Linux machines and Docker data (sparse image). Reclaim space from OrbStack (docker system prune, `orb delete <machine>`)."

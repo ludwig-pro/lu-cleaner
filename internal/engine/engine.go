@@ -11,6 +11,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,6 +33,11 @@ type Event struct {
 // size cache (fsx.SizeStore, validated with the FSEvents history; LU_NO_CACHE=1
 // disables it). The cache is saved before the channel is closed.
 func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan Event {
+	owned := scanctl.From(ctx) == nil
+	if owned {
+		ctx = scanctl.With(ctx, scanctl.New(env.ScanLimits))
+	}
+	ctl := scanctl.From(ctx)
 	trees0, files0 := fsx.Walked()
 	store := fsx.OpenSizeStore(ctx)
 	ctx = fsx.WithSizeStore(ctx, store)
@@ -57,7 +63,7 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 						it.Provider = p.ID()
 					}
 					if !it.Sizing && it.Method != core.MethodCommand && it.Method != core.MethodReport {
-						it.Inodes = Snapshot(it.Targets())
+						it.Inodes = SnapshotContext(ctx, it.Targets())
 					}
 					select {
 					case ch <- Event{Item: it, Provider: p.ID()}:
@@ -73,7 +79,11 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 	}
 	go func() {
 		wg.Wait()
+		fsx.WaitCache(ctx)
 		store.Close() // prints its own summary with LU_TRACE
+		if owned {
+			ctl.Close()
+		}
 		if store == nil && fsx.Tracing() {
 			trees, files := fsx.Walked()
 			fmt.Fprintf(os.Stderr, "[trace] cache disabled; walked %d trees, %d files\n", trees-trees0, files-files0)
@@ -85,14 +95,28 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 
 // Snapshot returns the inode of each path (0 when missing), without following symlinks.
 func Snapshot(paths []string) []uint64 {
+	return SnapshotContext(context.Background(), paths)
+}
+
+func SnapshotContext(ctx context.Context, paths []string) []uint64 {
 	if len(paths) == 0 {
 		return nil
 	}
 	out := make([]uint64, len(paths))
 	var st unix.Stat_t
-	for i, p := range paths {
-		if unix.Lstat(p, &st) == nil {
-			out[i] = st.Ino
+	for first := 0; first < len(paths); first += 256 {
+		if err := scanctl.DoIO(ctx, func() error {
+			for i := first; i < min(first+256, len(paths)); i++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if unix.Lstat(paths[i], &st) == nil {
+					out[i] = st.Ino
+				}
+			}
+			return nil
+		}); err != nil {
+			break
 		}
 	}
 	return out

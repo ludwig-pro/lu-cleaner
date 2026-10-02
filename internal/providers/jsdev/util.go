@@ -15,6 +15,8 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -46,7 +48,7 @@ type sizeKey struct {
 }
 
 type sizeEntry struct {
-	once sync.Once
+	once scanmemo.Once
 	st   fsx.Stats
 }
 
@@ -65,9 +67,11 @@ func (s *scanner) measure(p string, external bool) fsx.Stats {
 		s.sizes[k] = e
 	}
 	s.sizesMu.Unlock()
-	e.once.Do(func() {
+	if err := e.once.Do(s.ctx, func() {
 		e.st, _ = fsx.Size(s.ctx, p, &fsx.Options{CrossDevice: external})
-	})
+	}); err != nil {
+		return fsx.Stats{}
+	}
 	return e.st
 }
 
@@ -172,10 +176,10 @@ func uniqDirs(paths ...string) []string {
 // allowed reports whether p may be proposed at all: it exists and is neither
 // excluded by the user nor protected by the safety guard.
 func (s *scanner) allowed(p string) bool {
-	if p == "" || !filepath.IsAbs(p) || s.env.Excluded(p) || s.env.IsProtected(p) {
+	if p == "" || !filepath.IsAbs(p) || s.env.Excluded(p) || s.env.IsProtectedContext(s.ctx, p) {
 		return false
 	}
-	_, err := os.Lstat(p)
+	_, err := fsx.Lstat(s.ctx, p)
 	return err == nil
 }
 
@@ -185,7 +189,7 @@ func (s *scanner) devOf(p string) (uint64, bool) {
 		return s.p.devOf(p)
 	}
 	var st unix.Stat_t
-	if err := unix.Stat(p, &st); err != nil {
+	if err := scanctl.DoIO(s.ctx, func() error { return unix.Stat(p, &st) }); err != nil {
 		return 0, false
 	}
 	return uint64(st.Dev), true
@@ -196,7 +200,7 @@ func (s *scanner) devOf(p string) (uint64, bool) {
 // location is on another volume (report only), and ok=false for dangling
 // symlinks and missing mounts (never proposed).
 func (s *scanner) locate(p string) (target string, external, ok bool) {
-	fi, err := os.Lstat(p)
+	fi, err := fsx.Lstat(s.ctx, p)
 	if err != nil {
 		return "", false, false
 	}
@@ -305,8 +309,8 @@ func newestMtime(paths ...string) time.Time {
 }
 
 // listDir returns the entries of dir sorted by name (nil when unreadable).
-func listDir(dir string) []os.DirEntry {
-	ents, err := os.ReadDir(dir)
+func listDir(ctx context.Context, dir string) []os.DirEntry {
+	ents, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
 		return nil
 	}
@@ -325,9 +329,9 @@ func isDirOrLink(p string) bool {
 
 // globalPackages lists user-installed global npm packages in a lib/node_modules
 // directory (npm and corepack, bundled with Node, are ignored).
-func globalPackages(lib string) []string {
+func globalPackages(ctx context.Context, lib string) []string {
 	var out []string
-	for _, e := range listDir(lib) {
+	for _, e := range listDir(ctx, lib) {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || name == "npm" || name == "corepack" {
 			continue
@@ -336,7 +340,7 @@ func globalPackages(lib string) []string {
 			continue
 		}
 		if strings.HasPrefix(name, "@") {
-			for _, se := range listDir(filepath.Join(lib, name)) {
+			for _, se := range listDir(ctx, filepath.Join(lib, name)) {
 				if !strings.HasPrefix(se.Name(), ".") {
 					out = append(out, name+"/"+se.Name())
 				}

@@ -96,7 +96,7 @@ func TestAllowedAreasMirrorGuard(t *testing.T) {
 // APFS clones) frees about nothing: Reclaim must not stay 0, which means
 // "same as Size".
 func TestApplySizeFullyShared(t *testing.T) {
-	s := &scan{now: time.Now()}
+	s := &scan{ctx: t.Context(), now: time.Now()}
 	for _, tc := range []struct{ total, reclaim, want int64 }{
 		{1 << 20, 0, 1},
 		{1 << 20, 4096, 4096},

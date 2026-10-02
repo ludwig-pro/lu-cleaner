@@ -1,6 +1,7 @@
 package jsdev
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // fnm creates one <pid>_<epoch-ms> symlink per `fnm env` call (every new
@@ -67,12 +69,10 @@ func (s *scanner) loadMultishells() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		f, err := os.Open(dir)
+		names, err := fsx.ReadNames(s.ctx, dir)
 		if err != nil {
 			continue
 		}
-		names, _ := f.Readdirnames(-1)
-		f.Close()
 		// One lstat (+ readlink) per entry, in parallel: a folder that
 		// collected tens of thousands of entries takes seconds to stat on a
 		// cold disk otherwise.
@@ -87,7 +87,7 @@ func (s *scanner) loadMultishells() {
 					if s.ctx.Err() != nil {
 						return
 					}
-					read[i] = readMultishellEntry(dir, names[i])
+					read[i] = readMultishellEntry(s.ctx, dir, names[i])
 				}
 			}()
 		}
@@ -107,13 +107,13 @@ const multishellWorkers = 8
 
 // readMultishellEntry reads one entry (nil when it is not a multishell entry
 // or vanished).
-func readMultishellEntry(dir, name string) *multishellEntry {
+func readMultishellEntry(ctx context.Context, dir, name string) *multishellEntry {
 	m := multishellName.FindStringSubmatch(name)
 	if m == nil {
 		return nil
 	}
 	p := filepath.Join(dir, name)
-	fi, err := os.Lstat(p)
+	fi, err := fsx.Lstat(ctx, p)
 	if err != nil {
 		return nil
 	}
@@ -234,7 +234,7 @@ func (s *scanner) multishells() {
 		var newest time.Time
 		kept := 0
 		for _, e := range md.entries {
-			if !s.multishellStale(e, refs, own, boot) || s.env.IsProtected(e.path) || s.env.Excluded(e.path) {
+			if !s.multishellStale(e, refs, own, boot) || s.env.IsProtectedContext(s.ctx, e.path) || s.env.Excluded(e.path) {
 				kept++
 				continue
 			}

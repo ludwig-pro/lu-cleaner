@@ -1,8 +1,10 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"io/fs"
 	"net/url"
 	"os"
@@ -106,7 +108,7 @@ func (v *vsc) productCommit() string {
 	if v.app == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(v.app, "Contents/Resources/app/product.json"))
+	data, err := fsx.ReadFile(v.s.ctx, filepath.Join(v.app, "Contents/Resources/app/product.json"))
 	if err != nil {
 		return ""
 	}
@@ -124,7 +126,7 @@ func (v *vsc) productCommit() string {
 func (v *vsc) cachedData() {
 	root := filepath.Join(v.data, "CachedData")
 	var dirs []entry
-	for _, e := range list(root, false) {
+	for _, e := range list(v.s.ctx, root, false) {
 		if e.dir {
 			dirs = append(dirs, e)
 		}
@@ -173,7 +175,7 @@ func (v *vsc) cachedData() {
 func (v *vsc) vsixCache() {
 	root := filepath.Join(v.data, "CachedExtensionVSIXs")
 	var paths []string
-	for _, e := range list(root, true) {
+	for _, e := range list(v.s.ctx, root, true) {
 		if e.name != ".DS_Store" {
 			paths = append(paths, e.path)
 		}
@@ -197,12 +199,12 @@ func (v *vsc) caches() {
 			paths = append(paths, p)
 		}
 	}
-	for _, e := range list(filepath.Join(v.data, "Crashpad", "completed"), false) {
+	for _, e := range list(v.s.ctx, filepath.Join(v.data, "Crashpad", "completed"), false) {
 		paths = append(paths, e.path)
 	}
 	// logs/<session>: keep the newest session (the running one, if any).
 	var logs []entry
-	for _, e := range list(filepath.Join(v.data, "logs"), false) {
+	for _, e := range list(v.s.ctx, filepath.Join(v.data, "logs"), false) {
 		if e.dir {
 			logs = append(logs, e)
 		}
@@ -237,8 +239,8 @@ const (
 
 // workspaceTarget reads workspace.json and returns the folder / workspace
 // file URI.
-func workspaceTarget(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+func workspaceTarget(ctx context.Context, path string) (string, bool) {
+	data, err := fsx.ReadFile(ctx, path)
 	if err != nil {
 		return "", false
 	}
@@ -291,7 +293,7 @@ func (s *scan) classifyWorkspace(uri string) (wsState, string) {
 // worktree); for live ones, only the heavy language-server indexes.
 func (v *vsc) workspaceStorage() {
 	root := filepath.Join(v.data, "User", "workspaceStorage")
-	entries := list(root, false)
+	entries := list(v.s.ctx, root, false)
 	if len(entries) == 0 {
 		return
 	}
@@ -309,12 +311,12 @@ func (v *vsc) workspaceStorage() {
 		if !e.dir {
 			continue
 		}
-		uri, ok := workspaceTarget(filepath.Join(e.path, "workspace.json"))
+		uri, ok := workspaceTarget(v.s.ctx, filepath.Join(e.path, "workspace.json"))
 		state, target := wsUnknown, ""
 		if ok {
 			state, target = v.s.classifyWorkspace(uri)
 		}
-		last := newestShallow(e.path)
+		last := newestShallow(v.s.ctx, e.path)
 		switch state {
 		case wsOrphan:
 			if v.s.now.Sub(last) < workspaceOrphanAge {
@@ -329,7 +331,7 @@ func (v *vsc) workspaceStorage() {
 		case wsOffline:
 			offline++
 		}
-		for _, c := range list(e.path, false) {
+		for _, c := range list(v.s.ctx, e.path, false) {
 			if c.dir && lsIndexDirs[c.name] && v.s.now.Sub(c.mtime) >= lsIndexAge {
 				indexes.Paths = append(indexes.Paths, c.path)
 				indexes.LastUsed = maxTime(indexes.LastUsed, c.mtime)
@@ -381,8 +383,8 @@ func parseExtFolder(name string) (id, version string, ok bool) {
 }
 
 // extensionsRegistry reads extensions.json: the folder names in use.
-func extensionsRegistry(dir string) (map[string]bool, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, "extensions.json"))
+func extensionsRegistry(ctx context.Context, dir string) (map[string]bool, bool) {
+	data, err := fsx.ReadFile(ctx, filepath.Join(dir, "extensions.json"))
 	if err != nil {
 		return nil, false
 	}
@@ -422,7 +424,7 @@ func extensionsRegistry(dir string) (map[string]bool, bool) {
 // extension also present in a newer version) are proposed.
 func (v *vsc) oldExtensions() {
 	obsolete := map[string]bool{}
-	if data, err := os.ReadFile(filepath.Join(v.ext, ".obsolete")); err == nil {
+	if data, err := fsx.ReadFile(v.s.ctx, filepath.Join(v.ext, ".obsolete")); err == nil {
 		var m map[string]any
 		if json.Unmarshal(data, &m) == nil {
 			for k, val := range m {
@@ -432,14 +434,14 @@ func (v *vsc) oldExtensions() {
 			}
 		}
 	}
-	reg, haveReg := extensionsRegistry(v.ext)
+	reg, haveReg := extensionsRegistry(v.s.ctx, v.ext)
 	type folder struct {
 		e       entry
 		id, ver string
 	}
 	byID := map[string][]folder{}
 	var folders []folder
-	for _, e := range list(v.ext, false) {
+	for _, e := range list(v.s.ctx, v.ext, false) {
 		if !e.dir {
 			continue
 		}
@@ -498,7 +500,7 @@ func (v *vsc) oldExtensions() {
 
 // leftoverExtensions: extensions of an editor that is not installed anymore.
 func (v *vsc) leftoverExtensions() {
-	if len(list(v.ext, false)) == 0 {
+	if len(list(v.s.ctx, v.ext, false)) == 0 {
 		return
 	}
 	it := v.item("extensions-leftover", v.f.name+" extensions (app not installed)", core.RiskCaution)

@@ -452,13 +452,20 @@ func (s *scan) pruneItems() []*core.Item {
 			repos = append(repos, r)
 		}
 	}
-	live := map[string]bool{} // admin dirs still used by a checkout we found
+	var liveDirs []string
 	for _, w := range s.ordered {
 		if w.gitdir != "" {
-			live[realPath(w.gitdir)] = true
+			liveDirs = append(liveDirs, w.gitdir)
 		}
 	}
 	s.mu.Unlock()
+	live := map[string]bool{} // admin dirs still used by a checkout we found
+	for _, dir := range liveDirs {
+		if s.ctx.Err() != nil {
+			return nil
+		}
+		live[realPath(dir)] = true
+	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].path < repos[j].path })
 
 	var out []*core.Item
@@ -469,7 +476,7 @@ func (s *scan) pruneItems() []*core.Item {
 		if s.env.Excluded(r.path) || offlineVolume(r.path) != "" {
 			continue
 		}
-		admins := adminDirs(r.common)
+		admins := adminDirs(s.ctx, r.common)
 		var safe, unsafe []listEntry
 		var paths []string
 		verified := map[string]string{} // admin dir -> recorded checkout, for safe entries
@@ -513,13 +520,13 @@ func (s *scan) pruneItems() []*core.Item {
 			},
 		}
 		common := r.common
-		if len(unsafe) > 0 || pruneCommandUnsafe(common, verified) != nil {
+		if len(unsafe) > 0 || pruneCommandUnsafe(s.ctx, common, verified) != nil {
 			// Remove only the verified admin dirs.
 			if len(paths) != len(safe) {
 				continue
 			}
 			for _, p := range paths {
-				if s.env.IsProtected(p) || s.env.Excluded(p) {
+				if s.env.IsProtectedContext(s.ctx, p) || s.env.Excluded(p) {
 					paths = nil
 					break
 				}
@@ -536,7 +543,7 @@ func (s *scan) pruneItems() []*core.Item {
 			}
 			it.Recheck = func(context.Context) error { return recheckAdminDirs(verified) }
 		} else {
-			it.Recheck = func(context.Context) error { return pruneCommandUnsafe(common, verified) }
+			it.Recheck = func(ctx context.Context) error { return pruneCommandUnsafe(ctx, common, verified) }
 		}
 		for _, p := range paths {
 			st, _ := fsx.Size(s.ctx, p, nil)
@@ -578,9 +585,9 @@ type adminEntry struct {
 }
 
 // readAdminEntries lists the admin dirs of the common dir.
-func readAdminEntries(common string) ([]adminEntry, error) {
+func readAdminEntries(ctx context.Context, common string) ([]adminEntry, error) {
 	dir := filepath.Join(common, "worktrees")
-	des, err := os.ReadDir(dir)
+	des, err := fsx.ReadDir(ctx, dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -614,8 +621,8 @@ func readAdminEntries(common string) ([]adminEntry, error) {
 // an entry is pruned when it is not a directory, or not locked and its
 // gitdir file is missing or empty, or the recorded <checkout>/.git cannot be
 // lstat'ed, or when it duplicates another entry's checkout (git keeps one).
-func pruneCommandUnsafe(common string, verified map[string]string) error {
-	entries, err := readAdminEntries(common)
+func pruneCommandUnsafe(ctx context.Context, common string, verified map[string]string) error {
+	entries, err := readAdminEntries(ctx, common)
 	if err != nil {
 		return fmt.Errorf("cannot read the worktree entries of %s: %v — rescan", common, err)
 	}
@@ -634,7 +641,7 @@ func pruneCommandUnsafe(common string, verified map[string]string) error {
 		}
 		pruned := a.recorded == "" || seen[pathKey(a.gitFile)] > 1
 		if !pruned {
-			if _, err := os.Lstat(a.gitFile); err != nil {
+			if _, err := fsx.Lstat(ctx, a.gitFile); err != nil {
 				pruned = true
 			}
 		}
@@ -683,9 +690,9 @@ func recheckAdminDirs(verified map[string]string) error {
 
 // adminDirs maps each recorded checkout path to its admin dir
 // (<common>/worktrees/<name>, whose "gitdir" file is "<checkout>/.git").
-func adminDirs(common string) map[string]string {
+func adminDirs(ctx context.Context, common string) map[string]string {
 	out := map[string]string{}
-	entries, _ := readAdminEntries(common)
+	entries, _ := readAdminEntries(ctx, common)
 	for _, a := range entries {
 		if !a.notDir && a.recorded != "" {
 			out[a.recorded] = a.dir

@@ -333,16 +333,25 @@ func TestCommonDirRejectsLiveNonWorktreeGitdir(t *testing.T) {
 		filepath.Join(root, "other", "worktrees", "lib"),
 	} {
 		write(t, filepath.Join(g, "HEAD"), "ref: refs/heads/main\n")
-		if c, ok := commonDir(g); ok {
+		if c, ok := commonDir(context.Background(), g); ok {
 			t.Errorf("%s: common=%s ok", g, c)
 		}
 	}
 	// Gone admin dir: derived from the layout only for a .git / bare dir.
-	if _, ok := commonDir(filepath.Join(root, "gone", "src", "worktrees", "x")); ok {
+	if _, ok := commonDir(context.Background(), filepath.Join(root, "gone", "src", "worktrees", "x")); ok {
 		t.Error("layout fallback accepted a non-git dir")
 	}
-	if c, ok := commonDir(filepath.Join(root, "gone", "modules", "app", ".git", "worktrees", "x")); !ok || c != filepath.Join(root, "gone", "modules", "app", ".git") {
+	if c, ok := commonDir(context.Background(), filepath.Join(root, "gone", "modules", "app", ".git", "worktrees", "x")); !ok || c != filepath.Join(root, "gone", "modules", "app", ".git") {
 		t.Errorf("repository under modules/: %s %v", c, ok)
+	}
+}
+
+func TestCommonDirCancellationDoesNotDeriveOrphan(t *testing.T) {
+	gitdir := filepath.Join(t.TempDir(), ".git", "worktrees", "removed")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if common, ok := commonDir(ctx, gitdir); ok || common != "" {
+		t.Fatalf("cancelled lookup derived an orphan's common directory: %q %v", common, ok)
 	}
 }
 

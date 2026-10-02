@@ -53,7 +53,7 @@ func (m *pickerModel) viewHeader(w int) string {
 	title := sTitle.Render("🧹 " + m.opt.Title)
 	var st string
 	if m.scanning {
-		st = m.spin.View() + " " + sAccent.Render(fmt.Sprintf("scanning %d/%d providers", len(m.provDone), len(m.opt.Providers)))
+		st = m.spin.View() + " " + sAccent.Render(fmt.Sprintf("scanning %d/%d providers", len(m.provDone), len(m.opt.Providers))) + sDim.Render(" · "+scanMode(m.ctx))
 	} else {
 		st = sGreen.Render("✓") + sSubtle.Render(fmt.Sprintf(" scan done in %.1fs", m.scanTook.Seconds()))
 	}

@@ -6,6 +6,8 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // globalFlags are the persistent flags shared by every command.
@@ -24,6 +26,7 @@ type globalFlags struct {
 	roots      []string
 	noColor    bool
 	verbose    bool
+	scanMode   string
 }
 
 // cli is the state of one invocation.
@@ -33,9 +36,12 @@ type cli struct {
 	started bool // a command's RunE was reached (errors are runtime errors)
 	// trashSet: --trash was given explicitly (--trash=false then overrides
 	// use_trash from the config).
-	trashSet bool
-	out      *output
-	errw     *statusWriter
+	trashSet    bool
+	scanModeSet bool
+	scanCtl     *scanctl.Controller
+	restoreScan func() error
+	out         *output
+	errw        *statusWriter
 }
 
 func newCLI(a *App) *cli {
@@ -75,6 +81,7 @@ func (c *cli) rootCmd() *cobra.Command {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			c.started = true
 			c.trashSet = cmd.Flags().Changed("trash")
+			c.scanModeSet = cmd.Flags().Changed("scan-mode")
 			c.out = newOutput(c.App, c.noColor())
 			return nil
 		},
@@ -101,6 +108,7 @@ func (c *cli) rootCmd() *cobra.Command {
 	pf.StringArrayVar(&c.f.roots, "root", nil, "project root to scan for artifacts (repeatable): replaces the config roots for the artifacts scan only, the other scanners keep them to see what your projects use")
 	pf.BoolVar(&c.f.noColor, "no-color", false, "disable colors (also honours NO_COLOR)")
 	pf.BoolVarP(&c.f.verbose, "verbose", "v", false, "debug logging on stderr")
+	pf.StringVar(&c.f.scanMode, "scan-mode", "eco", "scan resource profile: eco|fast (default: config scan_mode, or eco)")
 
 	root.AddGroup(
 		&cobra.Group{ID: "clean", Title: "Clean:"},

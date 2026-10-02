@@ -3,6 +3,7 @@
 package fsx
 
 import (
+	"context"
 	"encoding/binary"
 	"os"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
@@ -170,8 +172,17 @@ func (e *bulkEntry) share() fileShare {
 
 // readDirBulk lists dir with getattrlistbulk. ok=false means the call is
 // unsupported for this directory (the caller falls back to lstat).
-func readDirBulk(dir string, fn func(e *bulkEntry)) (ok bool, err error) {
-	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+func readDirBulk(dir string, fn func(e *bulkEntry)) (bool, error) {
+	return readDirBulkContext(scanctl.Ensure(context.Background()), dir, fn)
+}
+
+func readDirBulkContext(ctx context.Context, dir string, fn func(e *bulkEntry)) (ok bool, err error) {
+	var fd int
+	err = scanctl.DoIO(ctx, func() error {
+		var err error
+		fd, err = unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		return err
+	})
 	if err != nil {
 		return true, err
 	}
@@ -179,17 +190,23 @@ func readDirBulk(dir string, fn func(e *bulkEntry)) (ok bool, err error) {
 	bp := bulkBufPool.Get().(*[]byte)
 	defer bulkBufPool.Put(bp)
 	buf := *bp
-	var e bulkEntry
 	attrs, opts := &bulkAttrs, uintptr(0)
 	if useCloneAttrs {
 		attrs, opts = &bulkAttrsExt, fsoptAttrCmnExtended
 	}
 	started := false
 	for {
-		n, _, errno := syscall.Syscall6(unix.SYS_GETATTRLISTBULK, uintptr(fd),
-			uintptr(unsafe.Pointer(attrs)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), opts, 0)
+		var n uintptr
+		var errno syscall.Errno
+		err := scanctl.DoIO(ctx, func() error {
+			n, _, errno = syscall.Syscall6(unix.SYS_GETATTRLISTBULK, uintptr(fd),
+				uintptr(unsafe.Pointer(attrs)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), opts, 0)
+			return nil
+		})
+		if err != nil {
+			return true, err
+		}
 		if errno == syscall.EINVAL && opts != 0 && !started {
-			// This volume does not take the extended attributes: plain request.
 			attrs, opts = &bulkAttrs, 0
 			continue
 		}
@@ -197,29 +214,55 @@ func readDirBulk(dir string, fn func(e *bulkEntry)) (ok bool, err error) {
 			if !started && (errno == syscall.ENOTSUP || errno == syscall.ENOSYS || errno == syscall.EINVAL) {
 				return false, nil
 			}
-			// Once entries were reported, falling back would count them twice.
 			return true, &os.PathError{Op: "getattrlistbulk", Path: dir, Err: errno}
 		}
 		started = true
 		if n == 0 {
-			return true, nil
+			return true, ctx.Err()
 		}
 		off := 0
-		for i := 0; i < int(n); i++ {
-			if off+4 > len(buf) {
-				return true, nil
+		for i := 0; i < int(n); {
+			// Native buffers can contain more than 256 entries. Decode and
+			// query metadata in separate admitted batches, then release before
+			// calling into traversal (callbacks may reenter Size).
+			batch := make([]bulkEntry, 0, scanBatch)
+			end := min(i+scanBatch, int(n))
+			err := scanctl.DoIO(ctx, func() error {
+				for ; i < end; i++ {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if off+4 > len(buf) {
+						i = int(n)
+						break
+					}
+					length := int(binary.LittleEndian.Uint32(buf[off:]))
+					if length <= 0 || off+length > len(buf) {
+						i = int(n)
+						break
+					}
+					var e bulkEntry
+					decodeBulk(buf[off:off+length], &e)
+					if e.needsPrivate() && e.name != "" {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						e.private, e.hasPrivate = privateAt(fd, e.name)
+					}
+					batch = append(batch, e)
+					off += length
+				}
+				return nil
+			})
+			if err != nil {
+				return true, err
 			}
-			length := int(binary.LittleEndian.Uint32(buf[off:]))
-			if length <= 0 || off+length > len(buf) {
-				return true, nil
+			for j := range batch {
+				if err := ctx.Err(); err != nil {
+					return true, err
+				}
+				fn(&batch[j])
 			}
-			rec := buf[off : off+length]
-			decodeBulk(rec, &e)
-			if e.needsPrivate() && e.name != "" {
-				e.private, e.hasPrivate = privateAt(fd, e.name)
-			}
-			fn(&e)
-			off += length
 		}
 	}
 }
@@ -249,23 +292,33 @@ func privateAt(dirfd int, name string) (int64, bool) {
 // a final symlink) through getattrlist(2); the zero value when unavailable.
 // Like a walk, it fetches the private size only when needsPrivate says so.
 func shareOf(path string) fileShare {
+	s, _ := shareOfContext(context.Background(), path)
+	return s
+}
+
+func shareOfContext(ctx context.Context, path string) (fileShare, error) {
 	p, err := unix.BytePtrFromString(path)
 	if err != nil {
-		return fileShare{}
+		return fileShare{}, nil
 	}
 	var e bulkEntry
-	if !getattrOne(p, &shareAttrs, &e) {
-		return fileShare{}
+	var ok bool
+	err = scanctl.DoIO(ctx, func() error { ok = getattrOne(p, &shareAttrs, &e); return nil })
+	if err != nil || !ok {
+		return fileShare{}, err
 	}
 	e.objType = vREG
 	if e.needsPrivate() {
-		privateFetches.Add(1)
-		var pe bulkEntry
-		if getattrOne(p, &privateAttrs, &pe) && pe.hasPrivate {
-			e.private, e.hasPrivate = pe.private, true
-		}
+		err = scanctl.DoIO(ctx, func() error {
+			privateFetches.Add(1)
+			var pe bulkEntry
+			if getattrOne(p, &privateAttrs, &pe) && pe.hasPrivate {
+				e.private, e.hasPrivate = pe.private, true
+			}
+			return nil
+		})
 	}
-	return e.share()
+	return e.share(), err
 }
 
 // getattrOne runs getattrlist(2) on path (not following a final symlink)

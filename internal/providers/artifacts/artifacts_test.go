@@ -702,7 +702,7 @@ func TestDecide(t *testing.T) {
 		{"extra outside git", cand{rule: free, tracked: -1, ignored: -1}, true, ""},
 		{"extra in git not ignored", cand{rule: free, git: g, tracked: 0, ignored: 0}, false, "not ignored"},
 	}
-	s := &scan{}
+	s := &scan{ctx: t.Context()}
 	for _, tc := range cases {
 		ok, why := s.decide(&tc.c)
 		if ok != tc.ok || !strings.Contains(why, tc.reasonC) {
@@ -796,10 +796,10 @@ func TestRuleHelpers(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "app/android/app"), 0o755)
 	os.WriteFile(filepath.Join(dir, "app/package.json"), []byte("{}"), 0o644)
-	if got := climbPlatform(filepath.Join(dir, "app/android/app")); got != filepath.Join(dir, "app") {
+	if got := climbPlatform(context.Background(), filepath.Join(dir, "app/android/app")); got != filepath.Join(dir, "app") {
 		t.Errorf("climbPlatform = %s", got)
 	}
-	if got := climbPlatform(filepath.Join(dir, "lib")); got != filepath.Join(dir, "lib") {
+	if got := climbPlatform(context.Background(), filepath.Join(dir, "lib")); got != filepath.Join(dir, "lib") {
 		t.Errorf("climbPlatform no app = %s", got)
 	}
 }

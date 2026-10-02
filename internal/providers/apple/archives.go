@@ -1,13 +1,14 @@
 package apple
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 type archive struct {
@@ -30,9 +31,9 @@ func (s *scan) archives() {
 		if s.skipPath(p) {
 			return
 		}
-		found = append(found, readArchive(p))
+		found = append(found, readArchive(s.ctx, p))
 	}
-	ents, err := os.ReadDir(root)
+	ents, err := fsx.ReadDir(s.ctx, root)
 	if err != nil {
 		return
 	}
@@ -45,7 +46,7 @@ func (s *scan) archives() {
 			collect(p)
 			continue
 		}
-		sub, err := os.ReadDir(p) // date folders: Archives/2026-09-28/*.xcarchive
+		sub, err := fsx.ReadDir(s.ctx, p) // date folders: Archives/2026-09-28/*.xcarchive
 		if err != nil {
 			continue
 		}
@@ -105,7 +106,7 @@ func (s *scan) archives() {
 	}
 }
 
-func readArchive(p string) archive {
+func readArchive(ctx context.Context, p string) archive {
 	a := archive{path: p, name: strings.TrimSuffix(filepath.Base(p), ".xcarchive")}
 	info, err := readPlistDict(filepath.Join(p, "Info.plist"))
 	if err == nil {
@@ -122,7 +123,7 @@ func readArchive(p string) archive {
 		}
 	}
 	if a.created.IsZero() {
-		a.created = childrenNewest(p)
+		a.created = childrenNewest(ctx, p)
 	}
 	if a.name == "" {
 		a.name = fmt.Sprintf("Archive %s", filepath.Base(p))

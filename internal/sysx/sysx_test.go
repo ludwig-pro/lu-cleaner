@@ -1,6 +1,7 @@
 package sysx
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,11 +55,11 @@ func TestExecInside(t *testing.T) {
 }
 
 func TestNativeProcPaths(t *testing.T) {
-	cwds, ok := nativeCwds()
+	cwds, ok, _ := nativeCwds(context.Background())
 	if !ok {
 		t.Skip("proc_info unavailable")
 	}
-	execs, ok := nativeExecs()
+	execs, ok, _ := nativeExecs(context.Background())
 	if !ok {
 		t.Skip("proc_info unavailable")
 	}
@@ -88,7 +89,7 @@ func TestNativeProcPaths(t *testing.T) {
 // checked, so node_modules was deleted under a dev server that had an addon
 // loaded from it.
 func TestExecInsideSeesMappedFiles(t *testing.T) {
-	if _, ok := nativeExecs(); !ok {
+	if _, ok, _ := nativeExecs(context.Background()); !ok {
 		t.Skip("proc_info unavailable")
 	}
 	dir := t.TempDir()
@@ -157,7 +158,7 @@ func TestNativeExecsIsFast(t *testing.T) {
 		t.Skip()
 	}
 	start := time.Now()
-	execs, ok := nativeExecs()
+	execs, ok, _ := nativeExecs(context.Background())
 	if !ok {
 		t.Skip("proc_info unavailable")
 	}

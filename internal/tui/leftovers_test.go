@@ -369,7 +369,11 @@ func TestAnalyzerYesDuringNestedCheck(t *testing.T) {
 	gate := make(chan struct{})
 	repoIn := ""
 	m.nestedFn = func(dir string) (string, error) {
-		<-gate
+		select {
+		case <-gate:
+		case <-m.ctx.Done():
+			return "", m.ctx.Err()
+		}
 		if filepath.Base(dir) == repoIn {
 			return filepath.Join(dir, "repo"), nil
 		}
@@ -472,7 +476,7 @@ func TestAnalyzerNestedCheckErrors(t *testing.T) {
 		opts.Force = force
 		opts.DryRun = true
 		m := newAnalyzer(context.Background(), AnalyzeOptions{Env: testEnv(home), Root: root, Clean: opts})
-		t.Cleanup(m.cancel)
+		t.Cleanup(m.close)
 		m.diskFn = fakeDisk
 		m.w, m.h = 120, 40
 		m.nestedFn = func(string) (string, error) { return "", safety.ErrTooLarge }

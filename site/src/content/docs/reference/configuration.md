@@ -34,6 +34,7 @@ The file is validated every time it is loaded. lu-cleaner refuses to scan or cle
 
 - an unknown key, such as a typo like `stale_afer`;
 - a size or age that cannot be parsed;
+- a `scan_mode` other than `eco` or `fast`, unless a valid `--scan-mode` overrides it;
 - an undefined `$VARIABLE` in `exclude` or `protect`.
 
 This strictness is deliberate: a misspelled `protect` or `exclude` that was silently ignored, or that expanded to another path, would leave unprotected the very paths you meant to protect. `config edit` checks the file when the editor exits and reports TOML syntax errors and unknown keys; the other errors are reported by the next command that loads it. An unknown name in `disabled_categories` is only a warning, since that key can only hide things.
@@ -56,6 +57,9 @@ exclude = ["~/dev/legacy-monorepo"]
 
 # Never clean these, nor anything that contains them.
 protect = ["~/.android/avd/Pixel_8_API_35.avd", "~/Library/Developer/Xcode/Archives"]
+
+# Keep scan CPU and disk pressure low.
+scan_mode = "eco"
 
 # Hide the small stuff, and only call "stale" what is a month old.
 min_size = "50MB"
@@ -80,6 +84,7 @@ extra_artifacts = ["tmp-build"]
 | [`exclude`](#exclude) | list of paths | `[]` | Never scanned, never cleaned. |
 | [`protect`](#protect) | list of paths | `[]` | Never cleaned, in addition to the built-in list. |
 | [`max_depth`](#max_depth) | integer | `8` | Depth of the project scan below each root. |
+| [`scan_mode`](#scan_mode) | `eco` or `fast` | `"eco"` | Resource profile shared by scanners and the analyzer. |
 | [`min_size`](#min_size) | size | `"1MB"` | Hide smaller items in lists. |
 | [`stale_after`](#stale_after) | age | `"14d"` | When an unused item becomes stale. |
 | [`keep_latest`](#keep_latest) | integer | `1` | Newest versions of versioned installs kept out of smart select. |
@@ -87,7 +92,49 @@ extra_artifacts = ["tmp-build"]
 | [`use_trash`](#use_trash) | boolean | `false` | Move to the Trash instead of deleting. |
 | [`extra_artifacts`](#extra_artifacts) | list of names | `[]` | More project artifact folder names. |
 
-Command-line flags take precedence over the file: `--root` replaces `roots` for the project artifacts scan, `--min-size` replaces `min_size`, `--trash` turns Trash mode on even when `use_trash = false`, and `--trash=false` turns it off when `use_trash = true`.
+Command-line flags take precedence over the file: `--scan-mode` replaces `scan_mode`, `--root` replaces `roots` for the project artifacts scan, `--min-size` replaces `min_size`, `--trash` turns Trash mode on even when `use_trash = false`, and `--trash=false` turns it off when `use_trash = true`.
+
+### `scan_mode`
+
+The scan resource profile. `eco` is the default; `fast` favours throughput. It applies to the dashboard, `scan`, scans before cleaning, `analyze` and `doctor` (including `--no-scan`, which still measures the Trash).
+
+`eco` gives other applications more room and can take substantially longer, especially on the first scan. These are concurrency and scheduling limits, not a guaranteed CPU percentage. Command slots count tools launched directly by lu-cleaner, not every descendant those tools may create. `--dry-run` prevents deletion; it still performs the same discovery and safety checks. Use `--scan-mode` to choose the resource profile independently.
+
+```toml
+scan_mode = "eco"
+```
+
+```bash
+lu-cleaner scan --scan-mode fast       # override the file for this invocation
+lu-cleaner config show --scan-mode eco # inspect effective limits without starting a scan
+```
+
+| Limit | `eco` | `fast` |
+| --- | --- | --- |
+| Shared concurrent I/O operations | 2 | 8 |
+| Concurrent inspection commands | 1 | 4 |
+| Prefetch jobs per sizing pool | 1 | 4 |
+| Entries per read batch | 256 | 256 |
+| Pause after each I/O operation | 5 ms | none |
+| Go CPU parallelism | Current value, capped at 2 | Inherited |
+| macOS scheduling priority | Background during the invocation | Inherited |
+
+The previous CPU setting and process priority are restored when the invocation ends. If macOS cannot change the priority, a warning is printed and the quotas still apply. Help, configuration, history, version and catalog commands do not change process priorities. `--verbose` prints the resolved limits and resource counters on stderr; scan and analyzer progress displays the active profile.
+
+`config show` also displays the resolved `GOMAXPROCS` value and requested priority (`background` or `inherited`) without applying them. In verbose counters, `files` and `dirs` count entries walked for sizing; `cache_hits` and `cache_misses` describe memoized size requests within this invocation. Use `LU_TRACE=1` for the persistent cache's diagnostics.
+
+Wait and pause durations ending in `_cumulative` sum time across workers and can exceed the invocation's wall time. Provider durations are also printed with `--verbose`. Keep JSON and diagnostics separate:
+
+```bash
+LU_TRACE=1 lu-cleaner scan --dry-run --scan-mode eco --verbose --json >scan.json 2>scan.log
+LU_WALKERS=1 lu-cleaner config show --json
+```
+
+The first scan must measure trees that are not cached. On supported macOS builds, the persistent size cache reuses complete measurements only when its filesystem history and root checks remain valid. An unavailable history, changed tree or incomplete measurement requires another walk; `LU_NO_CACHE=1` disables this cache for diagnosis. The cache does not make discovery or process safety checks unnecessary.
+
+Cancellation is cooperative: Ctrl+C or SIGTERM stops quota waits, pauses and traversal loops, and joins scan workers. Process signals retain exit codes 130 and 143; a second signal exits immediately. Closing the TUI also cancels its scan work and waits for it to finish. A kernel call that is already blocked cannot be interrupted instantly by these software checks.
+
+`LU_WALKERS=<positive integer>` overrides the shared I/O limit in either profile. It does not change command limits, prefetch, batch size, pauses or CPU settings. Invalid values are ignored, with a diagnostic only under `--verbose`. These settings control resource use; the same items and sizes are reported in both profiles.
 
 ### `roots`
 
@@ -267,7 +314,7 @@ To clean only these: `lu-cleaner clean --yes -k extra-artifact --dry-run`.
 | `NO_COLOR` | Any non-empty value disables colors, in command output and in the interactive screens (same as `--no-color`). `TERM=dumb` also disables them in command output. |
 | `VISUAL`, `EDITOR` | Editor used by `lu-cleaner config edit`, `VISUAL` first. Without either, the file opens with `open -t`. |
 | `TMPDIR` | Your per-user temporary folder. Caches in it (Metro, Jest, Xcode tools…) are scanned, and the safety guard allows deletions inside your per-user temporary area only when `TMPDIR` is private to you: a shared folder such as `/tmp` never. |
-| `LU_WALKERS` | Maximum number of directories read concurrently while measuring sizes. Default: 3 × the number of CPU cores, at least 8. Lower it to reduce disk pressure during scans. |
+| `LU_WALKERS` | Positive integer overriding the shared concurrent I/O limit for discovery and sizing. Default: 2 in `eco`, 8 in `fast`. Invalid values keep the profile default, with a diagnostic under `--verbose`. |
 | `LU_NO_BULK` | Any non-empty value measures sizes with one `lstat` call per entry instead of the macOS `getattrlistbulk` bulk call. Slower: only useful to troubleshoot a size difference. |
 
 ### Tool locations

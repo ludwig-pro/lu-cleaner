@@ -10,6 +10,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 )
 
 // itemID is stable across scans: provider, kind and path.
@@ -315,17 +316,23 @@ func binaries(names map[string]bool) string {
 // runningWarn tells when a ProcessGuard process runs right now: cleaning
 // would be refused, so the item must not be preselected (cached per scan).
 func (s *scan) runningWarn(guard []string) string {
-	if len(guard) == 0 || s.p.running == nil {
+	if len(guard) == 0 {
 		return ""
 	}
-	key := strings.Join(guard, "\x00")
-	s.runMu.Lock()
-	names, ok := s.runCache[key]
-	if !ok {
-		names = s.p.running(guard...)
-		s.runCache[key] = names
+	if s.ctx.Err() != nil {
+		return "process state unavailable — rescan before cleaning"
 	}
-	s.runMu.Unlock()
+	key := strings.Join(guard, "\x00")
+	names, err := s.runCache.Get(s.ctx, key, func(ctx context.Context) ([]string, error) {
+		if s.p.running != nil {
+			return s.p.running(guard...), nil
+		}
+		return sysx.RunningContext(ctx, guard...)
+	})
+	if err != nil {
+		return "process state unavailable — rescan before cleaning"
+	}
+
 	if len(names) == 0 {
 		return ""
 	}
@@ -339,15 +346,28 @@ func (s *scan) inUseWarn(c *cand) string {
 	if c.git != nil {
 		dir = c.git.path
 	}
-	if dir == "" || s.p.cwdInside == nil {
+	if dir == "" {
 		return ""
+	}
+	if s.ctx.Err() != nil {
+		return "project process state unavailable — rescan before cleaning"
 	}
 	s.useMu.Lock()
 	pids, ok := s.inUse[dir]
 	s.useMu.Unlock()
 	if !ok {
+		var current string
+		if s.p.cwdInside != nil {
+			current = s.p.cwdInside(dir)
+		} else {
+			var err error
+			current, err = sysx.CwdInsideContext(s.ctx, dir)
+			if err != nil {
+				return "project process state unavailable — rescan before cleaning"
+			}
+		}
 		var keep []string
-		for _, pid := range strings.Split(s.p.cwdInside(dir), ",") {
+		for _, pid := range strings.Split(current, ",") {
 			if pid = strings.TrimSpace(pid); pid != "" && pid != s.self {
 				keep = append(keep, pid)
 			}

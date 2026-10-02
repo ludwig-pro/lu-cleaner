@@ -7,6 +7,7 @@
 package safety
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -343,6 +346,10 @@ func isGlob(p string) bool { return strings.ContainsAny(p, "*?[") }
 // or contains p. A glob entry matches k or any ancestor of k, and blocks k
 // when an existing path inside k matches it.
 func hitsProtected(k, orig, p string) bool {
+	return hitsProtectedContext(context.Background(), k, orig, p)
+}
+
+func hitsProtectedContext(ctx context.Context, k, orig, p string) bool {
 	if !isGlob(p) {
 		return within(p, k) || within(k, p)
 	}
@@ -361,22 +368,32 @@ func hitsProtected(k, orig, p string) bool {
 			return false
 		}
 	}
-	return existsMatch(orig, pParts[len(kParts):])
+	return existsMatchContext(ctx, orig, pParts[len(kParts):])
 }
 
 // existsMatch reports whether dir contains a path matching the (key form)
 // glob components rest, comparing names case- and normalization-insensitively.
 func existsMatch(dir string, rest []string) bool {
+	return existsMatchContext(context.Background(), dir, rest)
+}
+
+func existsMatchContext(ctx context.Context, dir string, rest []string) bool {
+	if ctx.Err() != nil {
+		return true
+	} // unknown: do not propose deletion
 	if len(rest) == 0 {
 		return true
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
-		return false
+		return ctx.Err() != nil
 	}
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			return true
+		}
 		if ok, _ := filepath.Match(rest[0], normName(e.Name())); ok {
-			if len(rest) == 1 || (e.IsDir() && existsMatch(filepath.Join(dir, e.Name()), rest[1:])) {
+			if len(rest) == 1 || (e.IsDir() && existsMatchContext(ctx, filepath.Join(dir, e.Name()), rest[1:])) {
 				return true
 			}
 		}
@@ -453,13 +470,19 @@ var ErrTooLarge = errors.New("too many entries to inspect")
 // (0 = 1,000,000) and fails with ErrTooLarge beyond that; an unreadable
 // directory is also an error: callers must fail closed.
 func FindNestedRepo(dir string, maxDepth, maxEntries int, skip func(path, name string) bool) (string, error) {
+	return FindNestedRepoContext(context.Background(), dir, maxDepth, maxEntries, skip)
+}
+
+// FindNestedRepoContext preserves the fail-closed check while sharing the scan
+// budget and abandoning canceled traversal without concluding "no repository".
+func FindNestedRepoContext(ctx context.Context, dir string, maxDepth, maxEntries int, skip func(path, name string) bool) (string, error) {
 	if maxEntries <= 0 {
 		maxEntries = 1_000_000
 	}
 	seen := 0
 	var walk func(d string, depth int) (string, error)
 	walk = func(d string, depth int) (string, error) {
-		entries, err := os.ReadDir(d)
+		entries, err := fsx.ReadDir(ctx, d)
 		if err != nil {
 			return "", err
 		}
@@ -470,6 +493,9 @@ func FindNestedRepo(dir string, maxDepth, maxEntries int, skip func(path, name s
 		if depth > 0 {
 			var head, objects, refs bool
 			for _, e := range entries {
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
 				switch e.Name() {
 				case ".git":
 					return d, nil // any type: directory, file or symlink
@@ -489,6 +515,9 @@ func FindNestedRepo(dir string, maxDepth, maxEntries int, skip func(path, name s
 			return "", nil
 		}
 		for _, e := range entries {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			if !e.IsDir() || e.Name() == ".git" { // IsDir is false for symlinks
 				continue
 			}
@@ -574,8 +603,12 @@ func (g *Guard) checkOne(path string) error {
 // protectedBy returns the protected entry that removing k (orig: the same
 // path as given) would hit, or "".
 func (g *Guard) protectedBy(k, orig string) string {
+	return g.protectedByContext(context.Background(), k, orig)
+}
+
+func (g *Guard) protectedByContext(ctx context.Context, k, orig string) string {
 	for _, p := range g.protect {
-		if hitsProtected(k, orig, p) { // protected path is the target, contains it, or lives inside it
+		if hitsProtectedContext(ctx, k, orig, p) { // protected path is the target, contains it, or lives inside it
 			return p
 		}
 	}
@@ -592,8 +625,17 @@ func (g *Guard) protectedBy(k, orig string) string {
 // root, or it is a denied system/home directory. Paths *inside* scan roots are
 // not protected. Used by scanners to avoid even proposing such items.
 func (g *Guard) Protected(path string) bool {
+	return g.ProtectedContext(context.Background(), path)
+}
+
+// ProtectedContext admits glob discovery under the invocation budget. An
+// interrupted inspection fails closed.
+func (g *Guard) ProtectedContext(ctx context.Context, path string) bool {
+	if ctx.Err() != nil {
+		return true
+	}
 	k := Key(path)
-	if g.protectedBy(k, path) != "" {
+	if g.protectedByContext(ctx, k, path) != "" {
 		return true
 	}
 	for _, r := range g.roots {

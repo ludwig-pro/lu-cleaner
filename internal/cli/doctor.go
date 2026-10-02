@@ -99,7 +99,12 @@ func (c *cli) doctorCmd() *cobra.Command {
 }
 
 func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
-	s, err := c.newSetup(nil)
+	s, err := c.newScanSetup(nil, ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Even --no-scan measures the Trash and runs inspection commands.
+	ctx, err = c.startScan(ctx, s)
 	if err != nil {
 		return nil, err
 	}
@@ -117,11 +122,10 @@ func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
 		r.UsedPct = float64(int(d.UsedPct()*10)) / 10
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	if snaps := c.Snapshots(sctx); snaps != nil {
+	// The command runner starts its execution timeout after admission.
+	if snaps := c.Snapshots(ctx); snaps != nil {
 		r.Snapshots = snaps
 	}
-	cancel()
 
 	r.Trash.Path = filepath.Join(env.Home, ".Trash")
 	st, err := fsx.Size(ctx, r.Trash.Path, nil)

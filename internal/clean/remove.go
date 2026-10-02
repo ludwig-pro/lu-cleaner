@@ -317,7 +317,7 @@ func precheckWorktree(ctx context.Context, it *core.Item, opt Options, done func
 	// Symlinks are not followed by the walk: only the root may be spelled
 	// differently from its resolved form.
 	rp := resolve(path)
-	found, err := safety.FindNestedRepo(path, nestedDepth, 0, func(p, name string) bool {
+	found, err := safety.FindNestedRepoContext(ctx, path, nestedDepth, 0, func(p, name string) bool {
 		return heavyDirs[name] || done(p) || done(rp+p[len(path):])
 	})
 	if err != nil {

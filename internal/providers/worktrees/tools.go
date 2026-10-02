@@ -176,9 +176,7 @@ func sqliteJSON(ctx context.Context, env *core.Env, db, query string, out any) b
 		return false
 	}
 	for _, mode := range []string{"?mode=ro", "?mode=ro&immutable=1"} {
-		cctx, cancel := context.WithTimeout(ctx, toolTimeout)
-		b, err := env.Output(cctx, "", bin, "-readonly", "-json", "-cmd", ".timeout 1000", "file:"+escapeURIPath(db)+mode, query)
-		cancel()
+		b, err := env.OutputTimeout(ctx, toolTimeout, "", bin, "-readonly", "-json", "-cmd", ".timeout 1000", "file:"+escapeURIPath(db)+mode, query)
 		if err != nil {
 			continue
 		}
@@ -198,7 +196,7 @@ func escapeURIPath(p string) string {
 // loadCodex reads the Codex thread database (cwd of every thread) and the
 // Codex app archival queue.
 func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) {
-	dbs, _ := filepath.Glob(filepath.Join(home, ".codex", "state_*.sqlite"))
+	dbs, _ := fsx.Glob(ctx, filepath.Join(home, ".codex", "state_*.sqlite"))
 	if len(dbs) > 0 {
 		sort.Slice(dbs, func(i, j int) bool { return stateVersion(dbs[i]) > stateVersion(dbs[j]) })
 		var rows []struct {
@@ -209,12 +207,15 @@ func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) 
 		}
 		if sqliteJSON(ctx, env, dbs[0],
 			"select cwd, archived, count(*) as n, max(updated_at) as u from threads group by cwd, archived", &rows) {
-			ts.mu.Lock()
 			for _, r := range rows {
+				if ctx.Err() != nil {
+					return
+				}
 				if r.Cwd == "" {
 					continue
 				}
 				cwd := pathKey(realPath(r.Cwd))
+				ts.mu.Lock()
 				c := ts.codex[cwd]
 				if c == nil {
 					c = &codexCwd{}
@@ -228,8 +229,8 @@ func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) 
 				if t := unixAuto(r.U); t.After(c.last) {
 					c.last = t
 				}
+				ts.mu.Unlock()
 			}
-			ts.mu.Unlock()
 		}
 	}
 	var gs struct {
@@ -238,14 +239,15 @@ func (ts *toolState) loadCodex(ctx context.Context, env *core.Env, home string) 
 			Phase string `json:"phase"`
 		} `json:"electron-managed-worktree-archives"`
 	}
-	if b, err := os.ReadFile(filepath.Join(home, ".codex", ".codex-global-state.json")); err == nil && json.Unmarshal(b, &gs) == nil {
-		ts.mu.Lock()
+	if b, err := fsx.ReadFile(ctx, filepath.Join(home, ".codex", ".codex-global-state.json")); err == nil && json.Unmarshal(b, &gs) == nil {
 		for _, a := range gs.Archives {
 			if a.Cwd != "" {
-				ts.codexQueued[pathKey(realPath(a.Cwd))] = true
+				cwd := pathKey(realPath(a.Cwd))
+				ts.mu.Lock()
+				ts.codexQueued[cwd] = true
+				ts.mu.Unlock()
 			}
 		}
-		ts.mu.Unlock()
 	}
 }
 
@@ -276,7 +278,6 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 		} `json:"worktrees"`
 	}
 	get := func(p string) *claudeWT {
-		p = pathKey(realPath(p))
 		c := ts.claudeWT[p]
 		if c == nil {
 			c = &claudeWT{}
@@ -284,21 +285,25 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 		}
 		return c
 	}
-	if b, err := os.ReadFile(filepath.Join(base, "git-worktrees.json")); err == nil && json.Unmarshal(b, &pool) == nil {
-		ts.mu.Lock()
+	if b, err := fsx.ReadFile(ctx, filepath.Join(base, "git-worktrees.json")); err == nil && json.Unmarshal(b, &pool) == nil {
 		for _, w := range pool.Worktrees {
+			if ctx.Err() != nil {
+				return
+			}
 			if w.Path == "" {
 				continue
 			}
-			c := get(w.Path)
+			key := pathKey(realPath(w.Path))
+			ts.mu.Lock()
+			c := get(key)
 			c.known = true
 			if l := strings.TrimSpace(string(w.LeasedBy)); l != "" && l != "null" {
 				c.leased = true
 			}
+			ts.mu.Unlock()
 		}
-		ts.mu.Unlock()
 	}
-	accounts, _ := filepath.Glob(filepath.Join(base, "claude-code-sessions", "*", "*"))
+	accounts, _ := fsx.Glob(ctx, filepath.Join(base, "claude-code-sessions", "*", "*"))
 	for _, dir := range accounts {
 		if ctx.Err() != nil {
 			return
@@ -307,12 +312,12 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 		var idx struct {
 			Archived []string `json:"archived"`
 		}
-		if b, err := os.ReadFile(filepath.Join(dir, "archived-sessions.idx")); err == nil && json.Unmarshal(b, &idx) == nil {
+		if b, err := fsx.ReadFile(ctx, filepath.Join(dir, "archived-sessions.idx")); err == nil && json.Unmarshal(b, &idx) == nil {
 			for _, id := range idx.Archived {
 				archived[id] = true
 			}
 		}
-		files, _ := filepath.Glob(filepath.Join(dir, "local_*.json"))
+		files, _ := fsx.Glob(ctx, filepath.Join(dir, "local_*.json"))
 		if len(files) > 2000 {
 			files = files[:2000]
 		}
@@ -323,7 +328,7 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 				IsArchived     bool   `json:"isArchived"`
 				LastActivityAt int64  `json:"lastActivityAt"`
 			}
-			b, err := os.ReadFile(f)
+			b, err := fsx.ReadFile(ctx, f)
 			if err != nil || json.Unmarshal(b, &sess) != nil || sess.WorktreePath == "" {
 				continue
 			}
@@ -331,8 +336,9 @@ func (ts *toolState) loadClaudeDesktop(ctx context.Context, env *core.Env, home 
 			if id == "" {
 				id = strings.TrimSuffix(filepath.Base(f), ".json")
 			}
+			key := pathKey(realPath(sess.WorktreePath))
 			ts.mu.Lock()
-			c := get(sess.WorktreePath)
+			c := get(key)
 			if sess.IsArchived || archived[id] {
 				c.archived++
 			} else {
@@ -357,10 +363,14 @@ func (ts *toolState) loadConductor(ctx context.Context, env *core.Env, home stri
 		"select workspace_path as p, state as s from workspaces where workspace_path is not null and workspace_path != ''", &rows) {
 		return
 	}
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	for _, r := range rows {
-		ts.conductor[pathKey(realPath(r.P))] = &conductorWS{state: r.S}
+		if ctx.Err() != nil {
+			return
+		}
+		key := pathKey(realPath(r.P))
+		ts.mu.Lock()
+		ts.conductor[key] = &conductorWS{state: r.S}
+		ts.mu.Unlock()
 	}
 }
 
@@ -372,12 +382,16 @@ func (ts *toolState) loadEditors(ctx context.Context, env *core.Env, home string
 		{"VS Code", "Code", "/Visual Studio Code.app/Contents/MacOS/"},
 	} {
 		p := filepath.Join(home, "Library", "Application Support", ed.dir, "User", "globalStorage", "storage.json")
-		b, err := os.ReadFile(p)
+		b, err := fsx.ReadFile(ctx, p)
 		if err != nil {
 			continue
 		}
-		if len(sysx.Running(ed.proc)) == 0 {
+		running, err := sysx.RunningContext(ctx, ed.proc)
+		if err == nil && len(running) == 0 {
 			continue
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		var st struct {
 			WindowsState struct {
@@ -396,13 +410,17 @@ func (ts *toolState) loadEditors(ctx context.Context, env *core.Env, home string
 		for _, w := range st.WindowsState.OpenedWindows {
 			folders = append(folders, w.Folder)
 		}
-		ts.mu.Lock()
+		var resolved []string
 		for _, f := range folders {
 			u, err := url.Parse(f)
 			if err != nil || u.Scheme != "file" || u.Path == "" {
 				continue
 			}
 			fp := pathKey(realPath(u.Path))
+			resolved = append(resolved, fp)
+		}
+		ts.mu.Lock()
+		for _, fp := range resolved {
 			ts.editors[fp] = appendUnique(ts.editors[fp], ed.name)
 		}
 		ts.mu.Unlock()
@@ -416,9 +434,7 @@ func (ts *toolState) loadProcs(ctx context.Context, env *core.Env, _ string) {
 	if bin == "" {
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, toolTimeout)
-	defer cancel()
-	out, _ := env.Output(cctx, "", bin, "-n", "-P", "-w", "-d", "cwd", "-Fpcn") // exit 1 with partial output is common
+	out, _ := env.OutputTimeout(ctx, toolTimeout, "", bin, "-n", "-P", "-w", "-d", "cwd", "-Fpcn") // exit 1 with partial output is common
 	self := os.Getpid()
 	var list []proc
 	cur := proc{}

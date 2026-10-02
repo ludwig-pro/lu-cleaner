@@ -194,6 +194,7 @@ func newPicker(ctx context.Context, opt PickerOptions) *pickerModel {
 		opt.Env = core.NewEnv()
 	}
 	env := opt.Env
+	ctx = scanContext(ctx, env)
 	if opt.Title == "" {
 		opt.Title = "lu-cleaner"
 	}

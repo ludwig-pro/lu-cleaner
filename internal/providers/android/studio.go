@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // studioProcess is the executable name of Android Studio (Contents/MacOS/studio).
@@ -21,13 +22,11 @@ func (s *scan) studioApps() map[string]string {
 	out := map[string]string{} // dataDirectoryName -> app path
 	var apps []string
 	for _, d := range s.p.appDirs {
-		ms, _ := filepath.Glob(filepath.Join(d, "Android Studio*.app"))
+		ms, _ := fsx.Glob(s.ctx, filepath.Join(d, "Android Studio*.app"))
 		apps = append(apps, ms...)
 	}
 	if s.p.mdfind && s.env.Has("mdfind") {
-		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-		o, err := s.env.Output(ctx, "", "mdfind", "kMDItemCFBundleIdentifier == 'com.google.android.studio*'")
-		cancel()
+		o, err := s.env.OutputTimeout(s.ctx, 3*time.Second, "", "mdfind", "kMDItemCFBundleIdentifier == 'com.google.android.studio*'")
 		if err == nil {
 			for _, l := range strings.Split(string(o), "\n") {
 				if l = strings.TrimSpace(l); strings.HasSuffix(l, ".app") {
@@ -50,9 +49,9 @@ func (s *scan) studioApps() map[string]string {
 // studio emits Android Studio caches, logs and settings of old versions.
 func (s *scan) studio() {
 	g := filepath.Join(s.env.Home, "Library")
-	cfgs, _ := filepath.Glob(filepath.Join(g, "Application Support", "Google", "AndroidStudio*"))
-	caches, _ := filepath.Glob(filepath.Join(g, "Caches", "Google", "AndroidStudio*"))
-	logs, _ := filepath.Glob(filepath.Join(g, "Logs", "Google", "AndroidStudio*"))
+	cfgs, _ := fsx.Glob(s.ctx, filepath.Join(g, "Application Support", "Google", "AndroidStudio*"))
+	caches, _ := fsx.Glob(s.ctx, filepath.Join(g, "Caches", "Google", "AndroidStudio*"))
+	logs, _ := fsx.Glob(s.ctx, filepath.Join(g, "Logs", "Google", "AndroidStudio*"))
 	if len(cfgs)+len(caches)+len(logs) == 0 {
 		return
 	}
@@ -104,7 +103,7 @@ func (s *scan) studio() {
 			it.ProcessGuard = []string{studioProcess}
 			it.Note = "Indexes and caches of the Android Studio you use; rebuilt on next launch (re-indexing takes minutes)."
 			if running {
-				it.Warn = "Android Studio is running — quit it first"
+				it.Warn = s.studioWarn("Android Studio is running — quit it first")
 			}
 		} else {
 			it.Recommended = true
@@ -120,7 +119,7 @@ func (s *scan) studio() {
 		if current[n] {
 			it.ProcessGuard = []string{studioProcess}
 			if running {
-				it.Warn = "Android Studio is running — quit it first"
+				it.Warn = s.studioWarn("Android Studio is running — quit it first")
 			}
 		}
 		s.emitPkg(it, sizeOpt{lastUsedFromNewest: true})
@@ -173,8 +172,8 @@ const studioLocalHistory = "LocalHistory"
 // otherwise paths are its entries except LocalHistory. ok is false when
 // nothing but the local history is left, or when the folder cannot be listed
 // (it might hold one).
-func studioCacheTargets(dir string) (paths []string, split, ok bool) {
-	ents, err := os.ReadDir(dir)
+func studioCacheTargets(ctx context.Context, dir string) (paths []string, split, ok bool) {
+	ents, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
 		return nil, false, false
 	}
@@ -197,7 +196,7 @@ func studioCacheTargets(dir string) (paths []string, split, ok bool) {
 func (s *scan) emitStudioCache(it *core.Item) {
 	dir := it.Path
 	if s.locate(dir).Deletable() {
-		ps, split, ok := studioCacheTargets(dir)
+		ps, split, ok := studioCacheTargets(s.ctx, dir)
 		if !ok {
 			return
 		}
@@ -241,13 +240,13 @@ func (s *scan) userCache() {
 		if s.locate(dir).Place != placeInternal {
 			continue
 		}
-		ents, err := os.ReadDir(dir)
+		ents, err := fsx.ReadDir(s.ctx, dir)
 		if err != nil {
 			continue
 		}
 		for _, e := range ents {
 			p := filepath.Join(dir, e.Name())
-			if e.Type()&os.ModeSymlink == 0 && !s.env.IsProtected(p) {
+			if e.Type()&os.ModeSymlink == 0 && !s.env.IsProtectedContext(s.ctx, p) {
 				ps = append(ps, p)
 			}
 		}
@@ -262,7 +261,7 @@ func (s *scan) userCache() {
 	it.ProcessGuard = []string{studioProcess}
 	it.Note = "SDK Manager repository cache, the pre-AGP 4.1 build cache and emulator crash dumps; recreated when needed."
 	if s.isStudioRunning() {
-		it.Warn = "Android Studio is running — quit it first"
+		it.Warn = s.studioWarn("Android Studio is running — quit it first")
 	}
 	s.add(it, nil, sizeOpt{lastUsedFromNewest: true})
 }

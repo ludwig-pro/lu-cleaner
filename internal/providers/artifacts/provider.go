@@ -44,19 +44,16 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/sizes"
-	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	walkWorkers = 16 // concurrent directory reads while walking
-	gitWorkers  = 6  // concurrent git work tree inspections
-	sizeWorkers = 6  // concurrent artifact size walks (fsx parallelises each walk too)
-	// prefetchWorkers: concurrent size walks started during the walk and git
-	// phases (see scan.prefetch).
-	prefetchWorkers = 6
-
+	walkWorkers     = 16 // concurrent directory reads while walking
+	gitWorkers      = 6  // concurrent git work tree inspections
+	sizeWorkers     = 6  // concurrent artifact size walks (fsx parallelises each walk too)
 	defaultMaxDepth = 8
 	// idleForRecommend: safe outputs of projects idle for longer are forced
 	// into smart select.
@@ -86,10 +83,8 @@ type extraRoot struct{ rel, label string }
 // New returns the provider.
 func New() *Provider {
 	return &Provider{
-		extra:     loadExtraArtifacts,
-		cwdInside: sysx.CwdInside,
-		running:   sysx.Running,
-		devOf:     statDev,
+		extra: loadExtraArtifacts,
+		devOf: statDev,
 		extraRoots: []extraRoot{
 			{"conductor/archived-contexts", "conductor-archive"},
 			{"Documents/Codex", "codex-chat"},
@@ -207,8 +202,7 @@ type scan struct {
 	projects map[string]*projInfo
 	useMu    sync.Mutex
 	inUse    map[string]string
-	runMu    sync.Mutex
-	runCache map[string][]string // ProcessGuard (joined) -> running names
+	runCache scanmemo.Cache[string, []string] // ProcessGuard (joined) -> running names
 
 	// worktrees are the linked worktrees registered in the repositories
 	// found (folded paths): no candidate may swallow one.
@@ -217,6 +211,7 @@ type scan struct {
 	// as soon as the walk finds them, while the git phase runs: sizeAll then
 	// reads them from the run's size cache.
 	prefetch *sizes.Prefetcher
+	walker   *walker
 }
 
 // Scan walks every root, verifies candidates with git, then sizes them.
@@ -224,6 +219,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	if env == nil || env.Home == "" {
 		return nil
 	}
+	ctx = scanctl.Ensure(ctx)
 	s := p.newScan(ctx, env, emit)
 	s.setupRoots()
 	if len(s.roots) == 0 {
@@ -231,21 +227,9 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	}
 	// 1. walk (placeholders of unambiguous artifacts stream out right away,
 	// and their measurement starts).
-	s.prefetch = sizes.NewPrefetcher(ctx, prefetchWorkers)
+	s.prefetch = sizes.NewPrefetcher(ctx, scanctl.From(ctx).Limits().Prefetch)
 	defer s.prefetch.Close()
-	var wg sync.WaitGroup
-	for _, r := range s.roots {
-		wg.Add(1)
-		go func(r *scanRoot) {
-			defer wg.Done()
-			wc := walkCtx{root: r, tool: r.tool, git: s.findGitAbove(r)}
-			if wc.git != nil && wc.git.linked {
-				wc.tool = wc.git.tool
-			}
-			newWalker(s).run(r.path, wc)
-		}(r)
-	}
-	wg.Wait()
+	s.walker.runRoots(s.roots)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -270,6 +254,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 }
 
 func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *scan {
+	ctx = scanctl.Ensure(ctx)
 	var extra []string
 	if p.extra != nil {
 		extra = p.extra()
@@ -288,7 +273,6 @@ func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *
 		ignSeen:  map[string]bool{},
 		projects: map[string]*projInfo{},
 		inUse:    map[string]string{},
-		runCache: map[string][]string{},
 		self:     itoa(os.Getpid()),
 	}
 	if s.now.IsZero() {
@@ -311,10 +295,11 @@ func (p *Provider) newScan(ctx context.Context, env *core.Env, emit core.Emit) *
 	s.hasGit = env.Runner != nil && env.Has("git")
 	cloud := filepath.Join(s.home, "Library", "Mobile Documents", "com~apple~CloudDocs")
 	for _, d := range []string{"Documents", "Desktop"} {
-		if fi, err := os.Lstat(filepath.Join(cloud, d)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if fi, err := fsx.Lstat(ctx, filepath.Join(cloud, d)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			s.icloud = append(s.icloud, filepath.Join(s.home, d))
 		}
 	}
+	s.walker = newWalker(s)
 	return s
 }
 
@@ -394,7 +379,7 @@ func (s *scan) inICloud(p string) bool {
 // addCand registers a candidate (deduplicated by path and inode) and streams
 // a Sizing placeholder for unambiguous rules.
 func (s *scan) addCand(c *cand) {
-	if s.env.Excluded(c.path) || s.env.IsProtected(c.path) {
+	if s.env.Excluded(c.path) || s.env.IsProtectedContext(s.ctx, c.path) {
 		return
 	}
 	c.tracked, c.ignored = -1, -1
@@ -500,11 +485,11 @@ func (s *scan) considerIgnored(g *gitRoot, rel string) {
 		}
 	}
 	p := filepath.Join(g.path, rel)
-	if !fsx.Within(p, g.root.path) || p == g.root.path || s.env.Excluded(p) || s.env.IsProtected(p) {
+	if !fsx.Within(p, g.root.path) || p == g.root.path || s.env.Excluded(p) || s.env.IsProtectedContext(s.ctx, p) {
 		return
 	}
 	var st unix.Stat_t
-	if unix.Lstat(p, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(st.Dev) != g.root.dev {
+	if scanctl.DoIO(s.ctx, func() error { return unix.Lstat(p, &st) }) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(st.Dev) != g.root.dev {
 		return
 	}
 	if hasGitEntry(p) || s.isWorktree(p) {
@@ -514,7 +499,7 @@ func (s *scan) considerIgnored(g *gitRoot, rel string) {
 		// walk registers it as a work tree, judged by its own git (a bare
 		// repository or a registered worktree that lost its .git is not
 		// walked: the enclosing repository would answer for it).
-		if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+		if _, err := fsx.Lstat(s.ctx, filepath.Join(p, ".git")); err == nil {
 			s.walkIgnored(g, rel, p)
 		}
 		return
@@ -558,7 +543,7 @@ func (s *scan) walkIgnored(g *gitRoot, rel, p string) {
 	if tool == "" {
 		tool = g.root.tool
 	}
-	newWalker(s).run(p, walkCtx{root: g.root, git: g, tool: tool, depth: depth})
+	s.walker.run(p, walkCtx{root: g.root, git: g, tool: tool, depth: depth})
 }
 
 // ---------------------------------------------------------------- decisions
@@ -681,7 +666,7 @@ func (s *scan) sizeAll(jobs []*sizeJob) {
 			if c.rule.Generic && !c.rule.NestedGitOK {
 				// Generic names (build, dist, target...) never legitimately
 				// hold a checkout: note the first one met while sizing.
-				probe = newCheckoutProbe(c.path, c.rule.NestedGitUnder, nil)
+				probe = newCheckoutProbe(s.ctx, c.path, c.rule.NestedGitUnder, nil)
 				opt = &fsx.Options{Skip: probe.skip}
 			}
 			st, err := fsx.Size(s.ctx, c.path, opt)
@@ -748,7 +733,7 @@ func (s *scan) measureIgnored() []ignSized {
 		}
 		// The probe also finds the checkouts deeper than the walk went, and
 		// linked worktrees / submodules of repositories it never met.
-		probe := newCheckoutProbe(d.path, nil, func(p string) bool { return skip[p] })
+		probe := newCheckoutProbe(s.ctx, d.path, nil, func(p string) bool { return skip[p] })
 		st, err := fsx.Size(s.ctx, d.path, &fsx.Options{Skip: probe.skip})
 		if (err != nil && s.ctx.Err() != nil) || st.Bytes < ignoredMin {
 			return
@@ -782,6 +767,7 @@ func (s *scan) emitIgnored(res []ignSized) {
 // outside the scan roots is never registered) — and bare repositories named
 // like one (mirror.git).
 type checkoutProbe struct {
+	ctx   context.Context
 	root  string
 	allow []string          // first-level folders (globs) where clones are expected
 	prune func(string) bool // folders pruned from the walk (not probed either)
@@ -790,13 +776,17 @@ type checkoutProbe struct {
 	first string // first checkout met, relative to root's parent ("dist/deploy")
 }
 
-func newCheckoutProbe(root string, allow []string, prune func(string) bool) *checkoutProbe {
-	return &checkoutProbe{root: root, allow: allow, prune: prune}
+func newCheckoutProbe(ctx context.Context, root string, allow []string, prune func(string) bool) *checkoutProbe {
+	return &checkoutProbe{ctx: ctx, root: root, allow: allow, prune: prune}
 }
 
 // skip is the fsx.Options.Skip callback: it prunes nothing but the prune
-// folders and costs one lstat per directory.
+// folders. Repeated repository marker reads share the scan's I/O admission;
+// neither a size-walker permit nor cp.mu is held during this callback's wait.
 func (cp *checkoutProbe) skip(p, name string) bool {
+	if cp.ctx.Err() != nil {
+		return true
+	}
 	if cp.prune != nil && cp.prune(p) {
 		return true
 	}
@@ -814,7 +804,14 @@ func (cp *checkoutProbe) skip(p, name string) bool {
 		}
 	}
 	var st unix.Stat_t
-	if unix.Lstat(filepath.Join(p, ".git"), &st) == nil || strings.HasSuffix(name, ".git") && isBareRepo(p) {
+	var checkout bool
+	if err := scanctl.DoIO(cp.ctx, func() error {
+		checkout = unix.Lstat(filepath.Join(p, ".git"), &st) == nil || strings.HasSuffix(name, ".git") && isBareRepo(p)
+		return cp.ctx.Err()
+	}); err != nil {
+		return true // an interrupted inventory never proves this subtree safe
+	}
+	if checkout {
 		cp.mu.Lock()
 		if cp.first == "" {
 			cp.first = filepath.Join(filepath.Base(cp.root), rel)

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 // setup is the resolved configuration of a run: environment, safety guard
@@ -33,25 +35,83 @@ type setup struct {
 	// harmless, but often a typo (shown by `config show`).
 	missing []string
 	// scope filters what the providers emit (see scopeProviders).
-	scope *scope
+	scope  *scope
+	limits scanctl.Limits
 }
 
 // newSetup loads the config and builds the Env and the Guard. rootsOverride
 // (positional arguments of `artifacts`) takes precedence over --root.
-func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
+func (c *cli) newSetup(rootsOverride []string, contexts ...context.Context) (*setup, error) {
+	ctx := setupContext(contexts)
+	s, err := c.loadSetup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.completeSetup(ctx, s, rootsOverride)
+}
+
+// newScanSetup activates the validated profile before root inventories. Scan
+// commands call startScan again with the completed setup to bind its guard;
+// that call reuses the same controller and process-policy restoration.
+func (c *cli) newScanSetup(rootsOverride []string, ctx context.Context) (*setup, error) {
+	s, err := c.loadSetup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx, err = c.startScan(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	return c.completeSetup(ctx, s, rootsOverride)
+}
+
+// loadSetup validates resource settings before environment or filesystem work.
+func (c *cli) loadSetup(ctx context.Context) (*setup, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cfg, err := c.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
+	mode := cfg.ScanMode
+	if c.scanModeSet {
+		mode = c.f.scanMode
+		if mode == "" {
+			return nil, usageErr("--scan-mode must be eco or fast")
+		}
+	} else if mode == "" {
+		mode = string(scanctl.Eco)
+	}
+	limits, warning, err := scanctl.Resolve(mode, c.Getenv("LU_WALKERS"))
+	if err != nil {
+		if c.scanModeSet {
+			return nil, usageErr("--scan-mode: %v", err)
+		}
+		return nil, fmt.Errorf("config scan_mode: %w", err)
+	}
+	if warning != "" {
+		c.logf("%s", warning)
+	}
+	return &setup{cfg: cfg, limits: limits}, nil
+}
+
+func (c *cli) completeSetup(ctx context.Context, s *setup, rootsOverride []string) (*setup, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cfg, limits := s.cfg, s.limits
+	var err error
 	env := c.NewEnv()
 	env.Logf = c.logf
+	env.ScanLimits = limits
 	if env.Runner == nil {
 		env.Runner = core.ExecRunner{}
 	}
 	if cfg.MaxDepth > 0 {
 		env.MaxDepth = cfg.MaxDepth
 	}
-	s := &setup{cfg: cfg, env: env}
+	s.env = env
 
 	if s.staleAfter, err = fsx.ParseAge(cfg.StaleAfter); err != nil {
 		return nil, fmt.Errorf("config stale_after: %w", err)
@@ -90,18 +150,18 @@ func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
 	var configured []string
 	configSource := "config"
 	if len(cfg.Roots) > 0 {
-		configured = existingDirs(env, cfg.Roots, false)
+		configured = existingDirs(ctx, env, cfg.Roots, false)
 	} else {
-		configured = existingDirs(env, config.DefaultRootCandidates, true)
+		configured = existingDirs(ctx, env, config.DefaultRootCandidates, true)
 		configSource = "auto-detected"
 	}
 	switch {
 	case len(rootsOverride) > 0:
-		env.Roots, err = explicitDirs(env, rootsOverride)
+		env.Roots, err = explicitDirs(ctx, env, rootsOverride)
 		env.ExplicitRoots = true
 		s.rootsSource = "arguments"
 	case len(c.f.roots) > 0:
-		env.Roots, err = explicitDirs(env, c.f.roots)
+		env.Roots, err = explicitDirs(ctx, env, c.f.roots)
 		env.ExplicitRoots = true
 		s.rootsSource = "--root"
 	default:
@@ -112,7 +172,10 @@ func (c *cli) newSetup(rootsOverride []string) (*setup, error) {
 		return nil, err
 	}
 	wt := append(append([]string{}, config.DefaultWorktreeRoots...), cfg.WorktreeRoots...)
-	env.WorktreeRoots = existingDirs(env, wt, false)
+	env.WorktreeRoots = existingDirs(ctx, env, wt, false)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	for _, r := range env.Roots {
 		c.logf("root: %s", r)
 	}
@@ -270,9 +333,12 @@ func absPath(env *core.Env, p, base string) string {
 
 // explicitDirs resolves user-given directories (relative to the cwd); they
 // must exist.
-func explicitDirs(env *core.Env, paths []string) ([]string, error) {
+func explicitDirs(ctx context.Context, env *core.Env, paths []string) ([]string, error) {
 	var out []string
 	for _, raw := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
@@ -284,7 +350,7 @@ func explicitDirs(env *core.Env, paths []string) ([]string, error) {
 		if p == "/" || resolvePath(p) == "/" {
 			return nil, usageErr("%s: the whole disk cannot be a project root, name a project folder (e.g. ~/dev)", sanitize(raw))
 		}
-		out = append(out, onDiskCase(p))
+		out = append(out, onDiskCase(p, ctx))
 	}
 	return dedupeDirs(out), nil
 }
@@ -292,9 +358,12 @@ func explicitDirs(env *core.Env, paths []string) ([]string, error) {
 // existingDirs keeps the paths that are existing directories. With
 // exactCase, the last element must exist with that exact case (APFS is case
 // insensitive: "~/Dev" would otherwise duplicate "~/dev").
-func existingDirs(env *core.Env, paths []string, exactCase bool) []string {
+func existingDirs(ctx context.Context, env *core.Env, paths []string, exactCase bool) []string {
 	var out []string
 	for _, raw := range paths {
+		if ctx.Err() != nil {
+			break
+		}
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
@@ -303,13 +372,13 @@ func existingDirs(env *core.Env, paths []string, exactCase bool) []string {
 		if err != nil || !fi.IsDir() {
 			continue
 		}
-		if exactCase && !exactName(p) {
+		if exactCase && !exactName(p, ctx) {
 			continue
 		}
 		if env.Excluded(p) {
 			continue
 		}
-		out = append(out, onDiskCase(p))
+		out = append(out, onDiskCase(p, ctx))
 	}
 	return dedupeDirs(out)
 }
@@ -320,14 +389,15 @@ func existingDirs(env *core.Env, paths []string, exactCase bool) []string {
 // Paths derived from the roots then match the paths the kernel reports for
 // processes (cwd, executables), which the in-use checks compare with.
 // Symlinks are kept; unreadable components are kept as given.
-func onDiskCase(p string) string {
+func onDiskCase(p string, contexts ...context.Context) string {
 	if !filepath.IsAbs(p) {
 		return p
 	}
 	cur := "/"
+	ctx := setupContext(contexts)
 	for _, name := range strings.Split(filepath.Clean(p), "/") {
 		if name != "" {
-			cur = filepath.Join(cur, diskName(cur, name))
+			cur = filepath.Join(cur, diskName(cur, name, ctx))
 		}
 	}
 	return cur
@@ -335,19 +405,21 @@ func onDiskCase(p string) string {
 
 // diskName returns the entry of dir that is name: name itself when it is
 // listed as is, else the entry equal to it up to case and normalization.
-func diskName(dir, name string) string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return name
-	}
+func diskName(dir, name string, contexts ...context.Context) string {
 	key, fold := safety.Key(name), ""
-	for _, e := range entries {
-		if e.Name() == name {
-			return name
+	exact := false
+	err := readSetupNames(setupContext(contexts), dir, func(entry string) bool {
+		if entry == name {
+			exact = true
+			return true
 		}
-		if fold == "" && safety.Key(e.Name()) == key {
-			fold = e.Name()
+		if safety.Key(entry) == key && (fold == "" || entry < fold) {
+			fold = entry
 		}
+		return false
+	})
+	if err != nil || exact {
+		return name
 	}
 	if fold != "" {
 		return fold
@@ -355,18 +427,60 @@ func diskName(dir, name string) string {
 	return name
 }
 
-func exactName(p string) bool {
-	entries, err := os.ReadDir(filepath.Dir(p))
+func exactName(p string, contexts ...context.Context) bool {
+	base, found := filepath.Base(p), false
+	err := readSetupNames(setupContext(contexts), filepath.Dir(p), func(entry string) bool {
+		found = entry == base
+		return found
+	})
 	if err != nil {
 		return true
 	}
-	base := filepath.Base(p)
-	for _, e := range entries {
-		if e.Name() == base {
-			return true
+	return found
+}
+
+func setupContext(contexts []context.Context) context.Context {
+	if len(contexts) > 0 {
+		return contexts[0]
+	}
+	return context.Background()
+}
+
+// Scan preparation shares the already activated controller; config show keeps
+// its pure setup path. Neither reads an entire parent just to recover spelling.
+func readSetupNames(ctx context.Context, dir string, visit func(string) bool) error {
+	var f *os.File
+	err := scanctl.DoIO(ctx, func() error {
+		var err error
+		f, err = os.Open(dir)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for {
+		var names []string
+		err := scanctl.DoIO(ctx, func() error {
+			var err error
+			names, err = f.Readdirnames(256)
+			return err
+		})
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		for _, name := range names {
+			if visit(name) {
+				return nil
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 	}
-	return false
 }
 
 // dedupeDirs drops directories that are the same file as, or nested inside,

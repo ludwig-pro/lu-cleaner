@@ -50,7 +50,7 @@ nothing selected · delete                      space select · a smart · / fil
 - **Package managers & node versions** — npm, Yarn v1 and Berry (cache, metadata, store), pnpm, bun, corepack, nvm/fnm/mise/volta node versions (keeps the ones you use), Metro/Jest/Vitest temp caches.
 - **AI tools data** — Claude Code, Claude desktop, Codex, Cursor, ChatGPT, Conductor… old versions, orphaned project data, caches and logs. Credentials, configs, memories and chat databases are protected.
 - **Safe by design** — every path is re-checked right before deletion: protected paths, inode identity since the scan, running apps, open databases, processes working inside, marker files. Dry-run everywhere. Nothing is preselected: nothing is deleted without your explicit selection.
-- **Fast** — Go, macOS `getattrlistbulk` (≈3× faster than `du`), results streamed into a Bubble Tea TUI.
+- **Resource profiles** — scans default to `eco` to keep CPU and disk pressure low; `--scan-mode fast` favours throughput. Go and macOS `getattrlistbulk` stream results into a Bubble Tea TUI.
 - **Scriptable** — `--json` outputs, strict rules for non-interactive `--yes`, exit codes, and LLM-ready docs (`llms.txt`).
 
 ## Install
@@ -75,12 +75,17 @@ lu-cleaner worktrees                        # only git worktrees
 lu-cleaner artifacts                        # npkill-like: node_modules, Pods, builds…
 lu-cleaner devices                          # simulators, runtimes, emulators
 lu-cleaner scan                             # report, no deletion
+lu-cleaner scan --scan-mode fast            # higher scan throughput
 lu-cleaner clean --yes --smart --dry-run    # what the recommended items add up to, nothing deleted
 lu-cleaner doctor                           # why is my disk still full?
 lu-cleaner analyze ~                        # ncdu-like explorer
 ```
 
 Full documentation: **https://ludwig-pro.github.io/lu-cleaner/**
+
+Set `scan_mode = "eco"` or `"fast"` in `config.toml` to keep a preferred profile; `--scan-mode` overrides it for one invocation. `lu-cleaner config show` displays the effective limits. `LU_WALKERS=<positive integer>` overrides the shared I/O limit (2 in eco, 8 in fast); invalid values fall back to the profile and are reported with `--verbose`.
+
+`eco` prioritises other applications and can make scans substantially longer. `--dry-run` still performs the full scan and safety checks. For resource and cache diagnostics, use `LU_TRACE=1 lu-cleaner scan --dry-run --verbose`; see [resource profiles and cancellation](https://ludwig-pro.github.io/lu-cleaner/reference/configuration/#scan_mode).
 
 ## Safety in one paragraph
 

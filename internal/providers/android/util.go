@@ -1,12 +1,14 @@
 package android
 
 import (
+	"context"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 func atoi(s string) int {
@@ -80,9 +82,9 @@ func mtime(p string) time.Time {
 }
 
 // newestMtime returns the newest mtime among the files matching glob.
-func newestMtime(glob string) time.Time {
+func newestMtime(ctx context.Context, glob string) time.Time {
 	var t time.Time
-	ms, _ := filepath.Glob(glob)
+	ms, _ := fsx.Glob(ctx, glob)
 	for _, m := range ms {
 		if mt := mtime(m); mt.After(t) {
 			t = mt

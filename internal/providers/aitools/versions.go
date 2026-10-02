@@ -130,7 +130,7 @@ func (s *scanner) versionSet(v versionSet) {
 	}
 	var versions []entry
 	var tmp []entry
-	for _, e := range list(v.dir, true) {
+	for _, e := range list(s.ctx, v.dir, true) {
 		switch {
 		case strings.HasPrefix(e.name, ".tmp"):
 			tmp = append(tmp, e) // interrupted downloads
@@ -150,7 +150,7 @@ func (s *scanner) versionSet(v versionSet) {
 		}
 	}
 	for _, f := range v.pinFiles {
-		if data, err := os.ReadFile(f); err == nil {
+		if data, err := fsx.ReadFile(s.ctx, f); err == nil {
 			if name := strings.TrimSpace(string(data)); name != "" {
 				keep[name] = "pinned (" + filepath.Base(f) + ")"
 			}

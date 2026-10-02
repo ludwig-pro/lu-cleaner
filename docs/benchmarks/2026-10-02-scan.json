@@ -1,0 +1,617 @@
+{
+  "machine": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "cpu_count": 10,
+    "inherited_nice": 0,
+    "inherited_darwin_background": 0,
+    "go": "go version go1.25.6 darwin/arm64",
+    "hw.model": "Mac14,9",
+    "hw.memsize": "17179869184",
+    "hw.physicalcpu": "10",
+    "hw.logicalcpu": "10"
+  },
+  "parameters": {
+    "baseline": "/tmp/lu-cleaner-baseline",
+    "current": "/tmp/lu-cleaner-current",
+    "output": "docs/benchmarks/2026-10-02-scan.json",
+    "samples": 3,
+    "packages": 32,
+    "cpu_iterations": 16000,
+    "io_iterations": 512,
+    "io_sync": "fullfsync",
+    "io_no_cache": false,
+    "witness_kind": "both"
+  },
+  "modes": {
+    "baseline": {
+      "cold": [
+        {
+          "wall_s": 0.4172408749582246,
+          "user_s": 0.08526399999999999,
+          "system_s": 0.184489,
+          "max_rss_bytes": 24231936,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 7684096,
+          "disk_written_bytes_sampled": 0
+        },
+        {
+          "wall_s": 0.16707154095638543,
+          "user_s": 0.07840899999999999,
+          "system_s": 0.28774099999999997,
+          "max_rss_bytes": 24051712,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 32768,
+          "disk_written_bytes_sampled": 0
+        },
+        {
+          "wall_s": 0.16447045898530632,
+          "user_s": 0.079444,
+          "system_s": 0.234481,
+          "max_rss_bytes": 23625728,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 16384,
+          "disk_written_bytes_sampled": 0
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 0.23309370793867856,
+          "user_s": 0.070723,
+          "system_s": 0.103599,
+          "max_rss_bytes": 22069248,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 1236992,
+          "disk_written_bytes_sampled": 0
+        },
+        {
+          "wall_s": 0.5007308749482036,
+          "user_s": 0.07868499999999999,
+          "system_s": 0.102515,
+          "max_rss_bytes": 22888448,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0
+        },
+        {
+          "wall_s": 0.34892725001554936,
+          "user_s": 0.068842,
+          "system_s": 0.090488,
+          "max_rss_bytes": 21872640,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 8192
+        }
+      ],
+      "cancel": [
+        {
+          "wall_s": 0.11234695790335536,
+          "user_s": 0.06835,
+          "system_s": 0.06376899999999999,
+          "max_rss_bytes": 20643840,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 130,
+          "disk_read_bytes_sampled": 81920,
+          "disk_written_bytes_sampled": 0,
+          "cancellation_exercised": true,
+          "cancel_join_s": 0.0754581659566611
+        }
+      ]
+    },
+    "fast": {
+      "cold": [
+        {
+          "wall_s": 0.19885341601911932,
+          "user_s": 0.059383,
+          "system_s": 0.20538199999999998,
+          "max_rss_bytes": 32817152,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 6750208,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=447.835276ms pause_cumulative=0s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 0.22487108292989433,
+          "user_s": 0.063446,
+          "system_s": 0.22103699999999998,
+          "max_rss_bytes": 30818304,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 8192,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=372.821183ms pause_cumulative=0s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 0.15142037509940565,
+          "user_s": 0.058379,
+          "system_s": 0.214256,
+          "max_rss_bytes": 30982144,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=399.719511ms pause_cumulative=0s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 0.20822870801202953,
+          "user_s": 0.044689,
+          "system_s": 0.09167399999999999,
+          "max_rss_bytes": 21528576,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 32768,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=1.687592ms pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 0.19780991692095995,
+          "user_s": 0.044350999999999995,
+          "system_s": 0.090378,
+          "max_rss_bytes": 21495808,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=523.831\u00b5s pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 0.3402330829994753,
+          "user_s": 0.045517999999999996,
+          "system_s": 0.090975,
+          "max_rss_bytes": 22921216,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 32768,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=8/8 commands_max=0/4 io_wait_cumulative=1.465125ms pause_cumulative=0s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        }
+      ],
+      "cancel": [
+        {
+          "wall_s": 0.0351188339991495,
+          "user_s": 0.012029,
+          "system_s": 0.018697,
+          "max_rss_bytes": 17137664,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 130,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "cancellation_exercised": true,
+          "cancel_join_s": 0.0013851249823346734
+        }
+      ]
+    },
+    "eco": {
+      "cold": [
+        {
+          "wall_s": 11.150004874914885,
+          "user_s": 0.206206,
+          "system_s": 0.44704699999999997,
+          "max_rss_bytes": 28033024,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 102400,
+          "disk_written_bytes_sampled": 8192,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=3m8.6663463s pause_cumulative=21.31997321s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 11.147262666025199,
+          "user_s": 0.209228,
+          "system_s": 0.45191699999999996,
+          "max_rss_bytes": 28262400,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 4096,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=3m3.720922948s pause_cumulative=21.397466667s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 10.500327332993038,
+          "user_s": 0.20152399999999998,
+          "system_s": 0.43090399999999995,
+          "max_rss_bytes": 27377664,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 69632,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=2m52.577490926s pause_cumulative=19.809902369s command_wait_cumulative=0s files=3609 dirs=793 cache_hits=12 cache_misses=12 cancel_join=0s"
+        }
+      ],
+      "warm": [
+        {
+          "wall_s": 1.2757588749518618,
+          "user_s": 0.071412,
+          "system_s": 0.17266299999999998,
+          "max_rss_bytes": 21921792,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 1183744,
+          "disk_written_bytes_sampled": 0,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=1.909008913s pause_cumulative=1.781589093s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 1.3871514169732109,
+          "user_s": 0.07076299999999999,
+          "system_s": 0.156417,
+          "max_rss_bytes": 21577728,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 1216512,
+          "disk_written_bytes_sampled": 8192,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=1.881901624s pause_cumulative=1.785396039s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        },
+        {
+          "wall_s": 1.4376119170337915,
+          "user_s": 0.080306,
+          "system_s": 0.18323899999999999,
+          "max_rss_bytes": 22282240,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 0,
+          "disk_read_bytes_sampled": 1232896,
+          "disk_written_bytes_sampled": 8192,
+          "scan_resources": "io_max=2/2 commands_max=0/1 io_wait_cumulative=1.777511132s pause_cumulative=1.660408417s command_wait_cumulative=0s files=0 dirs=0 cache_hits=12 cache_misses=12 cancel_join=0s"
+        }
+      ],
+      "cancel": [
+        {
+          "wall_s": 0.037476584082469344,
+          "user_s": 0.013385,
+          "system_s": 0.021934,
+          "max_rss_bytes": 16007168,
+          "in_blocks": 0,
+          "out_blocks": 0,
+          "exit_code": 130,
+          "disk_read_bytes_sampled": 0,
+          "disk_written_bytes_sampled": 0,
+          "cancellation_exercised": true,
+          "cancel_join_s": 0.0014991250354796648
+        }
+      ]
+    }
+  },
+  "witness": {
+    "cpu": {
+      "alone": [
+        1.7745048749493435,
+        1.7288709169952199,
+        1.7512450839858502,
+        1.8806941659422591,
+        1.7173286660108715,
+        1.7750211250968277,
+        1.808211583062075,
+        1.7168533749645576,
+        1.7534024170599878
+      ],
+      "baseline": [
+        {
+          "witness_s": 1.765798541950062,
+          "scan_invocations": 14,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "witness_s": 1.9024464579997584,
+          "scan_invocations": 14,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 2.1035997919971123,
+          "scan_invocations": 14,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        }
+      ],
+      "fast": [
+        {
+          "witness_s": 1.7908504580846056,
+          "scan_invocations": 16,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 1.7764387920033187,
+          "scan_invocations": 16,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 1.7695483329007402,
+          "scan_invocations": 16,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        }
+      ],
+      "eco": [
+        {
+          "witness_s": 1.7484391250181943,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        },
+        {
+          "witness_s": 1.7519996659830213,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        },
+        {
+          "witness_s": 1.7277411250397563,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        }
+      ]
+    },
+    "io": {
+      "alone": [
+        0.5254424170125276,
+        0.5805787079734728,
+        1.9386064999271184,
+        2.186710791895166,
+        1.3098611669847742,
+        1.0855649170698598,
+        1.233388917054981,
+        0.8879925409564748,
+        0.5414981669746339
+      ],
+      "baseline": [
+        {
+          "witness_s": 0.5623987920116633,
+          "scan_invocations": 5,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 1.3930385831044987,
+          "scan_invocations": 9,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "witness_s": 2.149178707972169,
+          "scan_invocations": 14,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "fast": [
+        {
+          "witness_s": 1.1158054169500247,
+          "scan_invocations": 8,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 1.0264142079977319,
+          "scan_invocations": 8,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "witness_s": 0.5539367910241708,
+          "scan_invocations": 5,
+          "scan_exit_codes": [
+            0,
+            0,
+            0,
+            0,
+            130
+          ]
+        }
+      ],
+      "eco": [
+        {
+          "witness_s": 2.2969424999319017,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        },
+        {
+          "witness_s": 0.9013428339967504,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        },
+        {
+          "witness_s": 0.48861416592262685,
+          "scan_invocations": 1,
+          "scan_exit_codes": [
+            130
+          ]
+        }
+      ]
+    }
+  },
+  "scan_environment": {
+    "GOMAXPROCS": "unset",
+    "LU_WALKERS": "unset",
+    "GOFLAGS": "unset",
+    "cache": "isolated HOME; empty then reused"
+  },
+  "notes": [
+    "RSS is wait4 peak; disk bytes are sampled proc_pid_rusage lower bounds, excluding descendants.",
+    "Filesystem page cache is not flushed; cold means an empty lu-cleaner size cache.",
+    "Cohabitation repeats uncached scans for the duration of fixed two-worker CPU or bounded I/O work.",
+    "Pre-final campaign; binary hashes added after measurement from the unchanged binary files. Final acceptance uses the final-build campaign."
+  ],
+  "apfs_clone_created": true,
+  "results_identical": true,
+  "binaries": {
+    "baseline": {
+      "path": "/tmp/lu-cleaner-baseline",
+      "sha256": "3bbb29fc6ab3e6447ee90e963d7351be73808785fcf25a4aa6095ba343dfae82"
+    },
+    "current": {
+      "path": "/tmp/lu-cleaner-current",
+      "sha256": "6dd4bfc15e16b2dcca60e333ab109149f3ea3390520929b08f3b13f792c67634"
+    }
+  }
+}

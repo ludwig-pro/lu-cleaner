@@ -114,7 +114,7 @@ func TestVSCodeWorkspaceStorage(t *testing.T) {
 
 func TestClassifyWorkspace(t *testing.T) {
 	f := newFixture(t)
-	s := &scan{p: f.p, env: f.env}
+	s := &scan{ctx: t.Context(), p: f.p, env: f.env}
 	f.dir("here", 0)
 	for _, c := range []struct {
 		uri  string

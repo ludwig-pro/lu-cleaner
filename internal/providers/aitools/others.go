@@ -19,7 +19,7 @@ func (s *scanner) conductorArchivedContexts() {
 	if !s.usable(root) {
 		return
 	}
-	for _, repo := range list(root, false) {
+	for _, repo := range list(s.ctx, root, false) {
 		if s.ctx.Err() != nil {
 			return
 		}
@@ -28,7 +28,7 @@ func (s *scanner) conductorArchivedContexts() {
 		}
 		it := s.newItem("conductor-archived-contexts", core.CatAI, "", core.RiskCaution)
 		it.ID = itemID(it.Kind, repo.path)
-		for _, ws := range list(repo.path, false) {
+		for _, ws := range list(s.ctx, repo.path, false) {
 			if !ws.dir {
 				continue
 			}
@@ -104,7 +104,7 @@ func (s *scanner) antigravity() {
 	it := s.newItem("antigravity-browser-recordings", core.CatAI, "", core.RiskCaution)
 	it.ID = itemID(it.Kind, rec)
 	it.ProcessGuard = procAntigrav
-	for _, e := range list(rec, false) {
+	for _, e := range list(s.ctx, rec, false) {
 		if s.now.Sub(e.mtime) < recordingAge {
 			continue
 		}

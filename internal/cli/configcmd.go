@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
 func (c *cli) configCmd() *cobra.Command {
@@ -25,7 +28,7 @@ or $LU_CLEANER_CONFIG). Every key is optional: run 'lu-cleaner config init'
 for a commented sample.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.configShow()
+			return c.configShow(cmd.Context())
 		},
 	}
 	cmd.AddCommand(
@@ -56,7 +59,7 @@ for a commented sample.`,
 			Short: "Print the effective configuration, with resolved roots",
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return c.configShow()
+				return c.configShow(cmd.Context())
 			},
 		},
 		&cobra.Command{
@@ -87,6 +90,7 @@ type configView struct {
 	StateDir      string          `json:"state_dir"`
 	HistoryFile   string          `json:"history_file"`
 	Clean         configCleanView `json:"clean"`
+	Scan          configScanView  `json:"scan"`
 }
 
 type configCleanView struct {
@@ -94,10 +98,25 @@ type configCleanView struct {
 	Force bool `json:"force"`
 }
 
-func (c *cli) configShow() error {
-	s, err := c.newSetup(nil)
+type configScanView struct {
+	Mode       string `json:"mode"`
+	IO         int    `json:"io"`
+	Commands   int    `json:"commands"`
+	Prefetch   int    `json:"prefetch"`
+	BatchSize  int    `json:"batch_size"`
+	PauseMS    int64  `json:"pause_ms"`
+	GOMAXPROCS int    `json:"gomaxprocs"`
+	Priority   string `json:"priority"` // requested policy; config show does not apply it
+}
+
+func (c *cli) configShow(contexts ...context.Context) error {
+	s, err := c.newSetup(nil, contexts...)
 	if err != nil {
 		return err
+	}
+	cpus, priority := runtime.GOMAXPROCS(0), "inherited"
+	if s.limits.Mode == scanctl.Eco {
+		cpus, priority = min(cpus, 2), "background"
 	}
 	v := configView{
 		Path:          config.Path(),
@@ -115,6 +134,11 @@ func (c *cli) configShow() error {
 		StateDir:      config.StateDir(),
 		HistoryFile:   clean.HistoryPath(),
 		Clean:         configCleanView{Trash: s.clean.Trash, Force: s.clean.Force},
+		Scan: configScanView{
+			Mode: string(s.limits.Mode), IO: s.limits.IO, Commands: s.limits.Commands,
+			Prefetch: s.limits.Prefetch, BatchSize: s.limits.BatchSize, PauseMS: s.limits.Pause.Milliseconds(),
+			GOMAXPROCS: cpus, Priority: priority,
+		},
 	}
 	// Round-trip through TOML to get the same snake_case keys as the file.
 	_, _ = toml.Decode(s.cfg.Dump(), &v.Config)
@@ -160,6 +184,8 @@ func (c *cli) configShow() error {
 		o.paint(o.bold, "Stale after:"), v.StaleAfter,
 		o.paint(o.bold, "Min size:"), fsx.Bytes(v.MinSize),
 		o.paint(o.bold, "Use Trash:"), v.Clean.Trash)
+	o.printf("  %s %s · IO %d · commands %d · prefetch %d · batch %d · pause %s · GOMAXPROCS %d · priority %s\n",
+		o.paint(o.bold, "Scan profile:"), v.Scan.Mode, v.Scan.IO, v.Scan.Commands, v.Scan.Prefetch, v.Scan.BatchSize, s.limits.Pause, v.Scan.GOMAXPROCS, v.Scan.Priority)
 	disabled := "none"
 	if len(v.Disabled) > 0 {
 		disabled = strings.Join(v.Disabled, ", ")

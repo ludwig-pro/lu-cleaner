@@ -10,6 +10,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"golang.org/x/sys/unix"
 )
 
@@ -74,7 +75,22 @@ func (s *scan) downloads() {
 		if s.ctx.Err() != nil || s.env.Excluded(dir) {
 			return
 		}
-		for _, e := range list(dir, false) {
+		entries := list(s.ctx, dir, false)
+		var candidates []string
+		for _, e := range entries {
+			if !e.link && !e.dir && dlFamilyOf(e.name) >= 0 {
+				candidates = append(candidates, e.path)
+			}
+		}
+		stats, err := scanio.UnixLstats(s.ctx, candidates)
+		if err != nil {
+			return
+		}
+		byPath := make(map[string]scanio.Stat, len(candidates))
+		for i, p := range candidates {
+			byPath[p] = stats[i]
+		}
+		for _, e := range entries {
 			if e.link {
 				continue
 			}
@@ -90,8 +106,9 @@ func (s *scan) downloads() {
 			if fam < 0 {
 				continue
 			}
-			var st unix.Stat_t
-			if unix.Lstat(e.path, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
+			info := byPath[e.path]
+			st := info.File
+			if info.Err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
 				continue
 			}
 			alloc := st.Blocks * 512
@@ -113,7 +130,7 @@ func (s *scan) downloads() {
 			if s.now.Sub(used) < downloadsMinAge {
 				continue
 			}
-			if s.env.Excluded(e.path) || s.env.IsProtected(e.path) {
+			if s.env.Excluded(e.path) || s.env.IsProtectedContext(s.ctx, e.path) {
 				continue
 			}
 			sub := 0

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
 // deviceBackups reports iPhone / iPad backups made by Finder. They are the
@@ -18,10 +19,10 @@ import (
 // is TCC-protected: without Full Disk Access its size is unknown.
 func (s *scan) deviceBackups() {
 	dir := s.appSupport("MobileSync/Backup")
-	if _, err := os.Lstat(dir); err != nil {
+	if _, err := fsx.Lstat(s.ctx, dir); err != nil {
 		return
 	}
-	ents, err := os.ReadDir(dir)
+	ents, err := fsx.ReadDir(s.ctx, dir)
 	if err != nil {
 		if permissionDenied(err) {
 			it := s.newItem("ios-device-backups", core.CatSystem, "iPhone/iPad backups (size unknown)", core.RiskCaution)

@@ -21,6 +21,8 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
+	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
+	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"golang.org/x/sys/unix"
 )
@@ -56,9 +58,6 @@ func (p *Provider) defaults(env *core.Env) {
 	if p.arm64 == nil {
 		p.arm64 = isAppleSilicon
 	}
-	if p.running == nil {
-		p.running = sysx.Running
-	}
 	if p.devOf == nil {
 		p.devOf = statDev
 	}
@@ -93,6 +92,7 @@ func statDev(p string) (uint64, error) {
 
 // Scan emits items. It never deletes anything.
 func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+	ctx = scanctl.Ensure(ctx)
 	p.defaults(env)
 	s := newScan(ctx, p, env, emit)
 
@@ -134,14 +134,16 @@ type scan struct {
 	homeReal string
 	homeDev  uint64
 
-	shellOnce sync.Once
+	shellOnce scanmemo.Once
 	shellVars map[string][]string
 
-	studioOnce    sync.Once
+	studioOnce    scanmemo.Once
 	studioRunning bool
+	studioErr     error
 }
 
 func newScan(ctx context.Context, p *Provider, env *core.Env, emit core.Emit) *scan {
+	ctx = scanctl.Ensure(ctx)
 	s := &scan{p: p, ctx: ctx, env: env, emit: emit, sem: make(chan struct{}, 6), arm64: p.arm64()}
 	s.homeReal = env.Home
 	if r, err := filepath.EvalSymlinks(env.Home); err == nil {
@@ -170,10 +172,43 @@ func (s *scan) now() time.Time {
 // settings: config keep_latest (env.KeepLatest), at least 1.
 func (s *scan) keepLatest() int { return max(1, s.env.KeepLatest) }
 
-// isStudioRunning reports (once per scan) whether Android Studio runs.
+// studioState reports (once per scan) whether Android Studio runs, preserving
+// inspection errors so an unavailable process snapshot cannot prove it unused.
+func (s *scan) studioState() (bool, error) {
+	if err := s.studioOnce.Do(s.ctx, func() {
+		names, err := s.runningNames(studioProcess)
+		s.studioErr = err
+		s.studioRunning = err != nil || len(names) > 0
+	}); err != nil {
+		return true, err
+	}
+	return s.studioRunning, s.studioErr
+}
+
 func (s *scan) isStudioRunning() bool {
-	s.studioOnce.Do(func() { s.studioRunning = len(s.p.running(studioProcess)) > 0 })
-	return s.studioRunning
+	running, err := s.studioState()
+	return err != nil || running
+}
+
+func (s *scan) studioWarn(message string) string {
+	running, err := s.studioState()
+	if err != nil {
+		return "Android Studio process state unavailable — rescan before cleaning"
+	}
+	if !running {
+		return ""
+	}
+	return message
+}
+
+func (s *scan) runningNames(names ...string) ([]string, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.p.running != nil {
+		return s.p.running(names...), nil
+	}
+	return sysx.RunningContext(s.ctx, names...)
 }
 
 // ------------------------------------------------------------------ emission
@@ -200,7 +235,7 @@ func (s *scan) allowed(it *core.Item) bool {
 		if s.env.Excluded(t) {
 			return false
 		}
-		if it.Method.Cleanable() && s.env.IsProtected(t) {
+		if it.Method.Cleanable() && s.env.IsProtectedContext(s.ctx, t) {
 			return false
 		}
 	}
@@ -287,8 +322,8 @@ func (s *scan) report(it *core.Item) {
 // ------------------------------------------------------------------ helpers
 
 // dirNames lists the sub-directory names of dir (symlinks excluded), sorted.
-func dirNames(dir string) []string {
-	ents, err := os.ReadDir(dir)
+func dirNames(ctx context.Context, dir string) []string {
+	ents, err := fsx.ReadDir(ctx, dir)
 	if err != nil {
 		return nil
 	}
