@@ -1,0 +1,405 @@
+{
+  "date": "2026-10-02",
+  "machine": {
+    "model": "Mac14,9",
+    "logical_cpus": 10,
+    "memory_bytes": 17179869184,
+    "go": "1.25.6",
+    "os": "macOS 26.5.1 arm64"
+  },
+  "notes": [
+    "Real scans use mutable user data with unrelated applications running; do not attribute their entire difference to the code change.",
+    "The node_modules experiment uses the same tree; every successful variant returned identical size fields.",
+    "CPU seconds use wait4. Sampled CPU uses Darwin Mach ticks converted with mach_timebase_info.",
+    "Peak CPU percent uses one logical core as 100%, not the whole machine.",
+    "Real raw logs stay private because they contain personal paths."
+  ],
+  "real_scans": {
+    "before_cache_failed": {
+      "wall_s": 472.846035207971,
+      "user_s": 29.894565,
+      "system_s": 140.581979,
+      "cpu_s": 170.476544,
+      "max_rss_bytes": 95682560,
+      "exit_code": 0,
+      "timed_out": false,
+      "forced_stop": false,
+      "items": 267,
+      "errors": {},
+      "timing_ms": {
+        "ai": 470741,
+        "android": 185807,
+        "apple": 92630,
+        "artifacts": 466268,
+        "catalog": 472530,
+        "js": 453945,
+        "system": 351691,
+        "worktrees": 411914
+      },
+      "sampled_cpu_peak_percent": 51.58054815020221,
+      "sampled_disk_read_bytes": 3872608256,
+      "sampled_disk_written_bytes": 0,
+      "load_average_after": [
+        8.201171875,
+        7.57275390625,
+        8.9228515625
+      ],
+      "sha256": "a07f8aa78620970237931ab03624147255d9a83e8ab0d8b4352e1b2d9d19e679",
+      "started_at": "2026-10-02T18:37:26.830791+02:00",
+      "load_average_before": [
+        13.50146484375,
+        8.6904296875,
+        10.31103515625
+      ],
+      "resource_diagnostics": [
+        "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=13h18m59.499215982s pause_cumulative=8m44.033124939s command_wait_cumulative=2m13.771299211s files=2918663 dirs=344718 cache_hits=319 cache_misses=9068 cancel_join=0s"
+      ],
+      "file_count_note": "Traversal counts are cumulative, not necessarily unique."
+    },
+    "after_cache_validated": {
+      "wall_s": 73.19772491708864,
+      "user_s": 13.671898,
+      "system_s": 43.304616,
+      "cpu_s": 56.976514,
+      "max_rss_bytes": 93995008,
+      "exit_code": 0,
+      "timed_out": false,
+      "forced_stop": false,
+      "items": 267,
+      "errors": {},
+      "timing_ms": {
+        "ai": 63852,
+        "android": 32891,
+        "apple": 22393,
+        "artifacts": 72976,
+        "catalog": 61699,
+        "js": 59209,
+        "system": 29909,
+        "worktrees": 58268
+      },
+      "sampled_cpu_peak_percent": 110.68655890420611,
+      "sampled_disk_read_bytes": 1444708352,
+      "sampled_disk_written_bytes": 0,
+      "load_average_after": [
+        11.72509765625,
+        14.49072265625,
+        11.9736328125
+      ],
+      "sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "started_at": "2026-10-02T19:29:31.594450+02:00",
+      "load_average_before": [
+        13.57568359375,
+        15.3818359375,
+        12.02783203125
+      ],
+      "resource_diagnostics": [
+        "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=1h14m8.720780147s pause_cumulative=0s command_wait_cumulative=2m26.003087921s files=1024316 dirs=106992 cache_hits=319 cache_misses=9070 cancel_join=0s"
+      ],
+      "file_count_note": "Traversal counts are cumulative, not necessarily unique."
+    },
+    "after_cache_disabled": {
+      "wall_s": 455.2316724170232,
+      "user_s": 24.108329,
+      "system_s": 107.778027,
+      "cpu_s": 131.886356,
+      "max_rss_bytes": 91602944,
+      "exit_code": 0,
+      "timed_out": false,
+      "forced_stop": false,
+      "items": 267,
+      "errors": {},
+      "timing_ms": {
+        "ai": 455000,
+        "android": 234132,
+        "apple": 188479,
+        "artifacts": 453421,
+        "catalog": 450643,
+        "js": 445693,
+        "system": 365774,
+        "worktrees": 429566
+      },
+      "sampled_cpu_peak_percent": 93.49514712520501,
+      "sampled_disk_read_bytes": 3935346688,
+      "sampled_disk_written_bytes": 0,
+      "load_average_after": [
+        15.0390625,
+        37.37548828125,
+        31.99072265625
+      ],
+      "sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "started_at": "2026-10-02T19:32:58.926372+02:00",
+      "load_average_before": [
+        12.49169921875,
+        13.947265625,
+        12.1328125
+      ],
+      "resource_diagnostics": [
+        "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=12h29m19.992616115s pause_cumulative=0s command_wait_cumulative=9m54.839822061s files=2927230 dirs=344729 cache_hits=319 cache_misses=9070 cancel_join=0s"
+      ],
+      "file_count_note": "Traversal counts are cumulative, not necessarily unique."
+    },
+    "after_real_default_cache_2217": {
+      "wall_s": 245.02483808400575,
+      "user_s": 23.020714,
+      "system_s": 105.945071,
+      "cpu_s": 128.965785,
+      "max_rss_bytes": 97353728,
+      "exit_code": 0,
+      "timed_out": false,
+      "forced_stop": false,
+      "providers_done": {
+        "apple": "1m6.03s",
+        "android": "1m49.575s",
+        "system": "3m19.695s",
+        "worktrees": "3m42.792s",
+        "js": "3m59.315s",
+        "artifacts": "4m2.571s",
+        "ai": "4m4.171s",
+        "catalog": "4m4.67s"
+      },
+      "provider_failures": [],
+      "sampled_cpu_peak_percent": 100.51329218058578,
+      "sampled_parent_cpu_average_percent": 45.94469247976428,
+      "sampled_disk_read_bytes": 3845079040,
+      "sampled_disk_written_bytes": 0,
+      "load_average_after": [
+        11.791015625,
+        14.46337890625,
+        14.8017578125
+      ],
+      "native_replay_diagnostics": [
+        "[trace] fsevents: history replay timed out; roots=34 buffered_events=184968 attempt=1 budget=7.998s"
+      ],
+      "sha256": "dff2ff903501665ec2d038fecd2afd82d311007d28c66e2f9f69a0617a8efa2d",
+      "started_at": "2026-10-02T22:17:51.768963+02:00",
+      "load_average_before": [
+        17.125,
+        15.26318359375,
+        14.98681640625
+      ],
+      "command": "LU_TRACE=1 LU_TRACE_MS=1000 ./bin/lu-cleaner scan --dry-run --verbose",
+      "environment_overrides": {
+        "GOMAXPROCS": null,
+        "LU_WALKERS": null,
+        "LU_NO_CACHE": null,
+        "LU_NO_BULK": null,
+        "LU_NO_CLONES": null,
+        "XDG_CACHE_HOME": null,
+        "LU_CLEANER_CONFIG": null,
+        "GOFLAGS": null
+      },
+      "real_default_cache": true,
+      "cache_preparation": "none",
+      "files_walked": 2931190,
+      "dirs_walked": 345124,
+      "persistent_cache_hits": 0,
+      "io_max": 2,
+      "commands_max": 1,
+      "reported_items": 232,
+      "resource_diagnostics": [
+        "debug: scan resources: io_max=2/2 commands_max=1/1 io_wait_cumulative=7h18m2.476109755s pause_cumulative=0s command_wait_cumulative=4m32.581010795s files=2931190 dirs=345124 cache_hits=319 cache_misses=9087 cancel_join=0s"
+      ]
+    }
+  },
+  "isolated_size_experiment": [
+    {
+      "trial": 1,
+      "variant": "current",
+      "exit": 0,
+      "cpu_s": 4.693888,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 96850154321,
+        "ThrottleWait": 17274439423,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 15.169695625
+    },
+    {
+      "trial": 1,
+      "variant": "no-pauses",
+      "exit": 0,
+      "cpu_s": 2.936883999999999,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 25525410812,
+        "ThrottleWait": 0,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 4.52418125
+    },
+    {
+      "trial": 1,
+      "variant": "utility",
+      "exit": 0,
+      "cpu_s": 3.172107,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 21871418455,
+        "ThrottleWait": 0,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 3.942370167
+    },
+    {
+      "trial": 1,
+      "variant": "standard",
+      "exit": 70,
+      "cpu_s": 0.00464500000000001,
+      "stderr": "taskpolicy: setiopolicy_np(...IOPOL_SCOPE_DARWIN_BG...): Invalid argument\n"
+    },
+    {
+      "trial": 1,
+      "variant": "normal",
+      "exit": 0,
+      "cpu_s": 1.24918,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 7787722089,
+        "ThrottleWait": 0,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 1.487629875
+    },
+    {
+      "trial": 2,
+      "variant": "no-pauses",
+      "exit": 0,
+      "cpu_s": 2.965856,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 25022263708,
+        "ThrottleWait": 0,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 4.2906
+    },
+    {
+      "trial": 2,
+      "variant": "current",
+      "exit": 0,
+      "cpu_s": 4.310568999999998,
+      "stderr": "",
+      "quota": {
+        "IOActive": 0,
+        "IOMax": 2,
+        "IOCooling": 0,
+        "IOWait": 82945229641,
+        "ThrottleWait": 15696616677,
+        "CommandActive": 0,
+        "CommandMax": 0,
+        "CommandWait": 0,
+        "Files": 94379,
+        "Dirs": 12998,
+        "CacheHits": 0,
+        "CacheMisses": 0,
+        "CancelLatency": 0
+      },
+      "size": {
+        "bytes": 2714550272,
+        "apparent": 2735846768,
+        "reclaim": 765399040,
+        "files": 94379,
+        "dirs": 12998,
+        "newest": "2026-10-02T18:08:46.416727127+02:00",
+        "errors": 0
+      },
+      "wall_s": 13.075181625
+    }
+  ]
+}

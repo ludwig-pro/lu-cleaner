@@ -44,7 +44,9 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   `scanctl.Controller` per invocation and attaches it to the context for the engine,
   providers, size cache and TUI. `Env.ScanLimits` carries the resolved limits to direct callers.
 * `eco` admits 2 simultaneous I/O operations, 1 command and 1 prefetch per sizing pool, with
-  batches of 256 entries and a cancellable 5 ms cooldown after each I/O operation. `fast`
+  batches of 256 entries. Neither public profile adds a fixed software cooldown:
+  the OS background policy schedules eco work around other applications. A delay based on
+  permit-held wall time would also penalize blocked I/O and duplicate OS throttling. `fast`
   admits 8 I/O operations, 4 commands and 4 prefetch jobs, with the same batch size and no
   cooldown. An I/O permit covers a bounded read or metadata operation; it is released before
   recursion, waiting for cached sizes or executing a command. Command execution timeouts start

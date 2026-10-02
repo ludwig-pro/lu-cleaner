@@ -1,5 +1,10 @@
 # Scans économes : implémentation et validation locale
 
+Ce rapport décrit la v0.3.0. La correction ultérieure du coût des pauses,
+ses mesures et ses limites sont dans [SCAN_PACING_FIX.md](SCAN_PACING_FIX.md).
+Le réglage local le plus récent est documenté dans
+[SCAN_ECO_FINAL.md](SCAN_ECO_FINAL.md).
+
 Date : 2 octobre 2026. Base auditée et checkout initial : `main`,
 `08e5ed43c901c4c5b3da089f4a9610107ad85156`. Le checkout était propre avant
 l'implémentation ; aucun changement intervenu depuis la base auditée.

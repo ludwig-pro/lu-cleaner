@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -173,37 +174,42 @@ func TestCancelledPathInspectionIsUnknownAndNotCached(t *testing.T) {
 }
 
 func TestCommandTimeoutStartsAfterAdmission(t *testing.T) {
-	c := scanctl.New(scanctl.Limits{IO: 1, Commands: 1, BatchSize: 256})
-	defer c.Close()
-	ctx, cancel := context.WithTimeout(scanctl.With(context.Background(), c), 3*time.Second)
-	defer cancel()
-	started, release := make(chan struct{}), make(chan struct{})
-	var releases sync.Once
-	defer releases.Do(func() { close(release) })
-	leader := make(chan error, 1)
-	go func() {
-		_, err := scanctl.Command(ctx, 0, func(context.Context) ([]byte, error) { close(started); <-release; return nil, nil })
-		leader <- err
-	}()
-	awaitProbe(t, started)
-	type result struct {
-		out []byte
-		err error
-	}
-	done := make(chan result, 1)
-	go func() { out, err := output(ctx, 100*time.Millisecond, "/bin/echo", "ready"); done <- result{out, err} }()
-	select {
-	case got := <-done:
-		t.Fatalf("command ran or timed out before admission: %q, %v", got.out, got.err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	releases.Do(func() { close(release) })
-	if err := awaitProbe(t, leader); err != nil {
-		t.Fatal(err)
-	}
-	if got := awaitProbe(t, done); got.err != nil || string(got.out) != "ready\n" {
-		t.Fatalf("command did not get its execution timeout: %q, %v", got.out, got.err)
-	}
+	// Use virtual time for admission: process startup must not race a 100 ms
+	// wall-clock budget when the machine is busy. The real command still runs.
+	synctest.Test(t, func(t *testing.T) {
+		c := scanctl.New(scanctl.Limits{IO: 1, Commands: 1, BatchSize: 256})
+		defer c.Close()
+		ctx, cancel := context.WithTimeout(scanctl.With(context.Background(), c), 3*time.Second)
+		defer cancel()
+		started, release := make(chan struct{}), make(chan struct{})
+		var releases sync.Once
+		defer releases.Do(func() { close(release) })
+		leader := make(chan error, 1)
+		go func() {
+			_, err := scanctl.Command(ctx, 0, func(context.Context) ([]byte, error) { close(started); <-release; return nil, nil })
+			leader <- err
+		}()
+		awaitProbe(t, started)
+		type result struct {
+			out []byte
+			err error
+		}
+		done := make(chan result, 1)
+		go func() { out, err := output(ctx, 100*time.Millisecond, "/bin/echo", "ready"); done <- result{out, err} }()
+		synctest.Wait() // The command is waiting for the occupied slot.
+		select {
+		case got := <-done:
+			t.Fatalf("command ran or timed out before admission: %q, %v", got.out, got.err)
+		case <-time.After(200 * time.Millisecond):
+		}
+		releases.Do(func() { close(release) })
+		if err := awaitProbe(t, leader); err != nil {
+			t.Fatal(err)
+		}
+		if got := awaitProbe(t, done); got.err != nil || string(got.out) != "ready\n" {
+			t.Fatalf("command did not get its execution timeout: %q, %v", got.out, got.err)
+		}
+	})
 }
 
 func TestCommandCancellationKillsProcessGroup(t *testing.T) {

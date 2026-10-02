@@ -198,6 +198,8 @@ import "C"
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 	"unsafe"
 
@@ -265,6 +267,19 @@ func replay(ctx context.Context, roots []string, since uint64, timeout time.Dura
 		}
 		rc := C.lu_replay_run(r, arr, C.int(len(roots)), C.uint64_t(since), C.int64_t(rem.Nanoseconds()), cancel)
 		if rc != 0 || ctx.Err() != nil {
+			if os.Getenv("LU_TRACE") != "" {
+				reason := "cancelled"
+				switch rc {
+				case -1:
+					reason = "stream creation/start failed"
+				case -3:
+					reason = "history replay timed out"
+				case -4:
+					reason = "event buffer limit/allocation failed"
+				}
+				fmt.Fprintf(os.Stderr, "[trace] fsevents: %s; roots=%d buffered_events=%d attempt=%d budget=%s\n",
+					reason, len(roots), uint64(r.n), attempt+1, rem.Round(time.Millisecond))
+			}
 			return false
 		}
 		if attempt == dropRetries || C.lu_replay_dropped(r) == 0 {

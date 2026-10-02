@@ -56,7 +56,7 @@ Quand un projet React Native n'a pas de `node_modules`, la version de `react-nat
 Ce parcours utilise toujours vos racines configurées (ou détectées automatiquement). Les racines passées en ligne de commande (`--root`, `lu-cleaner artifacts <root>`) ne restreignent que le scan des artefacts : avec un seul projet comme racine, toutes les versions utilisées par vos autres projets sembleraient inutilisées.
 
 :::caution[Quand l'utilisation est inconnue, rien n'est recommandé]
-Le parcours des projets s'arrête au bout de 20 secondes ou de 250 000 dossiers. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas recommandés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
+Le parcours des projets est limité à 250 000 dossiers et peut être annulé ; il n'a pas de délai maximal, afin que le profil eco puisse prendre plus de temps sans interrompre la découverte prématurément. S'il ne se termine pas, ou si aucune racine de projet n'existe, lu-cleaner ne peut pas prouver qu'un paquet est inutilisé : les éléments affichent *no project roots scanned — usage unknown* et ne sont pas recommandés. Faites pointer `roots` vers les dossiers qui contiennent vos projets si les racines détectées automatiquement ne les couvrent pas.
 :::
 
 ## Où se trouve le SDK
