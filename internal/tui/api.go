@@ -46,15 +46,7 @@ func RunPicker(ctx context.Context, opt PickerOptions) (*clean.Summary, error) {
 	warmTerminal()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := p.Run()
-	if m.scanCancel != nil {
-		m.scanCancel()
-	}
-	// Wait for providers to stop before the CLI restores its runtime limits.
-	if m.events != nil {
-		for range m.events {
-		}
-	}
-	m.waitCleanFinished()
+	m.close()
 	return m.lastSummary, runErr(ctx, err)
 }
 

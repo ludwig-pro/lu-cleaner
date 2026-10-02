@@ -62,7 +62,7 @@ type App struct {
 
 	Disk      func(path string) (sysx.Disk, error)
 	Snapshots func(context.Context) []string
-	Running   func(names ...string) []string
+	Running   func(context.Context, ...string) ([]string, error)
 	History   func() ([]clean.HistoryEntry, error)
 	// ActivateScan applies process priorities only when a scan starts. Its
 	// restore function runs once when this invocation returns.
@@ -90,7 +90,7 @@ func NewApp(version string) *App {
 		Clean:        clean.Run,
 		Disk:         sysx.DiskOf,
 		Snapshots:    sysx.LocalSnapshots,
-		Running:      sysx.Running,
+		Running:      sysx.RunningContext,
 		History:      clean.ReadHistory,
 		ActivateScan: scanctl.Activate,
 	}

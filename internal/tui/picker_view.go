@@ -758,6 +758,8 @@ func (m *pickerModel) viewConfirm(w, h int) string {
 	switch {
 	case c.checking:
 		lines = append(lines, label("Running")+sDim.Render("checking "+safeText(strings.Join(c.guards, ", "))+"…"))
+	case c.runningErr != nil:
+		lines = append(lines, label("Running")+sOrange.Render("unknown — process inspection incomplete: "+safeText(firstLine(c.runningErr.Error()))))
 	case len(c.running) > 0:
 		msg := " — items guarded by them will be skipped"
 		if m.opt.Clean.Force {

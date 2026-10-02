@@ -87,6 +87,8 @@ type pickerModel struct {
 
 	// scan
 	ctx        context.Context
+	cancel     context.CancelFunc
+	tasks      *scanTaskGroup
 	scanCancel context.CancelFunc
 	events     <-chan engine.Event
 	scanning   bool
@@ -147,7 +149,7 @@ type pickerModel struct {
 
 	// hooks, replaced in tests
 	diskFn    func(string) (sysx.Disk, error)
-	runningFn func(...string) []string
+	runningFn func(context.Context, ...string) ([]string, error)
 	revealFn  func(string) error
 	cleanFn   func(context.Context, []*core.Item, clean.Options, func(clean.Result)) *clean.Summary
 }
@@ -185,7 +187,11 @@ func waitEvents(ch <-chan engine.Event) tea.Cmd {
 	}
 }
 
-type runningMsg struct{ names []string }
+type runningMsg struct {
+	confirm *confirmState
+	names   []string
+	err     error
+}
 
 // ------------------------------------------------------------------ setup
 
@@ -194,7 +200,7 @@ func newPicker(ctx context.Context, opt PickerOptions) *pickerModel {
 		opt.Env = core.NewEnv()
 	}
 	env := opt.Env
-	ctx = scanContext(ctx, env)
+	ctx, cancel := context.WithCancel(scanContext(ctx, env))
 	if opt.Title == "" {
 		opt.Title = "lu-cleaner"
 	}
@@ -223,6 +229,8 @@ func newPicker(ctx context.Context, opt PickerOptions) *pickerModel {
 		now:       now,
 		stale:     stale,
 		ctx:       ctx,
+		cancel:    cancel,
+		tasks:     newScanTaskGroup(ctx),
 		provDone:  map[string]bool{},
 		provCats:  map[string][]core.Category{},
 		items:     map[string]*core.Item{},
@@ -234,7 +242,7 @@ func newPicker(ctx context.Context, opt PickerOptions) *pickerModel {
 		h:         30,
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(sAccent)),
 		diskFn:    sysx.DiskOf,
-		runningFn: sysx.Running,
+		runningFn: sysx.RunningContext,
 		revealFn:  revealInFinder,
 		cleanFn:   clean.Run,
 		dirtyData: true,
@@ -321,8 +329,9 @@ func (m *pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinning = false
 		}
 	case runningMsg:
-		if m.confirm != nil {
+		if m.confirm != nil && m.confirm == msg.confirm {
 			m.confirm.running = msg.names
+			m.confirm.runningErr = msg.err
 			m.confirm.checking = false
 		}
 	case cleanBatchMsg:
@@ -621,10 +630,25 @@ func scrollTo(cursor, offset, rows, n int) int {
 
 func (m *pickerModel) quit() tea.Cmd {
 	m.quitting = true
+	m.cancel()
 	if m.scanCancel != nil {
 		m.scanCancel()
 	}
 	return tea.Quit
+}
+
+func (m *pickerModel) close() {
+	m.cancel()
+	m.tasks.close()
+	if m.scanCancel != nil {
+		m.scanCancel()
+	}
+	// Join providers and cleanup before the CLI restores its runtime limits.
+	if m.events != nil {
+		for range m.events {
+		}
+	}
+	m.waitCleanFinished()
 }
 
 func (m *pickerModel) handleKey(k tea.KeyMsg) tea.Cmd {

@@ -126,9 +126,15 @@ func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
 	if snaps := c.Snapshots(ctx); snaps != nil {
 		r.Snapshots = snaps
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	r.Trash.Path = filepath.Join(env.Home, ".Trash")
 	st, err := fsx.Size(ctx, r.Trash.Path, nil)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	switch {
 	case err != nil && fsx.Exists(r.Trash.Path):
 		r.Trash.Note = "cannot read the Trash (grant Full Disk Access to your terminal)"
@@ -144,7 +150,20 @@ func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
 	}
 
 	for _, b := range blockers {
-		if hit := c.Running(b.names...); len(hit) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		hit, err := c.Running(ctx, b.names...)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			// An incomplete process inspection cannot establish that no app
+			// is running. Retain that distinction in both JSON and text.
+			r.Errors = map[string]string{"processes": firstLine(err.Error())}
+			break
+		}
+		if len(hit) > 0 {
 			r.Running = append(r.Running, doctorProc{App: b.label, Processes: hit, Impact: b.impact})
 		}
 	}
@@ -168,11 +187,16 @@ func (c *cli) doctor(ctx context.Context, scan bool) (*doctorReport, error) {
 		all, rec := cleanableAndRecommended(groups)
 		r.Total, r.Recommended = core.Total(all), core.Total(rec)
 		if len(res.Errors) > 0 {
-			r.Errors = map[string]string{}
+			if r.Errors == nil {
+				r.Errors = map[string]string{}
+			}
 			for id, e := range res.Errors {
 				r.Errors[id] = firstLine(e.Error())
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	r.Tips = doctorTips(r)
 	return r, nil
@@ -265,9 +289,12 @@ func (c *cli) printDoctor(r *doctorReport) {
 
 	// Blocking apps
 	section("Running apps that block cleaning")
-	if len(r.Running) == 0 {
+	if err := r.Errors["processes"]; err != "" {
+		o.println("  unknown " + o.paint(o.warn, "— process inspection incomplete: "+sanitize(err)))
+	} else if len(r.Running) == 0 {
 		o.println("  none")
-	} else {
+	}
+	if len(r.Running) > 0 {
 		t := newTable("APP", "IMPACT")
 		for _, p := range r.Running {
 			t.add(func(col int, v string) string {
@@ -319,7 +346,9 @@ func (c *cli) printDoctor(r *doctorReport) {
 		}
 		ids := make([]string, 0, len(r.Errors))
 		for id := range r.Errors {
-			ids = append(ids, id)
+			if id != "processes" {
+				ids = append(ids, id)
+			}
 		}
 		sort.Strings(ids)
 		for _, id := range ids {

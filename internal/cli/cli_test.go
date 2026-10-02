@@ -675,11 +675,11 @@ func TestDoctor(t *testing.T) {
 	h.app.Snapshots = func(context.Context) []string {
 		return []string{"com.apple.TimeMachine.2026-09-27-101010.local"}
 	}
-	h.app.Running = func(names ...string) []string {
+	h.app.Running = func(_ context.Context, names ...string) ([]string, error) {
 		if names[0] == "Xcode" {
-			return []string{"Xcode"}
+			return []string{"Xcode"}, nil
 		}
-		return nil
+		return nil, nil
 	}
 	trash := filepath.Join(h.home, ".Trash")
 	if err := os.MkdirAll(trash, 0o700); err != nil {

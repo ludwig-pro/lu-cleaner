@@ -101,7 +101,7 @@ func newHarness(t *testing.T, provs ...core.Provider) *harness {
 		Clean:     h.fakeClean,
 		Disk:      func(string) (sysx.Disk, error) { return sysx.Disk{Total: 500e9, Free: 50e9, Used: 450e9}, nil },
 		Snapshots: func(context.Context) []string { return nil },
-		Running:   func(...string) []string { return nil },
+		Running:   func(context.Context, ...string) ([]string, error) { return nil, nil },
 		History:   func() ([]clean.HistoryEntry, error) { return h.history, nil },
 	}
 	return h

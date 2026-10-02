@@ -4,7 +4,9 @@ Date : 2 octobre 2026. Base auditée et checkout initial : `main`,
 `08e5ed43c901c4c5b3da089f4a9610107ad85156`. Le checkout était propre avant
 l'implémentation ; aucun changement intervenu depuis la base auditée.
 Ce rapport conserve les mesures et l'état du checkout à la fin de la
-validation locale, avant commit, push et publication.
+validation locale. La revue avant publication a ensuite complété la
+propagation du contexte dans doctor et la confirmation de nettoyage TUI,
+sans modifier le moteur ni les parcours artifacts utilisés par le benchmark.
 
 ## Comportement livré
 
@@ -68,6 +70,10 @@ sur stderr.
 - Les inspections natives de PID, descripteurs, régions et fichiers ouverts
   en écriture sont annulables et ne publient pas de résultat partiel comme
   un état complet. Une inspection interrompue reste inconnue/incomplète.
+  Doctor transmet le même contexte à ses vérifications de processus et
+  ne publie aucun rapport après annulation, même avec `--no-scan`. La
+  confirmation TUI rejoint son inspection à la fermeture, annule celle d'un
+  dialogue abandonné et rejette les résultats d'un ancien dialogue.
 - Le cache de tailles déduplique avant l'admission. Annuler un consommateur
   ne coupe pas le calcul partagé attendu par un autre. Le moteur rejoint les
   mesures possédées par le scan avant de fermer le store. La fermeture du
@@ -89,7 +95,7 @@ Contrôles sur le diff stabilisé :
 
 | Commande | Résultat |
 | --- | --- |
-| `GOMAXPROCS=4 go test -p 2 -json ./...` | Succès : 23 packages, 750 tests/sous-tests réussis, 16 entrées ignorées expliquées ci-dessous. |
+| `GOMAXPROCS=4 go test -p 2 -count=1 -json ./...` | Succès : 23 packages, 758 tests/sous-tests réussis, 16 entrées ignorées expliquées ci-dessous. |
 | `GOMAXPROCS=2 go vet -p 2 ./...` | Succès. |
 | `make build` | Succès, binaire natif CGO. |
 | `make nocgo` | Succès, compilation et vet sans CGO. |
@@ -102,7 +108,11 @@ Les cibles Make ont été exécutées avec un cache Go temporaire neuf,
 pas les binaires mesurés. Le race detector a réussi pour `scanctl`, `fsx`,
 `fsevents`, `engine`, `core`, `safety`, `sysx`, `cli`, `config`, `tui` et
 `internal/providers/...`. Après les dernières modifications, `cli`,
-`artifacts` et `worktrees` ont été revérifiés avec `-race`.
+`artifacts` et `worktrees` ont été revérifiés avec `-race`. Après le complément
+doctor/TUI de la revue avant publication, la suite complète, vet et les
+builds ont été relancés, ainsi que `-race` sur `cli` et `tui`.
+Les tests natifs complets s'exécutent hors sandbox : celle-ci bloque les API
+FSEvents, l'inspection des processus et la politique de priorité macOS.
 
 Les tests natifs avec `-race` émettent parfois un avertissement du linker
 Apple sur `LC_DYSYMTAB` dans un objet Go ; leurs exécutions réussissent.
@@ -123,6 +133,7 @@ Régressions significatives :
 | Calcul partagé conservé pour un consommateur encore actif | `TestConsumerCancellationPreservesSharedMeasurement`, tests du store et de `scanmemo` ; chargement annulé non publié comme complet. |
 | Fermeture qui rejoint le travail appartenant au scan | `TestEngineCancellationJoinsSharedSizeWorkers`, régressions des pools et de la TUI ; watcher FSEvents rejoint avant la libération C. |
 | Découverte annulée ne prouve pas l'absence d'usage | Tests Android/AI/sysx : attribution incomplète, résultat inconnu, conservation des binaires lorsque l'inspection échoue. |
+| Inspections doctor et confirmation TUI | `TestDoctorSharesControllerWithProcessChecksAndCollect`, `TestDoctorCancelsProcessInspection`, `TestDoctorNoScanStopsAfterCanceledInspection`, `TestDoctorReportsIncompleteProcessInspection` ; `TestPickerCloseJoinsConfirmationInspectionWithoutCmd` et `TestPickerAbandonedConfirmationCannotReplaceFreshInspection` : contexte partagé, arrêt sans rapport trompeur, erreur visible, tâche rejointe même si Bubble Tea abandonne sa commande, résultat obsolète rejeté. |
 | Marqueurs répétés dans les callbacks soumis au quota | `TestCheckoutProbeWaitsForIOAndStopsOnCancellation`, `TestSizeCheckoutMarkersWaitForIOAndCancel`. |
 | Préparation initiale des racines sous contrôle, affichage de config sans activation | `TestScanSetupControlsInitialRootReadsAndPureSetupDoesNotActivate`. |
 | Priorité et parallélisme restaurés, arrière-plan hérité conservé, échec OS non bloquant | `TestPolicyLifecycleInSubprocess` : sous-processus isolés. |
@@ -143,7 +154,7 @@ le rescan, la jonction de l'ancien pool et le rejet de ses résultats.
 Les tâches Bubble Tea abandonnées avant exécution de leur `Cmd` sont aussi
 rejointes par la fermeture.
 
-Essai complémentaire du binaire final dans un vrai pseudo-terminal :
+Essai complémentaire du binaire de la campagne dans un vrai pseudo-terminal :
 analyzer eco puis fast, fixture isolée de 20 dossiers et 20 fichiers,
 navigation dans un dossier/retour, rescan, confirmation dry-run et sorties
 avec `q` / Ctrl-C clavier. Le dry-run dans le HOME fictif indique
@@ -162,7 +173,7 @@ compilation ne s'appliquent pas à ce build natif avec FSEvents. Les deux
 entrées de helpers de sous-processus sont ignorées dans le processus parent
 et utilisées par leurs tests appelants. Aucun échec n'est masqué.
 
-## Mesures du binaire final
+## Mesures du binaire de la campagne
 
 Machine : Mac14,9, macOS 26.5.1 arm64, 10 cœurs physiques/logiques,
 16 Gio de RAM, Go 1.25.6. Le parent du benchmark hérite de nice 0 et n'est
@@ -264,6 +275,10 @@ Données brutes et paramètres :
 - [Campagne finale complète](benchmarks/2026-10-02-final.json), binaire
   `bin/lu-cleaner`, SHA-256
   `0874c0a62f5ab3ba81642c2e818290589bf4f239919f7babd973e3b25a344b62`.
+  Ce hash identifie le binaire mesuré avant le complément doctor/TUI et
+  le changement de version de release ; ces mesures n'ont pas été refaites
+  après ces modifications. Les parcours artifacts et leur contrôleur sont
+  inchangés ; les nouvelles garanties doctor/TUI sont vérifiées par tests.
 - [Première campagne](benchmarks/2026-10-02-scan.json) : binaire intermédiaire,
   trois essais, témoin court et `F_FULLFSYNC`.
 - [Campagne de cohabitation intermédiaire](benchmarks/2026-10-02-cohabitation.json) :
