@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
 )
@@ -55,7 +56,14 @@ func (p *Provider) Categories() []core.Category {
 // Scan emits items. Nothing is ever modified: only directory listings,
 // symlink reads, small config files and read-only commands (ps, lsof,
 // `pnpm store path`, `watchman --no-spawn watch-list`).
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "js")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	s := &scanner{ctx: ctx, env: env, emit: emit, p: p}
 	if dev, ok := s.devOf(env.Home); ok {
@@ -68,15 +76,18 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	// thousands of symlinks, 7 s to lstat on a cold disk) are read in the
 	// background: only the scanners that need them wait.
 	projects, shells := make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
 	go func() {
 		defer close(projects)
+		defer diagnostics.Recover(ctx, "js")
 		s.projects = loadProjects(ctx, env, p.maxProjectDirs)
 	}()
 	go func() {
 		defer close(shells)
+		defer diagnostics.Recover(ctx, "js")
 		s.loadMultishells()
 	}()
-	defer func() { <-projects; <-shells }()
+	defer group.Finish(func() { wg.Wait(); <-projects; <-shells })
 	s.procs = loadProcs(ctx, env)
 
 	// Phase 2: independent scanners, bounded. Those that wait for the
@@ -97,7 +108,6 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		{s.watchman, nil, nil},
 	}
 	sem := make(chan struct{}, 4)
-	var wg sync.WaitGroup
 	for _, t := range tasks {
 		if ctx.Err() != nil {
 			break
@@ -105,6 +115,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer diagnostics.Recover(ctx, "js")
 			if t.warm != nil {
 				t.warm()
 			}
@@ -121,6 +132,9 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 				return
 			}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
 			t.run()
 		}()
 	}

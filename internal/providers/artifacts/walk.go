@@ -8,6 +8,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -68,17 +69,20 @@ func newWalker(s *scan) *walker {
 func (w *walker) runRoots(roots []*scanRoot) {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	for _, r := range roots {
-		if w.s.ctx.Err() != nil {
-			break
+	func() {
+		defer wg.Done()
+		defer diagnostics.Recover(w.s.ctx, "artifacts")
+		for _, r := range roots {
+			if w.s.ctx.Err() != nil {
+				break
+			}
+			wc := walkCtx{root: r, tool: r.tool, git: w.s.findGitAbove(r)}
+			if wc.git != nil && wc.git.linked {
+				wc.tool = wc.git.tool
+			}
+			w.spawn(r.path, wc, &wg)
 		}
-		wc := walkCtx{root: r, tool: r.tool, git: w.s.findGitAbove(r)}
-		if wc.git != nil && wc.git.linked {
-			wc.tool = wc.git.tool
-		}
-		w.spawn(r.path, wc, &wg)
-	}
-	wg.Done()
+	}()
 	wg.Wait()
 }
 
@@ -87,8 +91,7 @@ func (w *walker) runRoots(roots []*scanRoot) {
 func (w *walker) run(dir string, wc walkCtx) {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	w.spawn(dir, wc, &wg)
-	wg.Done()
+	func() { defer wg.Done(); defer diagnostics.Recover(w.s.ctx, "artifacts"); w.spawn(dir, wc, &wg) }()
 	wg.Wait()
 }
 
@@ -101,6 +104,7 @@ func (w *walker) spawn(dir string, wc walkCtx, wg *sync.WaitGroup) {
 		wg.Add(1)
 		go func() {
 			defer func() { <-w.sem; wg.Done() }()
+			defer diagnostics.Recover(w.s.ctx, "artifacts")
 			w.walk(dir, wc, wg)
 		}()
 	default:

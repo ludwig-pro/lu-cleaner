@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"golang.org/x/sys/unix"
 )
@@ -114,6 +115,8 @@ func loadProjects(ctx context.Context, env *core.Env, maxDirs int) *projectInfo 
 			}
 		}
 	}
+	defer w.wg.Wait()
+	defer diagnostics.Recover(ctx, "js")
 	walked := 0 // project and worktree roots walked
 	homeKey, homeOK := dirKey(env.Home)
 	rootKeys := map[[2]uint64]bool{}
@@ -201,6 +204,7 @@ func (w *projectWalk) spawn(dir string, depth, rel int) {
 	case w.sem <- struct{}{}:
 		go func() {
 			defer func() { <-w.sem; w.wg.Done() }()
+			defer diagnostics.Recover(w.ctx, "js")
 			w.walk(dir, depth, rel)
 		}()
 	default:

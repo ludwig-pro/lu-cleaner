@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -88,16 +89,22 @@ func (s *scanner) warm(paths []string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer diagnostics.Recover(s.ctx, "js")
 			for p := range next {
 				s.warmOne(p)
 			}
 		}()
 	}
+queue:
 	for _, p := range paths {
 		if s.ctx.Err() != nil {
 			break
 		}
-		next <- p
+		select {
+		case next <- p:
+		case <-s.ctx.Done():
+			break queue
+		}
 	}
 	close(next)
 	wg.Wait()

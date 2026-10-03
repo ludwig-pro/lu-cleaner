@@ -2,7 +2,7 @@
 title: "lu-cleaner history"
 description: "What was cleaned, when, and how much it freed"
 sidebar:
-  order: 13
+  order: 18
   label: "history"
 ---
 
@@ -47,4 +47,3 @@ lu-cleaner history [flags]
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |
-

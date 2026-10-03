@@ -16,6 +16,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 )
@@ -552,24 +553,35 @@ func safeClean(fn func(context.Context, []*core.Item, clean.Options, func(clean.
 	ctx context.Context, items []*core.Item, opt clean.Options, progress func(clean.Result)) (sum *clean.Summary) {
 	items, skipped := splitTrash(items, opt.Trash)
 	var mu sync.Mutex
-	reported := map[*core.Item]bool{}
+	reported := map[*core.Item]clean.Result{}
 	report := func(r clean.Result) {
 		mu.Lock()
-		reported[r.Item] = true
+		reported[r.Item] = r
 		mu.Unlock()
 		if progress != nil {
 			progress(r)
 		}
 	}
 	defer func() {
-		if p := recover(); p != nil {
-			sum = &clean.Summary{Trash: opt.Trash, DryRun: opt.DryRun}
+		if recover() != nil {
+			fault := diagnostics.NewFault("tui")
+			diagnostics.Capture(ctx, fault)
+			sum = &clean.Summary{Trash: opt.Trash, DryRun: opt.DryRun, InternalError: fault}
 			mu.Lock()
 			defer mu.Unlock()
 			for _, it := range core.TopLevel(items) {
-				r := clean.Result{Item: it, Status: clean.StatusFailed, Error: fmt.Sprintf("internal error: %v", p)}
+				r, already := reported[it]
+				if !already {
+					r = clean.Result{Item: it, Status: clean.StatusFailed, Error: fault.Error()}
+				}
 				sum.Results = append(sum.Results, r)
-				if !reported[it] && progress != nil {
+				if r.Status == clean.StatusDone || r.Status == clean.StatusFailed {
+					sum.Estimated += r.Freed
+				}
+				if r.Status == clean.StatusDone {
+					sum.Trashed += r.Trashed
+				}
+				if !already && progress != nil {
 					progress(r)
 				}
 			}

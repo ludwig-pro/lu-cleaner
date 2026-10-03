@@ -22,7 +22,8 @@ builds:
     goos: [darwin]
     goarch: [arm64, amd64]
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      # The public DSN is optional; a missing value keeps reporting unavailable.
+      - -s -w -X main.version={{ .Version }} {{ if .Env.LU_DIAGNOSTICS_DSN }}-X github.com/ludwig-pro/lu-cleaner/internal/cli.DefaultDiagnosticsDSN={{ .Env.LU_DIAGNOSTICS_DSN }}{{ end }}
 
 universal_binaries:
   - replace: true

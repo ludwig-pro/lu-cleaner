@@ -43,6 +43,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/sizes"
@@ -215,12 +216,20 @@ type scan struct {
 }
 
 // Scan walks every root, verifies candidates with git, then sizes them.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "artifacts")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	if env == nil || env.Home == "" {
 		return nil
 	}
 	ctx = scanctl.Ensure(ctx)
 	s := p.newScan(ctx, env, emit)
+	var ignored chan []ignSized
 	s.setupRoots()
 	if len(s.roots) == 0 {
 		return nil
@@ -229,6 +238,11 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	// and their measurement starts).
 	s.prefetch = sizes.NewPrefetcher(ctx, scanctl.From(ctx).Limits().Prefetch)
 	defer s.prefetch.Close()
+	defer group.Finish(func() {
+		if ignored != nil {
+			<-ignored
+		}
+	})
 	s.walker.runRoots(s.roots)
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -246,8 +260,12 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	items := s.decideAll()
 	// 4. sizes, while 5. the rest of the heavy unknown ignored folders
 	// (known artifacts and nested checkouts excluded) is walked.
-	ignored := make(chan []ignSized, 1)
-	go func() { ignored <- s.measureIgnored() }()
+	ignored = make(chan []ignSized, 1)
+	go func() {
+		defer close(ignored)
+		defer diagnostics.Recover(ctx, "artifacts")
+		ignored <- s.measureIgnored()
+	}()
 	s.sizeAll(items)
 	s.emitIgnored(<-ignored)
 	return ctx.Err()
@@ -862,16 +880,22 @@ func parallel(ctx context.Context, n, workers int, fn func(i int)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer diagnostics.Recover(ctx, "artifacts")
 			for i := range next {
 				fn(i)
 			}
 		}()
 	}
+queue:
 	for i := 0; i < n; i++ {
 		if ctx.Err() != nil {
 			break
 		}
-		next <- i
+		select {
+		case next <- i:
+		case <-ctx.Done():
+			break queue
+		}
 	}
 	close(next)
 	wg.Wait()

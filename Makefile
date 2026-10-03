@@ -1,7 +1,10 @@
 BINARY  := lu-cleaner
 PKG     := ./cmd/lu-cleaner
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+# Public Sentry DSN only, never an administration token. Shell expansion keeps
+# the environment value out of shell source; consent is still required at run time.
+export LU_DIAGNOSTICS_DSN
+LDFLAGS := -s -w -X main.version=$(VERSION) -X github.com/ludwig-pro/lu-cleaner/internal/cli.DefaultDiagnosticsDSN=$$LU_DIAGNOSTICS_DSN
 GOBIN   := $(shell go env GOPATH)/bin
 
 # cgo is on by default on macOS (FSEvents for the persistent size cache, see

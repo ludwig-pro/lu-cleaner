@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,7 +38,12 @@ func (g *scanTaskGroup) run(fn func() tea.Msg) tea.Cmd {
 		defer g.wg.Done()
 		defer close(done)
 		// Propagate a panic through the Cmd so Bubble Tea keeps handling it.
-		defer func() { panicValue = recover() }()
+		defer func() {
+			panicValue = recover()
+			if panicValue != nil {
+				diagnostics.Capture(g.ctx, diagnostics.NewFault("tui"))
+			}
+		}()
 		if g.ctx.Err() == nil {
 			msg = fn()
 		}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
@@ -83,6 +84,7 @@ func (s *scanner) loadMultishells() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer diagnostics.Recover(s.ctx, "js")
 				for i := w; i < len(names); i += workers {
 					if s.ctx.Err() != nil {
 						return

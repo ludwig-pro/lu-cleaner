@@ -185,6 +185,7 @@ func (c *cli) runCleanYes(ctx context.Context, spec cleanSpec) error {
 	})
 	sp.stop()
 
+	c.cleanWarnings(sum)
 	if c.f.json {
 		if err := c.writeJSON(sum); err != nil {
 			return err
@@ -195,7 +196,7 @@ func (c *cli) runCleanYes(ctx context.Context, spec cleanSpec) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if sum.Count(clean.StatusFailed) > 0 {
+	if sum.InternalError != nil || sum.Count(clean.StatusFailed) > 0 {
 		return silentFailure()
 	}
 	return nil

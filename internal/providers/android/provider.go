@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -91,16 +92,24 @@ func statDev(p string) (uint64, error) {
 }
 
 // Scan emits items. It never deletes anything.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "android")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	p.defaults(env)
 	s := newScan(ctx, p, env, emit)
 
 	// Independent of project attribution: run while projects are walked.
 	var early sync.WaitGroup
+	defer group.Finish(func() { early.Wait(); s.wg.Wait() })
 	for _, f := range []func(){s.studio, s.userCache, s.jdks} {
 		early.Add(1)
-		go func(f func()) { defer early.Done(); f() }(f)
+		go func(f func()) { defer early.Done(); defer diagnostics.Recover(ctx, "android"); f() }(f)
 	}
 
 	pi := s.scanProjects()
@@ -268,6 +277,7 @@ func (s *scan) add(it *core.Item, measure []string, opt sizeOpt) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer diagnostics.Recover(s.ctx, "android")
 		select {
 		case s.sem <- struct{}{}:
 		case <-s.ctx.Done():

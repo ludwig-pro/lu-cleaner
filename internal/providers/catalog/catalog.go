@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -106,9 +107,17 @@ func (p *Provider) Categories() []core.Category {
 }
 
 // Scan expands every entry concurrently and emits one item per group/match.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "catalog")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	var wg sync.WaitGroup
+	defer group.Finish(wg.Wait)
 	sem := make(chan struct{}, 8)
 	for _, e := range p.entries {
 		if ctx.Err() != nil {
@@ -117,10 +126,18 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		if e.Requires != "" && !env.Has(e.Requires) {
 			continue
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(e Entry) {
 			defer func() { <-sem; wg.Done() }()
+			defer diagnostics.Recover(ctx, "catalog")
 			p.scanEntry(ctx, env, e, emit)
 		}(e)
 	}

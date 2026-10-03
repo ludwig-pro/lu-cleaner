@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
@@ -64,7 +65,14 @@ const (
 
 // Scan emits one item per linked worktree and one prune item per main
 // repository holding stale worktree metadata.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "worktrees")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	if env == nil || env.Runner == nil || env.Home == "" || !env.Has("git") {
 		return nil
@@ -74,6 +82,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		getwd = os.Getwd
 	}
 	s := newScan(ctx, env, emit)
+	defer group.Finish(func() {})
 	if wd, err := getwd(); err == nil {
 		s.cwd = realPath(wd)
 	}
@@ -149,6 +158,7 @@ func (s *scan) run() error {
 	sized := make(chan struct{})
 	go func() {
 		defer close(sized)
+		defer diagnostics.Recover(s.ctx, "worktrees")
 		parallel(s.ctx, len(wts), sizeWorkers, func(i int) {
 			if !wts[i].external { // no internal gain: other volumes are never walked
 				join.measured(i, measure(s.ctx, wts[i].path))
@@ -156,6 +166,7 @@ func (s *scan) run() error {
 		})
 	}()
 	defer func() { <-sized }()
+	defer diagnostics.Recover(s.ctx, "worktrees")
 
 	s.tools = loadToolState(s.ctx, s.env, s.home, wts)
 
@@ -251,16 +262,22 @@ func parallel(ctx context.Context, n, workers int, fn func(i int)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer diagnostics.Recover(ctx, "worktrees")
 			for i := range next {
 				fn(i)
 			}
 		}()
 	}
+queue:
 	for i := 0; i < n; i++ {
 		if ctx.Err() != nil {
 			break
 		}
-		next <- i
+		select {
+		case next <- i:
+		case <-ctx.Done():
+			break queue
+		}
 	}
 	close(next)
 	wg.Wait()

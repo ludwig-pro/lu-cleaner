@@ -63,4 +63,3 @@ lu-cleaner clean -y -k node_modules --min-size 200MB
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |
-

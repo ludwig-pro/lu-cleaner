@@ -17,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsevents"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
@@ -386,6 +387,15 @@ func (s *SizeStore) load(ctx context.Context, now time.Time) {
 // validate replays the history since the oldest entry and keeps the entries
 // no event touched.
 func (s *SizeStore) validate(ctx context.Context) {
+	defer close(s.ready)
+	defer func() {
+		if recover() != nil {
+			diagnostics.Capture(ctx, diagnostics.NewFault("fsx"))
+			s.mu.Lock()
+			s.state, s.reason, s.valid = replayFailed, "internal failure during cache validation", nil
+			s.mu.Unlock()
+		}
+	}()
 	start := time.Now()
 	state, reason := replayOK, ""
 	ix, _ := newStoreIndexContext(ctx, s.entries)
@@ -449,12 +459,13 @@ func (s *SizeStore) validate(ctx context.Context) {
 			}
 		}
 	}
+	invalidations := ix.summary()
 	s.mu.Lock()
 	if ctx.Err() != nil {
 		state, reason = replayCancelled, "cancelled"
 	}
 	s.state, s.reason, s.replay, s.events = state, reason, time.Since(start), ix.events
-	s.invalidations = ix.summary()
+	s.invalidations = invalidations
 	if state == replayOK {
 		s.valid = valid
 	}
@@ -463,7 +474,6 @@ func (s *SizeStore) validate(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "[trace] cache validation %s: entries=%d valid=%d events=%d took=%s%s\n",
 			stateName(s.state), len(s.entries), len(s.valid), s.events, s.replay.Round(time.Millisecond), reasonSuffix(s.reason))
 	}
-	close(s.ready)
 }
 
 // watchRoots returns the roots to replay: the home directory, plus the

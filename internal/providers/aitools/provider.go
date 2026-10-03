@@ -16,13 +16,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
@@ -103,8 +103,15 @@ func (p *Provider) Categories() []core.Category {
 
 // Scan emits items. Every sub-scanner is independent and silent when its
 // tool is absent.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
 	ctx = scanctl.Ensure(ctx)
+	ctx, group := diagnostics.NewGroup(ctx, "ai")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	s := newScanner(ctx, p, env, emit)
 	jobs := []struct {
 		name string
@@ -129,28 +136,33 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		{"models", s.localModels},
 	}
 	var wg sync.WaitGroup
+	defer group.Finish(wg.Wait)
 	sem := make(chan struct{}, 6)
 	for _, j := range jobs {
 		if ctx.Err() != nil {
 			break
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(name string, fn func()) {
 			start := time.Now()
+			defer func() { <-sem; wg.Done() }()
+			defer group.Recover()
 			defer func() {
-				if r := recover(); r != nil {
-					env.Logf("ai: %s panicked: %v\n%s", name, r, debug.Stack())
-				}
 				env.Logf("ai: %s took %s", name, time.Since(start).Round(time.Millisecond))
-				<-sem
-				wg.Done()
 			}()
 			fn()
 		}(j.name, j.fn)
 	}
 	wg.Wait()
-	return ctx.Err()
+	return group.Err()
 }
 
 // scanner holds the state shared by the sub-scanners of one Scan call.
@@ -541,10 +553,18 @@ func (s *scanner) measure(targets []string, external bool) []fsx.Stats {
 		if s.ctx.Err() != nil {
 			break
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-s.ctx.Done():
+			break
+		}
+		if s.ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(i int, t string) {
 			defer func() { <-sem; wg.Done() }()
+			defer diagnostics.Recover(s.ctx, "ai")
 			var opt *fsx.Options
 			if external {
 				if r, err := filepath.EvalSymlinks(t); err == nil {

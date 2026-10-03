@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
 )
 
@@ -155,10 +156,12 @@ func (s *scan) freshTools(ctx context.Context) (*toolState, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			func() {
-				defer func() { _ = recover() }() // tool state is best effort
+			if err := diagnostics.Catch(ctx, "worktrees", func() error {
 				f(ctx, s.env, s.home)
-			}()
+				return nil
+			}); err != nil {
+				return nil, err
+			}
 		}
 		return ts, ctx.Err()
 	})

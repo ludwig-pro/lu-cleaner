@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
@@ -171,6 +172,7 @@ func (s *scan) simulators() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer diagnostics.Recover(s.ctx, "apple")
 		imgs, imgErr = s.runtimeImages()
 	}()
 	list, err := s.simctlList()

@@ -87,6 +87,8 @@ Set `scan_mode = "eco"` or `"fast"` in `config.toml` to keep a preferred profile
 
 `eco` uses macOS background priority and bounded concurrency to prioritise other applications, without fixed pauses after reads. Large scans can still take several minutes, especially when the size cache cannot be validated. `--dry-run` still performs the full scan and safety checks. For resource and cache diagnostics, use `LU_TRACE=1 lu-cleaner scan --dry-run --verbose`; see [resource profiles and cancellation](https://ludwig-pro.github.io/lu-cleaner/reference/configuration/#scan_mode).
 
+Optional technical bug reports are off until explicit consent. Use `lu-cleaner diagnostics status`, `enable`, `disable` or `export`. Reports exclude personal paths, file contents, raw logs and permanent user/device identifiers. The cleaning `--yes` flag never grants consent. A public Sentry DSN must be configured before enabling remote reports; see [technical reports and privacy](https://ludwig-pro.github.io/lu-cleaner/guides/diagnostics/).
+
 ## Safety in one paragraph
 
 lu-cleaner never uses `sudo`, never touches system folders, never removes a git repository, your scan roots, credentials or tool configurations, and never follows symlinks. Risky items (user data, dirty worktrees, sessions) are marked *caution*: they are never picked by smart select (the `a` key, `--smart`), never cleaned by `clean --yes` unless you pass `--risk caution`, and need a typed `yes` in the UI. Read the [safety model](https://ludwig-pro.github.io/lu-cleaner/concepts/safety/).
