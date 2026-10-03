@@ -9,14 +9,13 @@ package apple
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
@@ -44,9 +43,17 @@ func (p *Provider) Categories() []core.Category {
 
 // Scan emits items. Every part runs concurrently; missing tools or folders
 // simply produce no items.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "apple")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	s := newScan(ctx, p, env, emit)
+	defer group.Finish(s.wg.Wait)
 	parts := []func(){
 		s.derivedData,
 		s.archives,
@@ -131,10 +138,12 @@ func (s *scan) spawn(f func()) {
 	go func() {
 		defer s.wg.Done()
 		defer func() {
-			if r := recover(); r != nil {
+			if recover() != nil {
+				fault := diagnostics.NewFault("apple")
+				diagnostics.Fail(s.ctx, fault)
 				s.mu.Lock()
 				if s.panicErr == nil {
-					s.panicErr = fmt.Errorf("apple provider: panic: %v\n%s", r, debug.Stack())
+					s.panicErr = fault
 				}
 				s.mu.Unlock()
 			}

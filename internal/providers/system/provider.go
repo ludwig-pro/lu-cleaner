@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanio"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/internal/scanmemo"
@@ -99,7 +100,14 @@ func statDev(p string) (uint64, error) {
 }
 
 // Scan emits items. It never deletes anything.
-func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) error {
+func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) (err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "system")
+	defer group.Close()
+	defer func() {
+		if fault := group.Err(); fault != nil {
+			err = fault
+		}
+	}()
 	ctx = scanctl.Ensure(ctx)
 	p.defaults(env)
 	s := &scan{
@@ -139,6 +147,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 	}
 	partSem := make(chan struct{}, 6)
 	var partsWG sync.WaitGroup
+	defer group.Finish(func() { partsWG.Wait(); s.wg.Wait() })
 	for _, part := range parts {
 		if p.only != nil && !p.only[part.name] {
 			continue
@@ -149,6 +158,7 @@ func (p *Provider) Scan(ctx context.Context, env *core.Env, emit core.Emit) erro
 		partsWG.Add(1)
 		go func(fn func()) {
 			defer partsWG.Done()
+			defer diagnostics.Recover(ctx, "system")
 			select {
 			case partSem <- struct{}{}:
 			case <-ctx.Done():
@@ -444,13 +454,13 @@ func (s *scan) publish(it *core.Item, o pubOpts) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer diagnostics.Recover(s.ctx, "system")
 		select {
 		case s.sizeSem <- struct{}{}:
 		case <-s.ctx.Done():
 			return
 		}
-		st := s.measure(measure)
-		<-s.sizeSem
+		st := func() fsx.Stats { defer func() { <-s.sizeSem }(); return s.measure(measure) }()
 		if s.ctx.Err() != nil {
 			return
 		}

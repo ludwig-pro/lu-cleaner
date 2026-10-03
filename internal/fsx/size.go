@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 
 	"golang.org/x/sys/unix"
@@ -117,9 +118,10 @@ func (f *cloneFamily) reclaim() int64 {
 }
 
 type walker struct {
-	ctx context.Context
-	opt Options
-	dev int32
+	group *diagnostics.Group
+	ctx   context.Context
+	opt   Options
+	dev   int32
 
 	bytes, apparent, reclaim, files, dirs, errs atomic.Int64
 	newest                                      atomic.Int64
@@ -140,6 +142,7 @@ var ErrNotExist = os.ErrNotExist
 // opt.CrossDevice. The walk stops early (returning partial stats and
 // ctx.Err()) when ctx is cancelled.
 func Size(ctx context.Context, path string, opt *Options) (st Stats, err error) {
+	defer func() { diagnostics.Fail(ctx, err) }()
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
 	}
@@ -153,6 +156,8 @@ func Size(ctx context.Context, path string, opt *Options) (st Stats, err error) 
 // size walks path (the trace and the counters only see real walks, not
 // cache hits).
 func size(ctx context.Context, path string, opt *Options) (res Stats, err error) {
+	ctx, group := diagnostics.NewGroup(ctx, "fsx")
+	defer group.Close()
 	if traceOn {
 		start := time.Now()
 		defer func() { Trace("walk", path, start, fmt.Sprintf("%d files %s", res.Files, Bytes(res.Bytes))) }()
@@ -175,7 +180,7 @@ func size(ctx context.Context, path string, opt *Options) (res Stats, err error)
 		}
 		return Stats{}, &os.PathError{Op: "lstat", Path: path, Err: err}
 	}
-	w := &walker{ctx: ctx, dev: st.Dev, links: map[volKey]*hardlink{}, clones: map[volKey]*cloneFamily{}, spawn: make(chan struct{}, 8)}
+	w := &walker{ctx: ctx, group: group, dev: st.Dev, links: map[volKey]*hardlink{}, clones: map[volKey]*cloneFamily{}, spawn: make(chan struct{}, 8)}
 	if opt != nil {
 		w.opt = *opt
 	}
@@ -189,13 +194,17 @@ func size(ctx context.Context, path string, opt *Options) (res Stats, err error)
 	w.account(&st, sh)
 	if st.Mode&unix.S_IFMT == unix.S_IFDIR {
 		w.dirs.Add(1)
-		w.walk(path)
+		func() { defer group.Recover(); w.walk(path) }()
 		w.wg.Wait()
 	} else {
 		w.files.Add(1)
 	}
 	scanctl.From(ctx).MarkEntries(w.files.Load(), w.dirs.Load())
-	return w.stats(), ctx.Err()
+	res = w.stats()
+	if err = group.Err(); err != nil {
+		res.Errors++
+	}
+	return res, err
 }
 
 func (w *walker) stats() Stats {
@@ -342,6 +351,7 @@ func (w *walker) recurse(subdirs []string) {
 			w.wg.Add(1)
 			go func(p string) {
 				defer func() { <-w.spawn; w.wg.Done() }()
+				defer w.group.Recover()
 				w.walk(p)
 			}(child)
 		default:
@@ -480,7 +490,8 @@ type sizeCache struct {
 	ctx   context.Context // invocation owner, not an individual consumer
 	wg    sync.WaitGroup
 	m     map[string]*cacheEntry
-	store *SizeStore // persistent cache (nil: none)
+	store *SizeStore                                   // persistent cache (nil: none)
+	load  func(context.Context, string) (Stats, error) // optional test loader
 }
 
 type cacheEntry struct {
@@ -544,8 +555,16 @@ func (c *sizeCache) get(ctx context.Context, path string) (Stats, error) {
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			e.st, e.err = c.measure(c.ctx, path)
-			if c.ctx.Err() != nil {
+			e.err = diagnostics.Catch(c.ctx, "fsx", func() error {
+				var err error
+				load := c.load
+				if load == nil {
+					load = c.measure
+				}
+				e.st, err = load(c.ctx, path)
+				return err
+			})
+			if e.err != nil || c.ctx.Err() != nil {
 				// A globally canceled walk is partial. A canceled consumer alone
 				// must not abandon work another consumer is still waiting for.
 				c.mu.Lock()

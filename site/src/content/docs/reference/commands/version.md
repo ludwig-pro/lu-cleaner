@@ -2,7 +2,7 @@
 title: "lu-cleaner version"
 description: "Print the version"
 sidebar:
-  order: 15
+  order: 20
   label: "version"
 ---
 
@@ -37,4 +37,3 @@ lu-cleaner version
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |
-

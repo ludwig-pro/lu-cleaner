@@ -215,7 +215,7 @@ It helps. Items owned by an app (Xcode, Simulator, Cursor, Codex, the ChatGPT ap
 
 ### Does lu-cleaner send data anywhere?
 
-No. lu-cleaner has no telemetry and makes no network requests. It only runs local tools (`git`, `xcrun simctl`, `tmutil`, `lsof`, `sqlite3` in read-only mode…) and, for command items, the tool's own cleanup command, such as `pnpm store prune` or `brew cleanup`.
+Optional [technical error reports](../../guides/diagnostics/) are disabled until explicit consent. They include fixed error codes and lu-cleaner source frames, without personal paths, file contents, raw logs or a permanent user/device identifier. `diagnostics status`, `enable`, `disable` and `export` let you control them. Without consent, lu-cleaner makes no diagnostic network requests. Local tools and cleanup commands can have their own network behavior.
 
 ## Other tools
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/tui"
@@ -91,9 +92,12 @@ func (c *cli) analyzeReport(ctx context.Context, s *setup, root string, top int)
 	})
 	defer sp.stop()
 	var wg sync.WaitGroup
+	ctx, group := diagnostics.NewGroup(ctx, "cli")
+	defer group.Close()
 	jobs := make(chan int)
 	for range min(limits.Prefetch, len(des)) {
 		wg.Go(func() {
+			defer group.Recover()
 			for i := range jobs {
 				if ctx.Err() != nil {
 					return
@@ -118,8 +122,8 @@ queue:
 	close(jobs)
 	wg.Wait()
 	sp.stop()
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := group.Err(); err != nil {
+		return err
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Size > entries[j].Size })
 	sum := total.Load()

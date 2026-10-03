@@ -679,10 +679,10 @@ func TestSafeCleanRecoversPanics(t *testing.T) {
 		progress(clean.Result{Item: its[0], Status: clean.StatusDone})
 		panic("boom")
 	}, context.Background(), items, clean.Options{}, func(r clean.Result) { got = append(got, r) })
-	if len(got) != 2 || got[1].Status != clean.StatusFailed || !strings.Contains(got[1].Error, "boom") {
+	if len(got) != 2 || got[1].Status != clean.StatusFailed || !strings.Contains(got[1].Error, "internal failure") || strings.Contains(got[1].Error, "boom") {
 		t.Fatalf("progress = %+v", got)
 	}
-	if sum == nil || sum.Count(clean.StatusFailed) != 2 {
+	if sum == nil || sum.Count(clean.StatusFailed) != 1 || sum.Count(clean.StatusDone) != 1 || sum.InternalError == nil {
 		t.Fatalf("summary = %+v", sum)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 )
@@ -145,7 +146,7 @@ func loadToolState(ctx context.Context, env *core.Env, home string, wts []*workt
 		wg.Add(1)
 		go func(f func(context.Context, *core.Env, string)) {
 			defer wg.Done()
-			defer func() { _ = recover() }() // tool state is best effort
+			defer diagnostics.Recover(ctx, "worktrees")
 			f(ctx, env, home)
 		}(f)
 	}

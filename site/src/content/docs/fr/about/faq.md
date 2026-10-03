@@ -215,7 +215,7 @@ Cela aide. Les éléments qui appartiennent à une application (Xcode, Simulator
 
 ### lu-cleaner envoie-t-il des données quelque part ?
 
-Non. lu-cleaner n'a pas de télémétrie et ne fait aucune requête réseau. Il n'exécute que des outils locaux (`git`, `xcrun simctl`, `tmutil`, `lsof`, `sqlite3` en lecture seule…) et, pour les éléments de type commande, la commande de nettoyage propre à l'outil, comme `pnpm store prune` ou `brew cleanup`.
+Les [rapports d'erreurs techniques](../../guides/diagnostics/) sont facultatifs et désactivés sans consentement explicite. Ils contiennent des codes fixes et la pile du code de lu-cleaner, sans chemins personnels, contenu de fichiers, logs bruts ni identifiant permanent d'utilisateur ou de machine. Les commandes `diagnostics status`, `enable`, `disable` et `export` permettent de les contrôler. Sans accord, aucune requête de diagnostic. Les outils locaux et leurs commandes de nettoyage peuvent avoir leur propre comportement réseau.
 
 ## Autres outils
 

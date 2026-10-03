@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://ludwig-pro.github.io/lu-cleaner/">Documentation</a> ·
+  <a href="https://ludwig-pro.github.io/lu-cleaner/fr/">Documentation FR</a> ·
+  <a href="https://ludwig-pro.github.io/lu-cleaner/">Documentation EN</a> ·
   <a href="https://ludwig-pro.github.io/lu-cleaner/getting-started/installation/">Install</a> ·
-  <a href="https://ludwig-pro.github.io/lu-cleaner/fr/">Français</a> ·
   <a href="https://ludwig-pro.github.io/lu-cleaner/llms.txt">llms.txt</a>
 </p>
 
@@ -81,11 +81,13 @@ lu-cleaner doctor                           # why is my disk still full?
 lu-cleaner analyze ~                        # ncdu-like explorer
 ```
 
-Full documentation: **https://ludwig-pro.github.io/lu-cleaner/**
+Landing page and full documentation: [Français](https://ludwig-pro.github.io/lu-cleaner/fr/) · [English](https://ludwig-pro.github.io/lu-cleaner/).
 
 Set `scan_mode = "eco"` or `"fast"` in `config.toml` to keep a preferred profile; `--scan-mode` overrides it for one invocation. `lu-cleaner config show` displays the effective limits. `LU_WALKERS=<positive integer>` overrides the shared I/O limit (2 in eco, 8 in fast); invalid values fall back to the profile and are reported with `--verbose`.
 
 `eco` uses macOS background priority and bounded concurrency to prioritise other applications, without fixed pauses after reads. Large scans can still take several minutes, especially when the size cache cannot be validated. `--dry-run` still performs the full scan and safety checks. For resource and cache diagnostics, use `LU_TRACE=1 lu-cleaner scan --dry-run --verbose`; see [resource profiles and cancellation](https://ludwig-pro.github.io/lu-cleaner/reference/configuration/#scan_mode).
+
+Optional technical bug reports are off until explicit consent. Use `lu-cleaner diagnostics status`, `enable`, `disable` or `export`. Reports exclude personal paths, file contents, raw logs and permanent user/device identifiers. The cleaning `--yes` flag never grants consent. A public Sentry DSN must be configured before enabling remote reports; see [technical reports and privacy](https://ludwig-pro.github.io/lu-cleaner/guides/diagnostics/).
 
 ## Safety in one paragraph
 

@@ -105,7 +105,7 @@ func commandPage(cmd *cobra.Command, order int) string {
 	if t := flagTable(cmd.InheritedFlags()); t != "" {
 		b.WriteString("## Global options\n\n" + t + "\n")
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
 func visibleSubs(cmd *cobra.Command) []*cobra.Command {

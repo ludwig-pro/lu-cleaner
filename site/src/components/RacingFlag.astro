@@ -1,0 +1,139 @@
+---
+import { flagPixels, PIXEL_WIDTH, PIXEL_HEIGHT, PIXEL_SCALE } from '../scripts/racing-flag';
+
+const stillFrame = flagPixels(2);
+const fr = Astro.locals.starlightRoute.lang === 'fr';
+---
+
+<lu-racing-flag class="lu-race-art" data-motion="still">
+	<div class="lu-art-label" aria-hidden="true"><span>ZONE / 01</span><span>FULL SPEED AHEAD</span></div>
+	<div class="lu-flag-stage" aria-hidden="true">
+		<svg class="lu-flag-fallback" viewBox={`0 0 ${PIXEL_WIDTH} ${PIXEL_HEIGHT}`} fill="none" shape-rendering="crispEdges">
+			<g transform={`scale(${PIXEL_SCALE})`}><path d="M12 50h6v2h-6zM10 52h2v7h-2zM18 52h2v7h-2zM12 59h6v2h-6zM29 40h6v2h-6zM27 42h2v7h-2zM35 42h2v7h-2zM29 49h6v2h-6z" fill="#e53135" /></g>
+			{stillFrame.map((rect) => <rect x={rect.x} y={rect.y} width={rect.width} height={rect.height} fill={rect.color} />)}
+			<g transform={`scale(${PIXEL_SCALE})`}><path d="M8 101h112v1H8zM12 103h12v2H12zM32 103h12v2H32zM52 103h12v2H52zM72 103h12v2H72zM92 103h12v2H92z" fill="#e53135" /></g>
+		</svg>
+		<canvas class="lu-flag-canvas"></canvas>
+	</div>
+	<div class="lu-art-footer">
+		<div class="lu-art-label" aria-hidden="true"><span>SCAN → SELECT → CLEAN</span><span class="lu-wind-mark">&gt;&gt;</span></div>
+		<button class="lu-motion-toggle" type="button" aria-pressed="false" aria-label={fr ? 'Mettre l’animation du drapeau en pause' : 'Pause the flag animation'} data-pause-label={fr ? 'Mettre l’animation du drapeau en pause' : 'Pause the flag animation'} data-play-label={fr ? 'Reprendre l’animation du drapeau' : 'Resume the flag animation'} hidden>
+			<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path class="lu-pause-icon" d="M4 3h3v10H4zM9 3h3v10H9z" /><path class="lu-play-icon" d="m5 2 8 6-8 6z" /></svg>
+		</button>
+	</div>
+</lu-racing-flag>
+
+<script>
+	import { createFlagRenderer } from '../scripts/racing-flag';
+
+	class RacingFlag extends HTMLElement {
+		private dispose?: () => void;
+
+		connectedCallback() {
+			if (this.dispose) return;
+			const canvas = this.querySelector('canvas')!;
+			const stage = this.querySelector<HTMLElement>('.lu-flag-stage')!;
+			const button = this.querySelector<HTMLButtonElement>('button')!;
+			const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+			const events = new AbortController();
+			const options = { signal: events.signal };
+			let renderer: ReturnType<typeof createFlagRenderer> = null;
+			let visible = false;
+			let paused = false;
+			let suspended = false;
+			let failed = false;
+			let frame = 0;
+			let previous = 0;
+			let seconds = 0;
+			let windX = 0;
+			let windY = 0;
+			let targetX = 0;
+			let targetY = 0;
+			let bounds: DOMRect | undefined;
+
+			const tick = (now: number) => {
+				// Deliberate 24 fps sprite animation, including on high refresh rate displays.
+				const elapsed = now - previous;
+				if (!previous || elapsed >= 1000 / 24 - 1) {
+					const dt = previous ? Math.min(elapsed / 1000, 0.1) : 1 / 24;
+					previous = now;
+					seconds += dt;
+					const ease = 1 - Math.exp(-dt * 5);
+					windX += (targetX - windX) * ease;
+					windY += (targetY - windY) * ease;
+					renderer?.draw(seconds, windX, windY);
+				}
+				frame = requestAnimationFrame(tick);
+			};
+			const sync = () => {
+				cancelAnimationFrame(frame);
+				frame = 0;
+				previous = 0;
+				if (!renderer && visible && !reduced.matches && !failed && !document.hidden && !suspended) {
+					renderer = createFlagRenderer(canvas);
+					failed = !renderer;
+					renderer?.draw(seconds, windX, windY);
+				}
+				const available = !!renderer && !reduced.matches && !failed;
+				const running = available && visible && !paused && !document.hidden && !suspended;
+				this.dataset.motion = running ? 'running' : available ? 'paused' : 'still';
+				button.hidden = !available;
+				button.setAttribute('aria-pressed', String(paused));
+				button.setAttribute('aria-label', (paused ? button.dataset.playLabel : button.dataset.pauseLabel)!);
+				if (running) frame = requestAnimationFrame(tick);
+			};
+			const observer = new IntersectionObserver(([entry]) => {
+				visible = entry.isIntersecting;
+				sync();
+			}, { threshold: 0.1 });
+			observer.observe(this);
+			button.addEventListener('click', () => { paused = !paused; sync(); }, options);
+			stage.addEventListener('pointerenter', () => { bounds = stage.getBoundingClientRect(); }, options);
+			stage.addEventListener('pointermove', (event) => {
+				if (event.pointerType !== 'mouse' || !bounds || reduced.matches) return;
+				targetX = Math.max(-1, Math.min(1, (event.clientX - bounds.left) / bounds.width * 2 - 1));
+				targetY = Math.max(-1, Math.min(1, (event.clientY - bounds.top) / bounds.height * 2 - 1));
+			}, options);
+			stage.addEventListener('pointerleave', () => { targetX = 0; targetY = 0; }, options);
+			reduced.addEventListener('change', sync, options);
+			document.addEventListener('visibilitychange', sync, options);
+			window.addEventListener('pagehide', () => { suspended = true; sync(); }, options);
+			window.addEventListener('pageshow', () => { suspended = false; sync(); }, options);
+			canvas.addEventListener('contextlost', () => { failed = true; sync(); }, options);
+			this.dispose = () => {
+				cancelAnimationFrame(frame);
+				observer.disconnect();
+				events.abort();
+				renderer?.destroy();
+				this.dataset.motion = 'still';
+			};
+		}
+
+		disconnectedCallback() { this.dispose?.(); this.dispose = undefined; }
+	}
+	if (!customElements.get('lu-racing-flag')) customElements.define('lu-racing-flag', RacingFlag);
+</script>
+
+<style>
+	lu-racing-flag { display: block; position: relative; }
+	.lu-flag-stage { position: relative; width: 100%; aspect-ratio: 128 / 112; isolation: isolate; }
+	.lu-flag-stage > svg, .lu-flag-stage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+	.lu-flag-canvas { opacity: 0; image-rendering: pixelated; }
+	[data-motion='running'] .lu-flag-canvas, [data-motion='paused'] .lu-flag-canvas { opacity: 1; }
+	[data-motion='running'] .lu-flag-fallback, [data-motion='paused'] .lu-flag-fallback { visibility: hidden; }
+	.lu-art-footer { display: flex; align-items: center; justify-content: space-between; min-height: 2.75rem; gap: 1rem; }
+	.lu-art-footer .lu-art-label { flex: 1; }
+	.lu-wind-mark { display: inline-block; color: var(--lu-red); font-weight: 700; letter-spacing: -.15em; }
+	.lu-motion-toggle { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; color: var(--lu-red); background: #fff; border: 1px solid var(--lu-red); box-shadow: 3px 3px 0 #ffd8d0; border-radius: 0; cursor: pointer; }
+	.lu-motion-toggle[hidden] { display: none; }
+	.lu-motion-toggle:hover { background: #fff0ed; }
+	.lu-motion-toggle:active { box-shadow: none; transform: translate(2px, 2px); }
+	.lu-play-icon { display: none; }
+	[aria-pressed='true'] .lu-play-icon { display: block; }
+	[aria-pressed='true'] .lu-pause-icon { display: none; }
+	@media (prefers-reduced-motion: no-preference) {
+		.lu-flag-stage { animation: flag-arrive 480ms steps(8, end) both; }
+	}
+	@media (max-width: 49.99rem) { .lu-flag-stage { max-width: 21.25rem; margin-inline: auto; } }
+	@keyframes flag-arrive { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+</style>

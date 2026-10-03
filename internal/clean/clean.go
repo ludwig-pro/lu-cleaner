@@ -4,7 +4,6 @@ package clean
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/safety"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
@@ -56,6 +56,7 @@ type Options struct {
 	Home     string
 	// NoHistory disables writing the history file.
 	NoHistory bool
+	onPanic   func(error)
 }
 
 // Messages of skips (Trash mode, gone targets, items requiring --force).
@@ -105,7 +106,10 @@ type Result struct {
 
 // Summary of a run.
 type Summary struct {
-	Results []Result `json:"results"`
+	// Local diagnostics are deliberately excluded from the public JSON schema.
+	HistoryError  error    `json:"-"`
+	InternalError error    `json:"-"`
+	Results       []Result `json:"results"`
 	// Estimated is the space really freed (done items, plus what partial
 	// failures freed). Moves to the Trash are never counted: see Trashed.
 	Estimated  int64         `json:"estimated_freed"`
@@ -136,6 +140,9 @@ func (s *Summary) Count(st Status) int {
 // worktree removals run sequentially. progress (optional) is called after
 // each item, possibly from several goroutines (calls are serialized).
 func Run(ctx context.Context, items []*core.Item, opt Options, progress func(Result)) *Summary {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	opt.onPanic = cancel
 	start := time.Now()
 	if opt.Parallel <= 0 {
 		opt.Parallel = 4
@@ -163,11 +170,18 @@ func Run(ctx context.Context, items []*core.Item, opt Options, progress func(Res
 			sum.Estimated += r.Freed // freed before the failure
 		}
 		if progress != nil {
-			progress(r)
+			if err := diagnostics.Catch(ctx, "clean", func() error { progress(r); return nil }); err != nil {
+				cancel(err)
+			}
 		}
 	}
 	cancelled := func(it *core.Item) Result {
-		return Result{Item: it, Method: it.Method, Status: StatusSkipped, Message: "cancelled"}
+		message := "cancelled"
+		var fault *diagnostics.Fault
+		if errors.As(context.Cause(ctx), &fault) {
+			message = "stopped after an internal failure; rescan before retrying"
+		}
+		return Result{Item: it, Method: it.Method, Status: StatusSkipped, Message: message}
 	}
 
 	var parallel, serial []*core.Item
@@ -186,8 +200,18 @@ func Run(ctx context.Context, items []*core.Item, opt Options, progress func(Res
 			report(cancelled(it))
 			continue
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			report(cancelled(it))
+			continue
+		}
+		if ctx.Err() != nil {
+			<-sem
+			report(cancelled(it))
+			continue
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(it *core.Item) {
 			defer func() { <-sem; wg.Done() }()
 			report(runOne(ctx, it, opt, nil))
@@ -229,8 +253,15 @@ func Run(ctx context.Context, items []*core.Item, opt Options, progress func(Res
 	sum.DiskAfter, _ = sysx.DiskOf(opt.Home)
 	sum.Measured = sum.DiskAfter.Free - sum.DiskBefore.Free
 	sum.Took = time.Since(start)
+	var fault *diagnostics.Fault
+	if errors.As(context.Cause(ctx), &fault) {
+		sum.InternalError = fault
+	}
 	if !opt.DryRun && !opt.NoHistory {
-		_ = appendHistory(sum)
+		sum.HistoryError = appendHistory(sum)
+		if sum.HistoryError != nil {
+			diagnostics.Report(ctx, "history", "history_write_failed")
+		}
 	}
 	return sum
 }
@@ -338,6 +369,16 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 	start := time.Now()
 	res = Result{Item: it, Method: it.Method}
 	defer func() { res.Took = time.Since(start) }()
+	defer func() {
+		if recover() != nil {
+			fault := diagnostics.NewFault("clean")
+			res.Status, res.Error = StatusFailed, fault.Error()
+			diagnostics.Capture(ctx, fault)
+			if opt.onPanic != nil {
+				opt.onPanic(fault)
+			}
+		}
+	}()
 	skip := func(format string, a ...any) Result {
 		res.Status = StatusSkipped
 		res.Message = fmt.Sprintf(format, a...)
@@ -346,7 +387,13 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 	fail := func(err error) Result {
 		res.Status = StatusFailed
 		res.Error = err.Error()
+		if ctx.Err() == nil {
+			diagnostics.Report(ctx, "clean", "cleanup_failed")
+		}
 		return res
+	}
+	if ctx.Err() != nil {
+		return skip("cancelled")
 	}
 	if removed == nil {
 		removed = func(string) bool { return false }
@@ -469,6 +516,9 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 		}
 	}
 
+	if ctx.Err() != nil {
+		return skip("cancelled")
+	}
 	if opt.DryRun {
 		res.Status = StatusDryRun
 		res.Message = describe(it, method, wt)
@@ -484,6 +534,10 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 	case core.MethodDelete:
 		var errs []string
 		for _, p := range targets {
+			if ctx.Err() != nil {
+				errs = append(errs, "cancelled")
+				break
+			}
 			if e := RemoveAll(p); e != nil {
 				errs = append(errs, e.Error())
 			}
@@ -495,6 +549,10 @@ func runOne(ctx context.Context, it *core.Item, opt Options, removed func(string
 	case core.MethodTrash:
 		var moved []string
 		for _, p := range targets {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				break
+			}
 			dst, e := MoveToTrash(opt.Home, p)
 			if e != nil {
 				err = e
@@ -818,55 +876,6 @@ func historyEntry(now time.Time, r Result) HistoryEntry {
 		e.Paths = append([]string(nil), it.Paths[:min(len(it.Paths), maxHistoryPaths)]...)
 	}
 	return e
-}
-
-func appendHistory(s *Summary) error {
-	if err := os.MkdirAll(config.StateDir(), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(HistoryPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	now := time.Now()
-	for _, r := range s.Results {
-		if r.Item == nil || (r.Status == StatusSkipped && r.Message == msgGone) {
-			continue
-		}
-		_ = enc.Encode(historyEntry(now, r))
-	}
-	return nil
-}
-
-// ReadHistory returns all history entries (oldest first).
-func ReadHistory() ([]HistoryEntry, error) {
-	data, err := os.ReadFile(HistoryPath())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []HistoryEntry
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var e HistoryEntry
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue
-		}
-		var has struct {
-			Freed *int64 `json:"freed"`
-		}
-		if json.Unmarshal([]byte(line), &has) == nil && has.Freed == nil {
-			e.Freed = legacyFreed(e)
-		}
-		out = append(out, e)
-	}
-	return out, nil
 }
 
 // legacyFreed estimates Freed for a history line written before the field

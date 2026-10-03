@@ -2,7 +2,7 @@
 title: "lu-cleaner scan"
 description: "Report what takes space, grouped by category (non-interactive)"
 sidebar:
-  order: 14
+  order: 19
   label: "scan"
 ---
 
@@ -56,4 +56,3 @@ lu-cleaner scan --json | jq '.totals'
 | `--trash` |  |  | move files and folders to ~/.Trash instead of deleting them (space is freed only once the Trash is emptied); worktrees and commands are skipped. --trash=false overrides use_trash |
 | `-v`, `--verbose` |  |  | debug logging on stderr |
 | `-y`, `--yes` |  |  | clean without the interactive picker |
-

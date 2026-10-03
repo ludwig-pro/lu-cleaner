@@ -13,6 +13,9 @@ func (c *cli) startScan(ctx context.Context, s *setup) (context.Context, error) 
 		return nil, err
 	}
 	if c.scanCtl == nil {
+		if c.diag != nil {
+			c.diag.SetMode(string(s.limits.Mode))
+		}
 		if c.ActivateScan != nil {
 			restore, err := c.ActivateScan(s.limits)
 			c.restoreScan = restore

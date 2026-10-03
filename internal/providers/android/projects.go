@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
@@ -116,9 +117,11 @@ func (s *scan) scanProjects() *projectInfo {
 	}
 	ctx := s.ctx
 	w := &projectWalker{s: s, pi: pi, ctx: ctx, maxDepth: maxDepth, sem: make(chan struct{}, 8)}
+	defer w.wg.Wait()
+	defer diagnostics.Recover(ctx, "android")
 	for _, r := range roots {
 		w.wg.Add(1)
-		go func(r string) { defer w.wg.Done(); w.walk(r, 0) }(r)
+		go func(r string) { defer w.wg.Done(); defer diagnostics.Recover(w.ctx, "android"); w.walk(r, 0) }(r)
 	}
 	w.wg.Wait()
 	pi.complete = !w.truncated.Load() && ctx.Err() == nil
@@ -187,6 +190,7 @@ func (w *projectWalker) walk(dir string, depth int) {
 			w.wg.Add(1)
 			go func() {
 				defer func() { <-w.sem; w.wg.Done() }()
+				defer diagnostics.Recover(w.ctx, "android")
 				w.walk(child, depth+1)
 			}()
 		default:

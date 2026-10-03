@@ -3,13 +3,14 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"golang.org/x/sys/unix"
@@ -51,8 +52,8 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 			var err error
 			func() {
 				defer func() {
-					if r := recover(); r != nil {
-						err = fmt.Errorf("panic in provider %s: %v\n%s", p.ID(), r, debug.Stack())
+					if recover() != nil {
+						err = diagnostics.NewFault(p.ID())
 					}
 				}()
 				err = p.Scan(ctx, env, func(it *core.Item) {
@@ -71,6 +72,13 @@ func Run(ctx context.Context, env *core.Env, providers []core.Provider) <-chan E
 					}
 				})
 			}()
+			diagnostics.Capture(ctx, err)
+			if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, os.ErrPermission) && !errors.Is(err, os.ErrNotExist) {
+				var fault *diagnostics.Fault
+				if !errors.As(err, &fault) {
+					diagnostics.Report(ctx, p.ID(), "scan_failed")
+				}
+			}
 			select {
 			case ch <- Event{Provider: p.ID(), Done: true, Err: err, Took: time.Since(start)}:
 			case <-ctx.Done():

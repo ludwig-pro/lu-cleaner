@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 )
 
@@ -40,6 +41,7 @@ type cli struct {
 	scanModeSet bool
 	scanCtl     *scanctl.Controller
 	restoreScan func() error
+	diag        *diagnostics.Session
 	out         *output
 	errw        *statusWriter
 }
@@ -83,6 +85,17 @@ func (c *cli) rootCmd() *cobra.Command {
 			c.trashSet = cmd.Flags().Changed("trash")
 			c.scanModeSet = cmd.Flags().Changed("scan-mode")
 			c.out = newOutput(c.App, c.noColor())
+			if c.Diagnostics != nil {
+				name := cmd.Name()
+				if cmd.Parent() != nil && cmd.Parent().Name() != "lu-cleaner" {
+					name = cmd.Parent().Name()
+				}
+				switch name {
+				case "lu-cleaner", "scan", "clean", "artifacts", "worktrees", "devices", "analyze", "doctor":
+					c.diag = diagnostics.NewSession(c.Diagnostics(), c.Version, name, nil)
+					cmd.SetContext(diagnostics.With(cmd.Context(), c.diag))
+				}
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -123,7 +136,7 @@ func (c *cli) rootCmd() *cobra.Command {
 	}
 	add("clean", c.cleanCmd(), c.artifactsCmd(), c.worktreesCmd(), c.devicesCmd())
 	add("inspect", c.scanCmd(), c.analyzeCmd(), c.doctorCmd(), c.historyCmd(), c.catalogCmd())
-	add("setup", c.configCmd(), c.versionCmd())
+	add("setup", c.configCmd(), c.versionCmd(), c.diagnosticsCmd())
 	root.AddCommand(c.genDocsCmd(root))
 	root.SetHelpCommandGroupID("setup")
 	return root

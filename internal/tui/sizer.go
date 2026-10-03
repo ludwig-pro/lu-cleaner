@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
@@ -105,7 +106,15 @@ func (p *sizePool) worker() {
 		p.stack = p.stack[:len(p.stack)-1]
 		p.mu.Unlock()
 
-		st, err := p.sizeFn(p.ctx, path)
+		var st fsx.Stats
+		err := diagnostics.Catch(p.ctx, "tui", func() error {
+			var err error
+			st, err = p.sizeFn(p.ctx, path)
+			return err
+		})
+		if err != nil && st.Errors == 0 {
+			st.Errors = 1
+		}
 		select {
 		case p.out <- sizeResult{path: path, st: st, err: err}:
 		case <-p.ctx.Done():

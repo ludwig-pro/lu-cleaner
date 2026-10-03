@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"syscall"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/config"
 	"github.com/ludwig-pro/lu-cleaner/internal/core"
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers"
 	"github.com/ludwig-pro/lu-cleaner/internal/providers/catalog"
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
@@ -67,7 +69,13 @@ type App struct {
 	// ActivateScan applies process priorities only when a scan starts. Its
 	// restore function runs once when this invocation returns.
 	ActivateScan func(scanctl.Limits) (func() error, error)
+	// Nil in test harnesses; normal execution uses private, per-user state.
+	Diagnostics func() diagnostics.Store
 }
+
+// DefaultDiagnosticsDSN may be set at build time to a public Sentry DSN.
+// Empty builds remain fully functional and never send reports.
+var DefaultDiagnosticsDSN string
 
 // NewApp returns an App wired to the real system.
 func NewApp(version string) *App {
@@ -93,6 +101,13 @@ func NewApp(version string) *App {
 		Running:      sysx.RunningContext,
 		History:      clean.ReadHistory,
 		ActivateScan: scanctl.Activate,
+		Diagnostics: func() diagnostics.Store {
+			dsn := os.Getenv("LU_DIAGNOSTICS_DSN")
+			if dsn == "" {
+				dsn = DefaultDiagnosticsDSN
+			}
+			return diagnostics.Store{Dir: filepath.Join(config.StateDir(), "diagnostics"), DSN: dsn}
+		},
 	}
 }
 
@@ -132,11 +147,24 @@ func runWithSignals(fn func(context.Context) int) int {
 }
 
 // Run executes the command line args and returns the exit code.
-func (a *App) Run(ctx context.Context, args []string) int {
+func (a *App) Run(ctx context.Context, args []string) (code int) {
+	ctx, cancel := context.WithCancel(ctx)
 	c := newCLI(a)
 	defer func() {
+		if recover() != nil {
+			fault := diagnostics.NewFault("cli")
+			if c.diag != nil {
+				c.diag.Capture(fault)
+			}
+			fmt.Fprintln(a.Stderr, "lu-cleaner:", fault.Error())
+			code = ExitFailure
+		}
+		cancel()
 		if err := c.finishScan(); err != nil {
 			fmt.Fprintf(a.Stderr, "warning: restore scan priorities: %s\n", sanitizeLines(err.Error(), "  "))
+		}
+		if c.diag != nil {
+			c.diag.Close()
 		}
 	}()
 	root := c.rootCmd()
@@ -145,6 +173,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	root.SetOut(a.Stdout)
 	root.SetErr(a.Stderr)
 	cmd, err := root.ExecuteContextC(ctx)
+	if c.diag != nil {
+		c.diag.Capture(err)
+	}
 	if err == nil {
 		return ExitOK
 	}

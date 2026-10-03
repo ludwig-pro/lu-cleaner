@@ -56,12 +56,13 @@ func (c *cli) runPicker(ctx context.Context, spec pickerSpec) error {
 		Clean:      s.clean,
 	})
 	if sum != nil && len(sum.Results) > 0 {
+		c.cleanWarnings(sum)
 		c.printCleanSummary(s.env, sum) // what was done, even when interrupted
 	}
 	if err != nil {
 		return err
 	}
-	if sum != nil && sum.Count(clean.StatusFailed) > 0 {
+	if sum != nil && (sum.InternalError != nil || sum.Count(clean.StatusFailed) > 0) {
 		return silentFailure()
 	}
 	return nil

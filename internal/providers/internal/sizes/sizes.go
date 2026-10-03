@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
 	"github.com/ludwig-pro/lu-cleaner/internal/fsx"
 )
 
@@ -80,6 +81,7 @@ func (p *Prefetcher) stop() {
 
 func (p *Prefetcher) work() {
 	defer p.wg.Done()
+	defer diagnostics.Recover(p.ctx, "fsx")
 	for {
 		p.mu.Lock()
 		for len(p.queue) == 0 && !p.closed && p.ctx.Err() == nil {
