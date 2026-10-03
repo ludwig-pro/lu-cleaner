@@ -23,6 +23,12 @@ export default defineConfig({
 			editLink: { baseUrl: `${repo}/edit/main/site/` },
 			lastUpdated: true,
 			customCss: ['./src/styles/custom.css'],
+			components: {
+				Header: './src/components/Header.astro',
+				Hero: './src/components/Hero.astro',
+				ThemeProvider: './src/components/ThemeProvider.astro',
+				ThemeSelect: './src/components/ThemeSelect.astro',
+			},
 			defaultLocale: 'root',
 			locales: {
 				root: { label: 'English', lang: 'en' },
