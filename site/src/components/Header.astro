@@ -1,0 +1,17 @@
+---
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import Search from '@astrojs/starlight/components/Search.astro';
+import LanguageSelect from '@astrojs/starlight/components/LanguageSelect.astro';
+
+const fr = Astro.locals.starlightRoute.lang === 'fr';
+const root = `${import.meta.env.BASE_URL}${fr ? 'fr/' : ''}`;
+---
+
+<div class="lu-header">
+	<div class="lu-brand"><SiteTitle /><span class="lu-docs-label">DOCS</span></div>
+	<nav class="lu-header-links" aria-label={fr ? 'Navigation principale' : 'Main navigation'}>
+		<a href={`${root}getting-started/installation/`}>{fr ? 'Démarrer' : 'Get started'} <span aria-hidden="true">↗</span></a>
+		<a href="https://github.com/ludwig-pro/lu-cleaner">GitHub <span aria-hidden="true">↗</span></a>
+	</nav>
+	<div class="lu-header-tools"><Search /><div class="lu-language"><LanguageSelect /></div></div>
+</div>

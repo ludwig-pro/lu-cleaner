@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://ludwig-pro.github.io/lu-cleaner/">Documentation</a> ·
+  <a href="https://ludwig-pro.github.io/lu-cleaner/fr/">Documentation FR</a> ·
+  <a href="https://ludwig-pro.github.io/lu-cleaner/">Documentation EN</a> ·
   <a href="https://ludwig-pro.github.io/lu-cleaner/getting-started/installation/">Install</a> ·
-  <a href="https://ludwig-pro.github.io/lu-cleaner/fr/">Français</a> ·
   <a href="https://ludwig-pro.github.io/lu-cleaner/llms.txt">llms.txt</a>
 </p>
 
@@ -81,7 +81,7 @@ lu-cleaner doctor                           # why is my disk still full?
 lu-cleaner analyze ~                        # ncdu-like explorer
 ```
 
-Full documentation: **https://ludwig-pro.github.io/lu-cleaner/**
+Landing page and full documentation: [Français](https://ludwig-pro.github.io/lu-cleaner/fr/) · [English](https://ludwig-pro.github.io/lu-cleaner/).
 
 Set `scan_mode = "eco"` or `"fast"` in `config.toml` to keep a preferred profile; `--scan-mode` overrides it for one invocation. `lu-cleaner config show` displays the effective limits. `LU_WALKERS=<positive integer>` overrides the shared I/O limit (2 in eco, 8 in fast); invalid values fall back to the profile and are reported with `--verbose`.
 

@@ -1,0 +1,26 @@
+---
+import RacingFlag from './RacingFlag.astro';
+
+const { lang, entry } = Astro.locals.starlightRoute;
+const fr = lang === 'fr';
+const root = `${import.meta.env.BASE_URL}${fr ? 'fr/' : ''}`;
+---
+
+<section class="lu-hero" aria-labelledby="_top">
+	<div class="lu-hero-copy">
+		<p class="lu-eyebrow"><span class="lu-status-dot" aria-hidden="true"></span> {fr ? 'LE STAND DE VOTRE MAC' : 'THE PIT STOP FOR YOUR MAC'}</p>
+		<h1 id="_top" data-page-title>{fr ? 'Moins de poids.' : 'Less clutter.'}<br /><span>{fr ? 'Plus d’élan.' : 'More momentum.'}</span></h1>
+		<p class="lu-hero-description">{entry.data.hero?.tagline}</p>
+		<div class="lu-hero-actions">
+			<a class="lu-button" href={`${root}getting-started/installation/`}>{fr ? 'Prendre le départ' : 'Get on track'} <span aria-hidden="true">↗</span></a>
+			<a class="lu-text-link" href="#demo">{fr ? 'Voir en action' : 'See it in action'} <span aria-hidden="true">↓</span></a>
+		</div>
+		<p class="lu-hero-note">macOS <span aria-hidden="true">/</span> Open source <span aria-hidden="true">/</span> {fr ? 'Vous gardez le contrôle.' : 'You stay in control.'}</p>
+	</div>
+	<RacingFlag />
+</section>
+
+<div class="lu-track-strip" aria-label={fr ? 'Écosystèmes pris en charge' : 'Supported ecosystems'}>
+	<span class="lu-track-intro">{fr ? 'FAIT POUR VOTRE STACK' : 'BUILT FOR YOUR STACK'} <span aria-hidden="true">↗</span></span>
+	<span>Git worktrees</span><span>React Native</span><span>iOS / Android</span><span>AI agents</span>
+</div>

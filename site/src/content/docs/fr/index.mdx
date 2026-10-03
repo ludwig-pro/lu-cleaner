@@ -3,33 +3,27 @@ title: lu-cleaner
 description: Libérez de l'espace disque sur un Mac de développeur — worktrees d'agents IA, node_modules, Pods, builds iOS/Android, simulateurs, émulateurs, caches des gestionnaires de paquets et données des outils IA.
 template: splash
 hero:
-  tagline: Le nettoyeur de disque des développeurs React Native, iOS et Android qui travaillent avec des agents de code IA. Il trouve les gigaoctets que CleanMyMac, mole et npkill ratent — et les supprime en toute sécurité.
-  image:
-    file: ../../../assets/logo.svg
-  actions:
-    - text: Commencer
-      link: /lu-cleaner/fr/getting-started/installation/
-      icon: right-arrow
-    - text: Pourquoi mon disque est-il plein ?
-      link: /lu-cleaner/fr/guides/disk-space-not-freed/
-      variant: minimal
-    - text: Voir sur GitHub
-      link: https://github.com/ludwig-pro/lu-cleaner
-      icon: external
-      variant: minimal
+  tagline: Libérez l’espace occupé par vos worktrees, dépendances et builds. Un outil précis pour les développeurs qui avancent vite — sans laisser leur Mac derrière.
+
 ---
 
 import { Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
-<figure style={{ margin: '0 0 1.5rem' }}>
-	<video autoplay loop muted playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau et rien n'est sélectionné, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, la touche a lance la sélection intelligente des artefacts de projet recommandés et espace en ajoute un à la main, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }}>
+<figure className="lu-demo" id="demo">
+	<div className="lu-demo-heading">
+		<p className="lu-section-label">[ DÉMO ] LE TABLEAU DE BORD</p>
+		<p className="lu-demo-hint">Analysez. Choisissez. Respirez.</p>
+	</div>
+	<div className="lu-demo-frame">
+	<video preload="none" playsinline controls poster="/lu-cleaner/demos/dashboard.jpg" width="1200" height="720" aria-label="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau et rien n'est sélectionné, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, la touche a lance la sélection intelligente des artefacts de projet recommandés et espace en ajoute un à la main, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." style={{ display: 'block', width: '100%', height: 'auto' }}>
 		<source src="/lu-cleaner/demos/dashboard.mp4" type="video/mp4" />
 		<img src="/lu-cleaner/demos/dashboard.gif" alt="Démonstration du tableau de bord de lu-cleaner : l'analyse s'affiche au fil de l'eau et rien n'est sélectionné, la catégorie Worktrees montre le détail de chaque worktree d'agent IA, la touche a lance la sélection intelligente des artefacts de projet recommandés et espace en ajoute un à la main, la fenêtre de confirmation liste ce qui sera nettoyé et le récapitulatif affiche l'espace libéré." width="1200" height="720" />
 	</video>
-	<figcaption style={{ marginTop: '0.4rem', fontSize: 'var(--sl-text-sm)', color: 'var(--sl-color-gray-3)', textAlign: 'center' }}><code>lu-cleaner</code> sur un dossier personnel de démonstration : analyse, worktrees d'agents IA, artefacts de projets, confirmation, récapitulatif. Les données sont fictives, d'où des tailles en Mo ; sur une vraie machine, comptez en Go.</figcaption>
+	</div>
+	<figcaption><code>lu-cleaner</code> sur un dossier personnel de démonstration : analyse, worktrees d'agents IA, artefacts de projets, confirmation, récapitulatif. Les données sont fictives, d'où des tailles en Mo ; sur une vraie machine, comptez en Go.</figcaption>
 </figure>
 
-## Pourquoi un nouveau nettoyeur ?
+## Votre stack avance. Le ménage aussi.
 
 Les agents de code IA ont changé ce qui remplit le disque d'un développeur. Chaque tâche Codex, Cursor, Conductor ou Claude Code peut créer une **worktree git** avec ses propres `node_modules`, `ios/Pods` et builds Android. Les simulateurs accumulent en silence des gigaoctets d'enregistrements de tests UI. Les gestionnaires de paquets gardent plusieurs caches globaux et versions de Node. Les nettoyeurs généralistes ne connaissent pas ces emplacements, ou les évitent volontairement.
 
@@ -49,14 +43,14 @@ lu-cleaner les connaît — et sait lesquels peuvent être supprimés sans risqu
 		Chaque chemin est revérifié juste avant la suppression : identifiants et configurations protégés, identité d'inode, applications ouvertes, bases de données ouvertes, processus qui travaillent dedans, travail non commité. Dry-run partout.
 	</Card>
 	<Card title="Rapide" icon="rocket">
-		Écrit en Go. Utilise l'appel macOS `getattrlistbulk` pour lire un dossier entier en un seul appel système — environ 3× plus rapide que `du` — et affiche les résultats au fil de l'eau.
+		Écrit en Go, avec des lectures natives macOS et des résultats au fil de l’eau. Le mode `eco` limite la charge par défaut ; `--scan-mode fast` permet d’accélérer lorsque votre Mac est disponible.
 	</Card>
 	<Card title="Scriptable et compatible LLM" icon="document">
 		`--json` partout, règles strictes pour `--yes` en mode non interactif, et cette documentation est disponible en [llms.txt](/lu-cleaner/llms.txt) pour votre assistant de code.
 	</Card>
 </CardGrid>
 
-## Essayez en 30 secondes
+## À vous de prendre le volant.
 
 <Tabs>
 	<TabItem label="Interactif">
@@ -79,11 +73,11 @@ lu-cleaner les connaît — et sait lesquels peuvent être supprimés sans risqu
 		lu-cleaner clean --yes --smart --dry-run   # le plan, rien n'est supprimé
 		lu-cleaner clean --yes --smart             # nettoie les éléments recommandés
 		```
-		<img src="/lu-cleaner/demos/scan.gif" alt="Démonstration de lu-cleaner scan --summary puis de lu-cleaner clean --yes --smart --dry-run, qui affiche le plan sans rien supprimer." loading="lazy" width="1200" height="720" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: '0.6rem' }} />
+		<img src="/lu-cleaner/demos/scan.gif" alt="Démonstration de lu-cleaner scan --summary puis de lu-cleaner clean --yes --smart --dry-run, qui affiche le plan sans rien supprimer." loading="lazy" width="1200" height="720" style={{ display: 'block', width: '100%', height: 'auto' }} />
 	</TabItem>
 </Tabs>
 
-## Pour aller plus loin
+## La bonne trajectoire pour commencer.
 
 <CardGrid>
 	<LinkCard title="Installation" href="/lu-cleaner/fr/getting-started/installation/" description="go install, depuis les sources, alias shell." />
