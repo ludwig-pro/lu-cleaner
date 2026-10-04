@@ -1,11 +1,9 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/clean"
 	"github.com/ludwig-pro/lu-cleaner/internal/diagnostics"
@@ -46,7 +44,7 @@ func (c *cli) diagnosticsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(c.Stderr, "%s\nConfigured recipient: %s\n", diagnostics.Notice, s.Destination())
+		c.printConsentNotice(s.Destination())
 		if s.Destination() == "not configured" {
 			return usageErr("set LU_DIAGNOSTICS_DSN to the maintainer's public HTTPS Sentry DSN first")
 		}
@@ -54,13 +52,14 @@ func (c *cli) diagnosticsCmd() *cobra.Command {
 			if !c.StdinTTY || c.f.json {
 				return usageErr("consent required: use diagnostics enable --accept-notice %s after reading the notice; --yes never gives consent", diagnostics.NoticeVersion)
 			}
-			fmt.Fprint(c.Stderr, "Allow these optional reports? [y/N] ")
-			answer, readErr := bufio.NewReader(c.Stdin).ReadString('\n')
-			if readErr != nil && len(answer) == 0 {
+			var readErr error
+			accept, readErr = c.readConsentAnswer(cmd.Context())
+			if readErr != nil {
 				return readErr
 			}
-			answer = strings.ToLower(strings.TrimSpace(answer))
-			accept = answer == "y" || answer == "yes" || answer == "oui"
+		}
+		if err := cmd.Context().Err(); err != nil {
+			return err
 		}
 		if err := s.Decide(accept); err != nil {
 			return err
@@ -68,7 +67,7 @@ func (c *cli) diagnosticsCmd() *cobra.Command {
 		if c.f.json {
 			return c.writeJSON(map[string]bool{"enabled": accept})
 		}
-		fmt.Fprintf(c.Stdout, "Technical reports enabled: %t\n", accept)
+		c.printConsentResult(accept)
 		return nil
 	}}
 	var notice string
