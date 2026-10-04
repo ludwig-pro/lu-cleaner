@@ -7,6 +7,10 @@ sidebar:
 
 Technical reports are **off by default**. They help the maintainer diagnose internal errors and recovered Go panics. There is no usage analytics, session replay, continuous profiling or permanent user/device identifier. Every feature works without consent.
 
+At the first interactive use of the dashboard, scan, cleanup, analysis or inspection commands, lu-cleaner displays the notice and asks whether to enable these reports before work starts. **Enter means no.** Both agreement and refusal are saved; a refusal is never prompted again automatically. An expired agreement needs renewed consent if the notice or recipient changes. You can change your choice with the commands below.
+
+Automatic questions require stdin, stdout and stderr to be terminals. There is no startup dialogue with redirected streams, `--json` or `--yes`, or for help, version, configuration, history and diagnostics commands. Without a configured public DSN, there is nothing to enable and no question is asked. Ctrl-C cancels the question and command; a missing answer stays undecided. If the preference cannot be read or saved, the command continues with reporting disabled for that run.
+
 ```sh
 lu-cleaner diagnostics status
 lu-cleaner diagnostics enable

@@ -7,6 +7,10 @@ sidebar:
 
 Les rapports techniques sont **désactivés par défaut**. Ils servent à corriger les erreurs internes et les panics Go récupérés. Aucun suivi d'usage, enregistrement de session, profiling continu ou identifiant permanent d'utilisateur ou de machine. Toutes les fonctions restent disponibles sans consentement.
 
+À la première utilisation interactive du dashboard, du scan, du nettoyage, de l'analyse ou des commandes d'inspection, lu-cleaner affiche la notice et demande l'accord avant de commencer. **Entrée signifie non.** L'accord et le refus sont mémorisés ; un refus n'est jamais redemandé automatiquement. Un accord devenu caduc nécessite un nouveau consentement si la notice ou le destinataire change. Les commandes ci-dessous permettent de modifier votre choix.
+
+La question automatique exige que stdin, stdout et stderr soient des terminaux. Aucun dialogue au démarrage avec des flux redirigés, `--json` ou `--yes`, ni pour l'aide, la version, la configuration, l'historique et les commandes de diagnostics. Sans DSN public configuré, il n'y a rien à activer et aucune question n'est posée. Ctrl-C annule la question et la commande ; une absence de réponse reste indécise. Si la préférence ne peut pas être lue ou enregistrée, la commande continue avec l'envoi désactivé pour cette invocation.
+
 ```sh
 lu-cleaner diagnostics status
 lu-cleaner diagnostics enable

@@ -92,7 +92,11 @@ func (c *cli) rootCmd() *cobra.Command {
 				}
 				switch name {
 				case "lu-cleaner", "scan", "clean", "artifacts", "worktrees", "devices", "analyze", "doctor":
-					c.diag = diagnostics.NewSession(c.Diagnostics(), c.Version, name, nil)
+					store, err := c.prepareDiagnosticsConsent(cmd.Context(), c.Diagnostics())
+					if err != nil {
+						return err
+					}
+					c.diag = diagnostics.NewSession(store, c.Version, name, nil)
 					cmd.SetContext(diagnostics.With(cmd.Context(), c.diag))
 				}
 			}

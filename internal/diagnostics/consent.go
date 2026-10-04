@@ -16,28 +16,51 @@ import (
 
 // A changed notice or destination requires a new affirmative decision.
 const NoticeVersion = "2026-10-03.2"
-const Notice = `Optional technical error reports (notice ` + NoticeVersion + `)
-Recipient: the lu-cleaner maintainer, contact@ludwigvantours.dev, through Sentry's
+
+// Notice is the canonical disclosure, grouped for both terminal and plain output.
+// Presentation changes do not change the consent version or its scope.
+const Notice = `Optional technical error reports
+Notice ` + NoticeVersion + `
+
+Purpose
+Diagnose internal failures. No usage analytics or permanent user/device ID.
+
+Recipient
+The lu-cleaner maintainer, contact@ludwigvantours.dev, through Sentry's
 dedicated lu-cleaner project in the ludwig-developer organization.
 The official project stores error events in Sentry's European Union (Germany) region.
-Purpose: diagnose internal failures. No usage analytics or permanent user/device ID.
-Sent: release, OS family, architecture, command name, scan mode, fixed error code,
+
+Sent
+Release, OS family, architecture, command name, scan mode, fixed error code,
 and stack frames limited to lu-cleaner's source (relative filenames and line numbers).
-Never sent: file contents, personal paths, command arguments, logs, environment,
-panic values, names, email, hostname or history. The receiver necessarily sees the IP
+
+Never sent
+File contents, personal paths, command arguments, logs, environment,
+panic values, names, email, hostname or history.
+
+Connection privacy
+The receiver necessarily sees the IP
 address of the HTTPS connection. The official project scrubs IP addresses and derived
 location from events, with additional rules for unsolicited user, request, extra,
 breadcrumb and context fields. This is not a promise of anonymity.
+
+Delivery & retention
 Delivery is best effort, with no offline upload backlog. The latest sanitized report
 expires after 7 days and is removed on the next diagnostics access. The Developer plan
 provides a 30-day lookback for event details. Aggregated issue and release metadata may
 remain longer; this is not a guarantee that all server data is deleted after 30 days.
+
+Custom recipients
 These settings describe the official project. For a custom recipient, verify its
 region, retention and privacy policy before consenting.
+
+Your choice
 You may refuse without losing any feature, and revoke with 'diagnostics disable'.
 Previously received reports require a deletion request to the maintainer:
 contact@ludwigvantours.dev (include the event ID from 'diagnostics export' if available).
-Details: https://ludwig-pro.github.io/lu-cleaner/guides/diagnostics/
+
+Details
+https://ludwig-pro.github.io/lu-cleaner/guides/diagnostics/
 `
 
 type Consent struct {
@@ -89,6 +112,22 @@ func (s Store) Enabled() bool {
 	}
 	c, err := s.Consent()
 	return err == nil && c.Decision == "granted" && c.Notice == NoticeVersion && c.Target == s.target()
+}
+
+// NeedsConsent asks only when reporting is configured and no current agreement
+// exists. A refusal is sticky, including across notice or recipient changes.
+func (s Store) NeedsConsent() (bool, error) {
+	if _, err := parseDSN(s.DSN); err != nil {
+		return false, nil
+	}
+	c, err := s.Consent()
+	if err != nil {
+		return false, err
+	}
+	if c.Decision == "declined" {
+		return false, nil
+	}
+	return c.Decision != "granted" || c.Notice != NoticeVersion || c.Target != s.target(), nil
 }
 
 // Decide records explicit consent independently of the cleaning --yes flag.
