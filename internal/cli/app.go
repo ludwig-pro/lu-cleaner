@@ -68,7 +68,7 @@ type App struct {
 	History   func() ([]clean.HistoryEntry, error)
 	// ActivateScan applies process priorities only when a scan starts. Its
 	// restore function runs once when this invocation returns.
-	ActivateScan func(scanctl.Limits) (func() error, error)
+	ActivateScan func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error)
 	// Nil in test harnesses; normal execution uses private, per-user state.
 	Diagnostics func() diagnostics.Store
 }

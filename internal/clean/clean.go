@@ -792,10 +792,21 @@ func hasSibling(path string, names []string) bool {
 	return false
 }
 
+func runWorktreeRemoval(ctx context.Context, r core.Runner, dir string, req core.WorktreeRemoval) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	out, err := core.OutputWorktreeRemoval(cctx, r, dir, req)
+	return commandResult(out, err, append([]string{"git"}, req.Args()...))
+}
+
 func runCmd(ctx context.Context, r core.Runner, dir string, argv []string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	out, err := r.Output(cctx, dir, argv[0], argv[1:]...)
+	return commandResult(out, err, argv)
+}
+
+func commandResult(out []byte, err error, argv []string) (string, error) {
 	if err != nil {
 		return string(out), fmt.Errorf("%s: %w%s", strings.Join(argv, " "), err, stderrOf(err))
 	}

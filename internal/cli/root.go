@@ -37,13 +37,14 @@ type cli struct {
 	started bool // a command's RunE was reached (errors are runtime errors)
 	// trashSet: --trash was given explicitly (--trash=false then overrides
 	// use_trash from the config).
-	trashSet    bool
-	scanModeSet bool
-	scanCtl     *scanctl.Controller
-	restoreScan func() error
-	diag        *diagnostics.Session
-	out         *output
-	errw        *statusWriter
+	trashSet       bool
+	scanModeSet    bool
+	scanCtl        *scanctl.Controller
+	restoreScan    func() error
+	worktreePermit scanctl.WorktreePermit
+	diag           *diagnostics.Session
+	out            *output
+	errw           *statusWriter
 }
 
 func newCLI(a *App) *cli {
