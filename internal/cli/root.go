@@ -86,8 +86,9 @@ func (c *cli) rootCmd() *cobra.Command {
 			c.trashSet = cmd.Flags().Changed("trash")
 			c.scanModeSet = cmd.Flags().Changed("scan-mode")
 			c.out = newOutput(c.App, c.noColor())
+			var reportingStore *diagnostics.Store
+			name := cmd.Name()
 			if c.Diagnostics != nil {
-				name := cmd.Name()
 				if cmd.Parent() != nil && cmd.Parent().Name() != "lu-cleaner" {
 					name = cmd.Parent().Name()
 				}
@@ -97,9 +98,15 @@ func (c *cli) rootCmd() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					c.diag = diagnostics.NewSession(store, c.Version, name, nil)
-					cmd.SetContext(diagnostics.With(cmd.Context(), c.diag))
+					reportingStore = &store
 				}
+			}
+			if err := c.prepareStartupUpdate(cmd); err != nil {
+				return err
+			}
+			if reportingStore != nil {
+				c.diag = diagnostics.NewSession(*reportingStore, c.Version, name, nil)
+				cmd.SetContext(diagnostics.With(cmd.Context(), c.diag))
 			}
 			return nil
 		},

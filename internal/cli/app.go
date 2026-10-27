@@ -26,6 +26,7 @@ import (
 	"github.com/ludwig-pro/lu-cleaner/internal/scanctl"
 	"github.com/ludwig-pro/lu-cleaner/internal/sysx"
 	"github.com/ludwig-pro/lu-cleaner/internal/tui"
+	"github.com/ludwig-pro/lu-cleaner/internal/update"
 )
 
 // Exit codes.
@@ -70,7 +71,8 @@ type App struct {
 	// restore function runs once when this invocation returns.
 	ActivateScan func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error)
 	// Nil in test harnesses; normal execution uses private, per-user state.
-	Diagnostics func() diagnostics.Store
+	Diagnostics   func() diagnostics.Store
+	StartupUpdate func(context.Context, update.Prompt) error
 }
 
 // DefaultDiagnosticsDSN may be set at build time to a public Sentry DSN.
@@ -79,28 +81,30 @@ var DefaultDiagnosticsDSN string
 
 // NewApp returns an App wired to the real system.
 func NewApp(version string) *App {
+	updater := update.New(update.Options{Version: version, StateDir: filepath.Join(config.StateDir(), "update")})
 	return &App{
-		Version:      version,
-		Stdin:        os.Stdin,
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
-		StdinTTY:     isTerminal(os.Stdin),
-		StdoutTTY:    isTerminal(os.Stdout),
-		StderrTTY:    isTerminal(os.Stderr),
-		Width:        terminalWidth,
-		Getenv:       os.Getenv,
-		LoadConfig:   config.Load,
-		NewEnv:       core.NewEnv,
-		Providers:    providers.All,
-		Catalog:      catalog.Entries,
-		Picker:       tui.RunPicker,
-		Analyze:      tui.RunAnalyze,
-		Clean:        clean.Run,
-		Disk:         sysx.DiskOf,
-		Snapshots:    sysx.LocalSnapshots,
-		Running:      sysx.RunningContext,
-		History:      clean.ReadHistory,
-		ActivateScan: scanctl.Activate,
+		Version:       version,
+		Stdin:         os.Stdin,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
+		StdinTTY:      isTerminal(os.Stdin),
+		StdoutTTY:     isTerminal(os.Stdout),
+		StderrTTY:     isTerminal(os.Stderr),
+		Width:         terminalWidth,
+		Getenv:        os.Getenv,
+		LoadConfig:    config.Load,
+		NewEnv:        core.NewEnv,
+		Providers:     providers.All,
+		Catalog:       catalog.Entries,
+		Picker:        tui.RunPicker,
+		Analyze:       tui.RunAnalyze,
+		Clean:         clean.Run,
+		Disk:          sysx.DiskOf,
+		Snapshots:     sysx.LocalSnapshots,
+		Running:       sysx.RunningContext,
+		History:       clean.ReadHistory,
+		ActivateScan:  scanctl.Activate,
+		StartupUpdate: updater.Run,
 		Diagnostics: func() diagnostics.Store {
 			dsn := os.Getenv("LU_DIAGNOSTICS_DSN")
 			if dsn == "" {
