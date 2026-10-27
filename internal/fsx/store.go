@@ -64,6 +64,10 @@ import (
 // and links removed or modified outside the cached trees, which make Reclaim
 // look smaller than what deleting would free. (Hard link events cannot be
 // used: git and Spotlight create some all the time.)
+// Shared entries keep the run's starting event id. Other walks capture their
+// own id before identifying the root, so a long scan does not age them all
+// out together. Losing any known shared root drops the shared cohort because
+// its events may be needed to invalidate another tree's reclaimable size.
 //
 // Nothing is trusted when the history cannot be: events dropped, ids wrapped
 // or going backwards, another FSEvents database (volume UUID), a replay that
@@ -91,11 +95,10 @@ import (
 // Test binaries never use the real cache directory: the store is disabled in
 // tests unless SizeCacheDir is set.
 
-// listWriters lists the files open for writing and replayChanges replays
-// the FSEvents history (variables for tests).
 var (
-	listWriters   = openForWriting
-	replayChanges = fsevents.Changes
+	listWriters    = openForWriting
+	replayChanges  = fsevents.Changes
+	currentEventID = fsevents.CurrentEventID
 )
 
 // SizeCacheDir overrides the directory of the persistent size cache (tests).
@@ -147,6 +150,12 @@ type storeFile struct {
 	Entries []storedSize
 }
 
+type sharedRoot struct{ path, dir, real string }
+
+func (e *storedSize) sharedRoot() sharedRoot {
+	return sharedRoot{e.Path, e.Dir, e.Real}
+}
+
 type replayState int
 
 const (
@@ -174,13 +183,15 @@ type SizeStore struct {
 	newest   uint64                 // newest one
 	patience time.Time              // lookups stop waiting for the replay then
 
-	mu     sync.Mutex
-	valid  map[*storedSize]bool
-	fresh  map[string]*storedSize // measured during this run
-	state  replayState
-	events int
-	replay time.Duration
-	reason string
+	mu          sync.Mutex
+	valid       map[*storedSize]bool
+	fresh       map[string]*storedSize // measured during this run
+	state       replayState
+	events      int
+	replay      time.Duration
+	reason      string
+	sharedRoots map[sharedRoot]bool // loaded or freshly measured shared roots that must remain covered
+	sharedLost  bool
 	// what the replay invalidated (tracing)
 	invalidations string
 
@@ -287,7 +298,7 @@ func OpenSizeStore(ctx context.Context) *SizeStore {
 	if ctx.Err() != nil {
 		return nil
 	}
-	if len(s.entries) == 0 {
+	if len(s.entries) == 0 && s.newest <= s.runID {
 		s.state = replayOK
 		s.cancel = func() {}
 		close(s.ready)
@@ -370,18 +381,30 @@ func (s *SizeStore) load(ctx context.Context, now time.Time) {
 		}
 		e := &f.Entries[i]
 		if e.expired(now) || e.EventID == 0 || e.Path == "" || e.Real == "" || e.Dir == "" || s.loaded[e.Path] != nil {
+			s.sharedLost = s.sharedLost || e.Shared
 			continue
 		}
 		if e.EventID < s.runID && s.runID-e.EventID > replayMaxWindow {
+			s.sharedLost = s.sharedLost || e.Shared
 			continue // too old to replay (see replayMaxWindow): would fail the others
 		}
 		s.loaded[e.Path] = e
 		s.entries = append(s.entries, e)
+		s.rememberShared(e)
+		s.newest = max(s.newest, e.EventID)
+	}
+	kept := s.entries[:0]
+	for _, e := range s.entries {
+		if s.sharedLost && e.Shared {
+			delete(s.loaded, e.Path)
+			continue
+		}
+		kept = append(kept, e)
 		if s.since == 0 || e.EventID < s.since {
 			s.since = e.EventID
 		}
-		s.newest = max(s.newest, e.EventID)
 	}
+	s.entries = kept
 }
 
 // validate replays the history since the oldest entry and keeps the entries
@@ -547,12 +570,28 @@ func (s *SizeStore) lookup(ctx context.Context, path string) (Stats, bool) {
 	return e.Stats, true
 }
 
-// record stores a complete walk of path whose root was identified (before
-// the walk) as id; took is how long the walk took.
-func (s *SizeStore) record(path string, id rootID, st Stats, took time.Duration) {
-	if s == nil {
+type walkStart struct {
+	root  rootID
+	since uint64
+}
+
+func (s *SizeStore) beginWalk(ctx context.Context, path string) (walkStart, bool) {
+	if s == nil || ctx.Err() != nil {
+		return walkStart{}, false
+	}
+	since := currentEventID()
+	if since == 0 || since < s.runID || ctx.Err() != nil {
+		return walkStart{}, false
+	}
+	id, ok := identifyContext(ctx, path)
+	return walkStart{root: id, since: since}, ok
+}
+
+func (s *SizeStore) record(path string, start walkStart, st Stats, took time.Duration) {
+	if s == nil || start.since == 0 || start.since < s.runID {
 		return
 	}
+	id := start.root
 	var skip *skipCount
 	switch {
 	case id.dev != s.dev:
@@ -574,11 +613,24 @@ func (s *SizeStore) record(path string, id rootID, st Stats, took time.Duration)
 		Path: path, Dir: id.dir, Real: id.real, Stats: st,
 		Shared: st.Reclaim < st.Bytes,
 		Ino:    id.ino, Mtime: id.mtime, Ctime: id.ctime,
-		EventID: s.runID, Measured: time.Now().UnixNano(),
+		EventID: start.since, Measured: time.Now().UnixNano(),
+	}
+	if e.Shared {
+		e.EventID = s.runID
 	}
 	s.mu.Lock()
 	s.fresh[path] = e
+	s.rememberShared(e)
 	s.mu.Unlock()
+}
+
+func (s *SizeStore) rememberShared(e *storedSize) {
+	if e.Shared {
+		if s.sharedRoots == nil {
+			s.sharedRoots = map[sharedRoot]bool{}
+		}
+		s.sharedRoots[e.sharedRoot()] = true
+	}
 }
 
 // Close saves the cache (valid entries and this run's walks) and prints a
@@ -596,9 +648,10 @@ func (s *SizeStore) Close() {
 	now := time.Now()
 	out := make([]storedSize, 0, len(s.entries)+len(s.fresh))
 	for _, e := range s.fresh {
-		out = append(out, *e)
+		if !e.expired(now) {
+			out = append(out, *e)
+		}
 	}
-	kept := 0
 	for _, e := range s.entries {
 		if s.fresh[e.Path] != nil || e.expired(now) {
 			continue
@@ -616,19 +669,45 @@ func (s *SizeStore) Close() {
 		default:
 			continue
 		}
-		kept++
 	}
 	if len(out) > storeMaxEntries {
 		sort.Slice(out, func(i, j int) bool { return out[i].Measured > out[j].Measured })
 		out = out[:storeMaxEntries]
 	}
+	covered := make(map[sharedRoot]bool)
+	for _, e := range out {
+		if e.Shared {
+			covered[e.sharedRoot()] = true
+		}
+	}
+	for root := range s.sharedRoots {
+		if !covered[root] {
+			s.sharedLost = true
+			break
+		}
+	}
+	if s.sharedLost {
+		kept := out[:0]
+		for _, e := range out {
+			if !e.Shared {
+				kept = append(kept, e)
+			}
+		}
+		out = kept
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	err := writeStore(s.file, storeFile{Version: storeVersion, Volume: s.volume, Boot: s.boot, Entries: out})
 	if traceOn {
+		kept := 0
+		for _, e := range out {
+			if s.fresh[e.Path] == nil {
+				kept++
+			}
+		}
 		trees, files := Walked()
 		msg := fmt.Sprintf("hits %d (%d files not walked), misses %d (%d before the replay ended); walked %d trees, %d files; replay %s: %d events in %v%s; saved %d entries (%d kept, %d new)",
 			s.hits.Load(), s.hitFiles.Load(), s.misses.Load(), s.impatient.Load(), trees-s.walks0, files-s.files0,
-			stateName(s.state), s.events, s.replay.Round(time.Millisecond), reasonSuffix(s.reason), len(out), kept, len(s.fresh))
+			stateName(s.state), s.events, s.replay.Round(time.Millisecond), reasonSuffix(s.reason), len(out), kept, len(out)-kept)
 		if s.invalidations != "" {
 			msg += "; " + s.invalidations
 		}

@@ -534,11 +534,11 @@ func (c *sizeCache) measure(ctx context.Context, path string) (Stats, error) {
 	if st, ok := s.lookup(ctx, path); ok {
 		return st, nil
 	}
-	id, idOK := identifyContext(ctx, path) // before the walk: a change during it shows next time
+	walk, idOK := s.beginWalk(ctx, path)
 	start := time.Now()
 	st, err := size(ctx, path, nil)
 	if idOK && err == nil && ctx.Err() == nil {
-		s.record(path, id, st, time.Since(start))
+		s.record(path, walk, st, time.Since(start))
 	}
 	return st, err
 }
