@@ -114,7 +114,7 @@ L'accès complet au disque est accordé à l'application de terminal, pas à lu-
 
 ## Mettre à jour
 
-Le tableau de bord et les commandes interactives `clean`, `artifacts`, `worktrees`, `devices` et `analyze` recherchent une version stable plus récente sur GitHub au plus une fois par période de 24 heures. Cette vérification suit le consentement éventuel aux rapports techniques et dure au maximum 1,5 seconde. Un échec hors ligne compte comme la tentative du jour et votre commande continue normalement.
+Le tableau de bord et les commandes interactives `clean`, `artifacts`, `worktrees`, `devices` et `analyze` recherchent une version stable plus récente sur GitHub au plus une fois par période de 24 heures. Cette vérification suit le consentement éventuel aux rapports techniques. La requête de recherche expire après 1,5 seconde. Un échec hors ligne compte comme la tentative du jour et votre commande continue normalement.
 
 L'installation demande toujours une confirmation `[y/N]`. Entrée, non, une réponse invalide ou EOF refusent. `--yes` autorise seulement le nettoyage. Les rapports `scan` et `doctor`, `--list`, `--dry-run`, `--json`, les flux redirigés, la CI et l'exécution avec root désactivent la vérification. Pour la désactiver vous-même :
 

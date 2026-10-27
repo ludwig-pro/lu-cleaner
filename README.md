@@ -65,7 +65,7 @@ Or download the universal macOS binary from the [latest release](https://github.
 git clone https://github.com/ludwig-pro/lu-cleaner && cd lu-cleaner && make install
 ```
 
-Interactive dashboards and pickers check GitHub for a newer stable release at most once every 24 hours. The check takes at most 1.5 seconds and offline checks never stop your command. Installation requires a separate `[y/N]` confirmation. Enter means no. Reports, scripts, redirected streams, `--json`, `--yes`, `--list`, `--dry-run`, CI and root runs skip updates. Set `LU_NO_UPDATE=1` to disable checks.
+Interactive dashboards and pickers check GitHub for a newer stable release at most once every 24 hours. The release lookup times out after 1.5 seconds and offline checks never stop your command. Installation requires a separate `[y/N]` confirmation. Enter means no. Reports, scripts, redirected streams, `--json`, `--yes`, `--list`, `--dry-run`, CI and root runs skip updates. Set `LU_NO_UPDATE=1` to disable checks.
 
 Updates support directly installed releases and tagged `go install` binaries in a directory you own. The prompt explains when a Go-built binary will be replaced with the precompiled release. Development builds and package-managed or symlinked installations are skipped. The archive's SHA-256 is checked against the release's `checksums.txt`; this checks release integrity, not an independent publisher signature.
 

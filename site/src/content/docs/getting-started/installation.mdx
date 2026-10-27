@@ -114,7 +114,7 @@ Full Disk Access is granted to the terminal app, not to lu-cleaner, so every com
 
 ## Update
 
-The dashboard and interactive `clean`, `artifacts`, `worktrees`, `devices` and `analyze` commands check GitHub for a newer stable release at most once every rolling 24 hours. The check runs after optional diagnostic consent and takes at most 1.5 seconds. An offline failure consumes that day's check and your command continues normally.
+The dashboard and interactive `clean`, `artifacts`, `worktrees`, `devices` and `analyze` commands check GitHub for a newer stable release at most once every rolling 24 hours. The check runs after optional diagnostic consent. The release lookup times out after 1.5 seconds. An offline failure consumes that day's check and your command continues normally.
 
 Installation always asks `[y/N]`. Enter, no, invalid input or EOF declines. `--yes` authorizes cleaning only. Reports such as `scan` and `doctor`, `--list`, `--dry-run`, `--json`, redirected streams, CI and root execution skip checks. To opt out:
 
