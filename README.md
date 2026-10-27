@@ -65,6 +65,12 @@ Or download the universal macOS binary from the [latest release](https://github.
 git clone https://github.com/ludwig-pro/lu-cleaner && cd lu-cleaner && make install
 ```
 
+Interactive dashboards and pickers check GitHub for a newer stable release at most once every 24 hours. The check takes at most 1.5 seconds and offline checks never stop your command. Installation requires a separate `[y/N]` confirmation. Enter means no. Reports, scripts, redirected streams, `--json`, `--yes`, `--list`, `--dry-run`, CI and root runs skip updates. Set `LU_NO_UPDATE=1` to disable checks.
+
+Updates support directly installed releases and tagged `go install` binaries in a directory you own. The prompt explains when a Go-built binary will be replaced with the precompiled release. Development builds and package-managed or symlinked installations are skipped. The archive's SHA-256 is checked against the release's `checksums.txt`; this checks release integrity, not an independent publisher signature.
+
+After confirmation, lu-cleaner saves a unique `.lu-cleaner-backup-*` beside the executable before replacing it atomically. The current command finishes with its original version; the next command uses the update. Backups are kept until you remove them yourself. For manual restoration, use the exact backup and executable paths printed during the update, as described in the [installation guide](https://ludwig-pro.github.io/lu-cleaner/getting-started/installation/#restore-a-backup).
+
 ## Quick start
 
 ```bash

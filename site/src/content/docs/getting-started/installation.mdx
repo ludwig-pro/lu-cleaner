@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-lu-cleaner is a single Go binary. It installs no daemon, launch agent or background service, and it never asks for `sudo`. Its own files live in exactly two places, both created only when needed: the [configuration file](/lu-cleaner/reference/configuration/) (when you create one) and the cleaning history (after your first real cleanup).
+lu-cleaner is a single Go binary. It installs no daemon, launch agent or background service, and it never asks for `sudo`. Its [configuration file](/lu-cleaner/reference/configuration/) and private application state are created when needed. Update backups live beside the executable.
 
 ## Requirements
 
@@ -114,7 +114,25 @@ Full Disk Access is granted to the terminal app, not to lu-cleaner, so every com
 
 ## Update
 
-Run the same command again to fetch the latest version:
+The dashboard and interactive `clean`, `artifacts`, `worktrees`, `devices` and `analyze` commands check GitHub for a newer stable release at most once every rolling 24 hours. The check runs after optional diagnostic consent and takes at most 1.5 seconds. An offline failure consumes that day's check and your command continues normally.
+
+Installation always asks `[y/N]`. Enter, no, invalid input or EOF declines. `--yes` authorizes cleaning only. Reports such as `scan` and `doctor`, `--list`, `--dry-run`, `--json`, redirected streams, CI and root execution skip checks. To opt out:
+
+```bash
+LU_NO_UPDATE=1 lu-cleaner
+```
+
+Export `LU_NO_UPDATE=1` in your shell configuration to keep checks disabled. Any nonempty value disables checks.
+
+Direct release binaries and stable tagged `go install` binaries are supported when their executable and directory belong to you and have safe permissions. The prompt warns that updating a `go install` binary replaces it with the precompiled GitHub release. Unknown development builds, prereleases, symlinks and package-managed paths are skipped. You can continue using your original installation method.
+
+The updater downloads only the official release archive and its `checksums.txt`, verifies SHA-256, and validates the universal macOS executable before installation. This verifies integrity against the release account, not an independent publisher signature. Downloads are limited to 60 seconds. Failures before replacement leave the executable intact; cleanup still runs.
+
+Before replacing the executable atomically, lu-cleaner creates a unique, verified `.lu-cleaner-backup-*` in the same directory. Its exact path is printed after success. The current invocation continues with its original version. The next invocation runs the new version. Backups are never removed automatically. If directory synchronization fails after replacement, the updater reports that the update is installed with uncertain durability and keeps the backup. It does not overwrite the installed executable with an automatic rollback.
+
+The check timestamp and cross-process locks live in `$XDG_STATE_HOME/lu-cleaner/update`, or `~/.local/state/lu-cleaner/update` by default. They contain no release cache, executable path or credential. Two lu-cleaner processes coordinate checks and installations. Other programs running as your user can still change your writable executable between its final check and replacement.
+
+To update manually with Go, run the same installation command again:
 
 ```bash
 go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
@@ -128,6 +146,19 @@ make install
 ```
 
 Your configuration and history are kept.
+
+### Restore a backup
+
+Close other lu-cleaner invocations. Replace these two paths with the exact backup path printed after the update and the executable path shown in its confirmation. These commands copy the backup to a temporary sibling, then replace the executable atomically. They preserve the backup.
+
+```bash
+backup="/exact/path/.lu-cleaner-backup-printed-suffix"
+target="/exact/path/lu-cleaner"
+staged="$(mktemp "${target}.restore.XXXXXX")"
+cp "$backup" "$staged" && chmod 755 "$staged" && mv -f "$staged" "$target"
+```
+
+Run `lu-cleaner version` to verify the restored version. Manage retained backups explicitly when you no longer need them.
 
 ## Uninstall
 
@@ -143,10 +174,10 @@ Then remove the binary, the configuration and the history:
 ```bash
 rm "$(command -v lu-cleaner)"
 rm -rf ~/.config/lu-cleaner        # config.toml, if you created one
-rm -rf ~/.local/state/lu-cleaner   # history.jsonl
+rm -rf ~/.local/state/lu-cleaner   # history and private application state
 ```
 
-Finally, delete the `alias luc=lu-cleaner` line from `~/.zshrc` if you added it. lu-cleaner leaves nothing else behind.
+Finally, delete the `alias luc=lu-cleaner` line from `~/.zshrc` if you added it. Review any retained `.lu-cleaner-backup-*` beside the executable separately.
 
 :::caution
 If you cleaned with `--trash` or `use_trash = true`, the files and folders moved there are still in `~/.Trash`. They keep using disk space until you empty the Trash.

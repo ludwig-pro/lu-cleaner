@@ -67,6 +67,10 @@ func (c *cli) readConsentAnswer(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	c.printConsentPrompt()
+	return c.readYesNoAnswer(ctx, true)
+}
+
+func (c *cli) readYesNoAnswer(ctx context.Context, acceptPartial bool) (bool, error) {
 	var answer strings.Builder
 	var bytebuf [1]byte
 	tooLong := false
@@ -105,7 +109,7 @@ func (c *cli) readConsentAnswer(ctx context.Context) (bool, error) {
 				tooLong = true
 			}
 		}
-		if n > 0 && bytebuf[0] == '\n' || errors.Is(err, io.EOF) && answer.Len() > 0 {
+		if n > 0 && bytebuf[0] == '\n' || acceptPartial && errors.Is(err, io.EOF) && answer.Len() > 0 {
 			value := strings.ToLower(strings.TrimSpace(answer.String()))
 			return !tooLong && (value == "y" || value == "yes" || value == "oui"), nil
 		}

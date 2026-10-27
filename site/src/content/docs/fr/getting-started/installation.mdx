@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-lu-cleaner est un binaire Go unique. Il n'installe ni daemon, ni agent de lancement, ni service en arrière-plan, et ne demande jamais `sudo`. Ses propres fichiers se trouvent à deux endroits seulement, créés uniquement en cas de besoin : le [fichier de configuration](/lu-cleaner/fr/reference/configuration/) (si vous en créez un) et l'historique des nettoyages (après votre premier vrai nettoyage).
+lu-cleaner est un binaire Go unique. Il n'installe ni daemon, ni agent de lancement, ni service en arrière-plan, et ne demande jamais `sudo`. Son [fichier de configuration](/lu-cleaner/fr/reference/configuration/) et son état privé sont créés selon les besoins. Les sauvegardes de mise à jour restent à côté de l'exécutable.
 
 ## Prérequis
 
@@ -114,7 +114,25 @@ L'accès complet au disque est accordé à l'application de terminal, pas à lu-
 
 ## Mettre à jour
 
-Relancez la même commande pour récupérer la dernière version :
+Le tableau de bord et les commandes interactives `clean`, `artifacts`, `worktrees`, `devices` et `analyze` recherchent une version stable plus récente sur GitHub au plus une fois par période de 24 heures. Cette vérification suit le consentement éventuel aux rapports techniques et dure au maximum 1,5 seconde. Un échec hors ligne compte comme la tentative du jour et votre commande continue normalement.
+
+L'installation demande toujours une confirmation `[y/N]`. Entrée, non, une réponse invalide ou EOF refusent. `--yes` autorise seulement le nettoyage. Les rapports `scan` et `doctor`, `--list`, `--dry-run`, `--json`, les flux redirigés, la CI et l'exécution avec root désactivent la vérification. Pour la désactiver vous-même :
+
+```bash
+LU_NO_UPDATE=1 lu-cleaner
+```
+
+Exportez `LU_NO_UPDATE=1` dans votre configuration shell pour conserver ce choix. Toute valeur non vide désactive la vérification.
+
+Les binaires issus d'une release et les installations `go install` d'une version stable publiée sont pris en charge lorsque le fichier et son dossier vous appartiennent, avec des permissions sûres. La confirmation précise qu'un binaire `go install` sera remplacé par la release GitHub précompilée. Les versions de développement inconnues, préversions, liens symboliques et chemins gérés par un gestionnaire de paquets sont ignorés. Vous pouvez continuer à utiliser votre méthode d'installation initiale.
+
+L'outil télécharge uniquement l'archive officielle et son fichier `checksums.txt`, vérifie le SHA-256, puis valide l'exécutable macOS universel. Cette vérification garantit l'intégrité par rapport au compte publiant la release, pas une signature indépendante de l'éditeur. Les téléchargements sont limités à 60 secondes. Un échec avant le remplacement conserve l'exécutable et le nettoyage continue.
+
+Avant le remplacement atomique, lu-cleaner crée une sauvegarde unique et vérifiée `.lu-cleaner-backup-*` dans le même dossier. Son chemin exact est affiché après le succès. La commande en cours conserve sa version d'origine. La suivante utilise la nouvelle version. Les sauvegardes ne sont jamais supprimées automatiquement. Si la synchronisation du dossier échoue après le remplacement, l'outil indique que la mise à jour est installée avec une durabilité incertaine et conserve la sauvegarde. Il ne restaure pas automatiquement par-dessus l'exécutable installé.
+
+L'horodatage et les verrous entre processus se trouvent dans `$XDG_STATE_HOME/lu-cleaner/update`, ou `~/.local/state/lu-cleaner/update` par défaut. Ils ne contiennent ni cache de release, ni chemin d'exécutable, ni identifiant de connexion. Deux processus lu-cleaner coordonnent leurs vérifications et installations. D'autres programmes exécutés sous votre compte peuvent encore modifier votre exécutable entre sa dernière vérification et son remplacement.
+
+Pour une mise à jour manuelle avec Go, relancez la commande d'installation :
 
 ```bash
 go install github.com/ludwig-pro/lu-cleaner/cmd/lu-cleaner@latest
@@ -128,6 +146,19 @@ make install
 ```
 
 Votre configuration et votre historique sont conservés.
+
+### Restaurer une sauvegarde
+
+Fermez les autres commandes lu-cleaner. Remplacez les deux chemins ci-dessous par le chemin exact de sauvegarde affiché après la mise à jour et celui de l'exécutable indiqué dans la confirmation. Ces commandes copient la sauvegarde dans un fichier temporaire voisin, puis remplacent l'exécutable atomiquement. La sauvegarde est conservée.
+
+```bash
+backup="/chemin/exact/.lu-cleaner-backup-suffixe-affiche"
+target="/chemin/exact/lu-cleaner"
+staged="$(mktemp "${target}.restore.XXXXXX")"
+cp "$backup" "$staged" && chmod 755 "$staged" && mv -f "$staged" "$target"
+```
+
+Exécutez `lu-cleaner version` pour vérifier la version restaurée. Gérez vous-même les sauvegardes lorsque vous n'en avez plus besoin.
 
 ## Désinstaller
 
@@ -143,10 +174,10 @@ Supprimez ensuite le binaire, la configuration et l'historique :
 ```bash
 rm "$(command -v lu-cleaner)"
 rm -rf ~/.config/lu-cleaner        # config.toml, si vous en avez créé un
-rm -rf ~/.local/state/lu-cleaner   # history.jsonl
+rm -rf ~/.local/state/lu-cleaner   # historique et état privé
 ```
 
-Enfin, supprimez la ligne `alias luc=lu-cleaner` de `~/.zshrc` si vous l'avez ajoutée. lu-cleaner ne laisse rien d'autre derrière lui.
+Enfin, supprimez la ligne `alias luc=lu-cleaner` de `~/.zshrc` si vous l'avez ajoutée. Examinez séparément les sauvegardes `.lu-cleaner-backup-*` conservées à côté de l'exécutable.
 
 :::caution
 Si vous avez nettoyé avec `--trash` ou `use_trash = true`, les fichiers et dossiers qui y ont été déplacés sont toujours dans `~/.Trash`. Ils continuent d'occuper de l'espace disque tant que vous n'avez pas vidé la Corbeille.

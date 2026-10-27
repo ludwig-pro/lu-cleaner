@@ -40,6 +40,9 @@ func OpenDir(path string) (*Dir, error) {
 
 func (d *Dir) Close() error { return d.f.Close() }
 
+// Sync makes directory entry changes durable before the caller acts on them.
+func (d *Dir) Sync() error { return d.f.Sync() }
+
 func nameOK(name string) bool { return name != "." && name != ".." && name == filepath.Base(name) }
 
 func (d *Dir) Open(name string, flags int) (*os.File, error) {
