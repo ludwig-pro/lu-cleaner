@@ -117,7 +117,17 @@ lu-cleaner config show --scan-mode eco # inspect effective limits without starti
 | Entries per read batch | 256 | 256 |
 | Artificial delay after I/O | None | None |
 | Go CPU parallelism | Current value, capped at 2 | Inherited |
-| macOS scheduling priority | Background during the invocation | Inherited |
+| macOS scheduling priority | Background for parent and scans; eligible Git cleanup child described below | Inherited |
+
+Worktrees are still removed one at a time. On supported macOS builds, `eco` can remove
+lu-cleaner's own CPU background request from the `git worktree remove` child while keeping
+the parent, scan and safety checks in background. Git uses utility disk I/O or retains
+an identifiable stricter throttle policy. Externally imposed restrictions remain active.
+Fast mode, an already-background process, unsupported builds and unverified policy states
+keep inherited priorities. macOS does not expose every explicit policy choice, so this
+preserves the restrictive constraints that can be identified rather than promising a
+complete restoration of hidden policy state. A failed policy change stops before Git;
+an already-started cleanup is never retried automatically.
 
 The shared limits and macOS background scheduling reduce the impact on other applications. Eco does not add fixed sleeps after reads: time spent waiting on the disk is not CPU work, and macOS already delays background work when needed. `config show --json` reports zero for `scan.pause_ms`. These controls do not guarantee a CPU percentage, a maximum slowdown for other jobs or a deadline on kernel calls.
 

@@ -62,6 +62,23 @@ providers ──emit(*Item) upsert──▶ engine.Run (chan Event) ──▶ TU
   keeping the invocation controller. Configuration, help, version, history and catalog commands
   do not activate process policy. Standalone internal scans without a controller use `fast`
   without process effects.
+* Worktree removal remains sequential, with the same checks and Git arguments.
+  On macOS builds with cgo, the exact standard `ExecRunner` can launch a private
+  child of the same executable for `git worktree remove`. An opaque activation
+  lease must prove that this invocation set a previously absent internal BG bit;
+  restoration waits for admitted children, and no parent policy changes around spawn.
+  The child requires background disk policy UTILITY and process disk policy DEFAULT,
+  UTILITY or THROTTLE. It changes DEFAULT to UTILITY, verifies the state, removes only
+  its inherited internal BG request, and verifies again before exec of the resolved Git.
+  External background restrictions remain inherited. The getters cannot distinguish all
+  explicit policy origins: only identifiable restrictive constraints are preserved.
+  Fast mode, preexisting background state, missing/expired permits, custom runners and
+  unsupported builds use the inherited path. Unknown initial policy also stays inherited;
+  any uncertain setter result refuses before Git, without claiming a complete rollback.
+  A fixed private pipe protocol requires an acknowledgement immediately before exec
+  and separates pre-exec failures from Git stderr/exit status. Missing or inconsistent
+  acknowledgements fail as ambiguous, including when an incompatible image exits zero.
+  Once a helper has started, ambiguous failure or cancellation never retries the removal.
 * Directory listings are complete and sorted despite bounded reads. Cancellation is checked
   between batches and metadata operations. Sizing accounting remains allocated-block based,
   with the same hardlink and APFS clone rules. Scan/clean/analyze JSON contracts stay unchanged;

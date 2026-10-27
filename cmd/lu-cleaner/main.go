@@ -7,11 +7,15 @@ import (
 	"os"
 
 	"github.com/ludwig-pro/lu-cleaner/internal/cli"
+	"github.com/ludwig-pro/lu-cleaner/internal/core"
 )
 
 // version is set with -ldflags "-X main.version=..."
 var version = "dev"
 
 func main() {
+	if handled, code := core.RunPrivateWorktreeHelper(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	os.Exit(cli.Execute(version))
 }

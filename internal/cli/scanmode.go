@@ -17,8 +17,8 @@ func (c *cli) startScan(ctx context.Context, s *setup) (context.Context, error) 
 			c.diag.SetMode(string(s.limits.Mode))
 		}
 		if c.ActivateScan != nil {
-			restore, err := c.ActivateScan(s.limits)
-			c.restoreScan = restore
+			restore, permit, err := c.ActivateScan(s.limits)
+			c.restoreScan, c.worktreePermit = restore, permit
 			if err != nil {
 				// Resource quotas still apply when an OS priority is unavailable.
 				c.errw.printf("warning: scan priorities: %s\n", sanitizeLines(err.Error(), "  "))
@@ -29,6 +29,7 @@ func (c *cli) startScan(ctx context.Context, s *setup) (context.Context, error) 
 			s.limits.Mode, s.limits.IO, s.limits.Commands, s.limits.Prefetch, s.limits.BatchSize, s.limits.Pause)
 	}
 	scanCtx := scanctl.With(ctx, c.scanCtl)
+	scanCtx = scanctl.WithWorktreePermit(scanCtx, c.worktreePermit)
 	if s.guard != nil {
 		s.env.ProtectedContext = s.guard.ProtectedContext
 	}

@@ -99,7 +99,10 @@ func TestInvalidScanModeFailsBeforeScan(t *testing.T) {
 			h.cfg.ScanMode = tc.cfg
 			calls := 0
 			h.app.NewEnv = func() *core.Env { calls++; return nil }
-			h.app.ActivateScan = func(scanctl.Limits) (func() error, error) { calls++; return nil, nil }
+			h.app.ActivateScan = func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
+				calls++
+				return nil, scanctl.WorktreePermit{}, nil
+			}
 			if code := h.run(tc.args...); code != tc.code || calls != 0 {
 				t.Fatalf("exit=%d calls=%d stderr=%s", code, calls, h.errOut.String())
 			}
@@ -139,9 +142,9 @@ func TestScanPrioritiesOnlyOnScanPaths(t *testing.T) {
 			}
 			activated, restored := 0, 0
 			before := runtime.GOMAXPROCS(0)
-			h.app.ActivateScan = func(scanctl.Limits) (func() error, error) {
+			h.app.ActivateScan = func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
 				activated++
-				return func() error { restored++; return nil }, nil
+				return func() error { restored++; return nil }, scanctl.WorktreePermit{}, nil
 			}
 			if code := h.run(tc.args...); code != ExitOK {
 				t.Fatalf("exit=%d: %s", code, h.errOut.String())
@@ -162,8 +165,8 @@ func TestScanPrioritiesRestoredOnFailureAndCancellation(t *testing.T) {
 		t.Run(exitErr.Error(), func(t *testing.T) {
 			h := newHarness(t, &fakeProvider{id: "probe", cats: []core.Category{core.CatArtifacts}}).tty()
 			restored := 0
-			h.app.ActivateScan = func(scanctl.Limits) (func() error, error) {
-				return func() error { restored++; return nil }, nil
+			h.app.ActivateScan = func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
+				return func() error { restored++; return nil }, scanctl.WorktreePermit{}, nil
 			}
 			h.app.Picker = func(ctx context.Context, opt tui.PickerOptions) (*clean.Summary, error) {
 				if scanctl.From(ctx) == nil || opt.Env.ScanLimits.Mode != scanctl.Eco {
@@ -185,8 +188,8 @@ func TestScanPrioritiesRestoredOnFailureAndCancellation(t *testing.T) {
 func TestScanPriorityErrorWarnsAndContinues(t *testing.T) {
 	h := newHarness(t, &fakeProvider{id: "probe", cats: []core.Category{core.CatArtifacts}})
 	restored := 0
-	h.app.ActivateScan = func(scanctl.Limits) (func() error, error) {
-		return func() error { restored++; return nil }, errors.New("background priority unavailable")
+	h.app.ActivateScan = func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
+		return func() error { restored++; return nil }, scanctl.WorktreePermit{}, errors.New("background priority unavailable")
 	}
 	if code := h.run("scan", "--json"); code != ExitOK || restored != 1 {
 		t.Fatalf("exit=%d restored=%d: %s", code, restored, h.errOut.String())
@@ -250,7 +253,10 @@ func TestConfigShowReportsPureRuntimePolicy(t *testing.T) {
 			h := newHarness(t)
 			h.cfg.ScanMode = mode
 			before, activated := runtime.GOMAXPROCS(0), 0
-			h.app.ActivateScan = func(scanctl.Limits) (func() error, error) { activated++; return nil, nil }
+			h.app.ActivateScan = func(scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
+				activated++
+				return nil, scanctl.WorktreePermit{}, nil
+			}
 			if code := h.run("config", "show", "--json"); code != ExitOK {
 				t.Fatalf("exit=%d: %s", code, h.errOut.String())
 			}
@@ -291,12 +297,12 @@ func TestScanSetupControlsInitialRootReadsAndPureSetupDoesNotActivate(t *testing
 			c := newCLI(h.app)
 			activated, restored := 0, 0
 			before := runtime.GOMAXPROCS(0)
-			h.app.ActivateScan = func(limits scanctl.Limits) (func() error, error) {
+			h.app.ActivateScan = func(limits scanctl.Limits) (func() error, scanctl.WorktreePermit, error) {
 				activated++
 				if limits.Mode != scanctl.Eco {
 					t.Errorf("initial scan limits=%+v", limits)
 				}
-				return func() error { restored++; return nil }, nil
+				return func() error { restored++; return nil }, scanctl.WorktreePermit{}, nil
 			}
 			newEnv := h.app.NewEnv
 			h.app.NewEnv = func() *core.Env {

@@ -70,14 +70,19 @@ type ExecRunner struct{}
 const waitDelay = 2 * time.Second
 
 func (ExecRunner) Output(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
-	killGroupOnCancel(cmd)
+	cmd := execCommand(ctx, dir, name, args...)
 	start := time.Now()
 	out, err := cmd.Output()
 	fsx.Trace("cmd", name+" "+strings.Join(args, " "), start, dir)
 	return out, err
+}
+
+func execCommand(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	killGroupOnCancel(cmd)
+	return cmd
 }
 
 // killGroupOnCancel runs cmd in its own process group and, when its context

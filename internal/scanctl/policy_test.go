@@ -19,10 +19,12 @@ func TestPolicyLifecycleInSubprocess(t *testing.T) {
 		}
 		inherited, _ := currentBackground()
 		if kind == "failure" {
-			applyBackground = func() (func() error, error) { return func() error { return nil }, errors.New("fixture denied") }
+			applyBackground = func() (func() error, bool, error) {
+				return func() error { return nil }, false, errors.New("fixture denied")
+			}
 		}
 		l, _, _ := Resolve("eco", "")
-		restore, err := Activate(l)
+		restore, permit, err := Activate(l)
 		if kind == "failure" && err == nil {
 			t.Fatal("missing activation error")
 		}
@@ -35,6 +37,11 @@ func TestPolicyLifecycleInSubprocess(t *testing.T) {
 		if kind != "failure" {
 			if bg, e := currentBackground(); e != nil || !bg {
 				t.Fatalf("not background: %v %v", bg, e)
+			}
+		}
+		if kind == "failure" || kind == "inherited" {
+			if permit.lease != nil {
+				t.Fatal("permit without ownership")
 			}
 		}
 		if err := restore(); err != nil {

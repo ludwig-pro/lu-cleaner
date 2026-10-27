@@ -419,12 +419,12 @@ func removeWorktree(ctx context.Context, it *core.Item, opt Options, plan *wtPla
 		// submodule worktrees: a second line of defence after our checks. The
 		// config override reaches the `git status` git runs for that check.
 		// Ignored files (node_modules, Pods...) never block it.
-		args := []string{"git", "-c", "core.fsmonitor=false", "-c", "status.showUntrackedFiles=all", "worktree", "remove"}
-		if opt.Force {
-			args = append(args, "--force", "--force")
-		}
-		args = append(args, path)
-		if _, err := runCmd(ctx, opt.Runner, plan.main, args); err != nil {
+		req := core.WorktreeRemoval{Path: path, Force: opt.Force}
+		if _, err := runWorktreeRemoval(ctx, opt.Runner, plan.main, req); err != nil {
+			var helperErr *core.WorktreeHelperError
+			if errors.As(err, &helperErr) {
+				return "", err
+			}
 			if !opt.Force {
 				return "git refused to remove it (" + err.Error() + ") — use --force", errSkip
 			}
